@@ -16,6 +16,13 @@ jobs:
     # Pinned, not `macos-latest`: the label moves to a new image on GitHub's schedule, and a
     # toolchain change arriving that way is a red build nobody asked for.
     runs-on: macos-26
+    strategy:
+      # One leg, deliberately. The matrix is here for the name it composes -- `test (macos)` -- so
+      # the context a required status check names is platform-qualified before a second leg exists
+      # and adding one cannot rename it. Linux is not that leg: the core imports `os` and the
+      # adapter imports CryptoKit, so there is nothing to run there.
+      matrix:
+        os: [macos]
     env:
       # Pinned rather than whatever `xcode-select` points at, for the same reason. Swift tools 6.3
       # is the manifest's floor, so the Xcode that provides it is part of what CI proves.
