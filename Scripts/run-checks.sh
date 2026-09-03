@@ -1,7 +1,7 @@
 #!/bin/sh
-# Aethergram suite. Two gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. Two gates, in the order a failure is cheapest to read.
 #
-#   test/run.sh    offline, no network
+#   Scripts/run-checks.sh    offline, no network
 #
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. `swift test` runs second and is the correctness gate.
@@ -23,11 +23,11 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n         %s\n' "$CURRENT" "$1";
 printf '\nleak scan\n'
 
 it "nothing tracked identifies a consumer, a person, or a machine"
-if OUT="$("$ROOT/test/no-leaks.sh" 2>&1)"; then
+if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" 2>&1)"; then
     pass
 else
     printf '%s\n' "$OUT"
-    fail "test/no-leaks.sh refused the tree"
+    fail "Scripts/scan-for-leaks.sh refused the tree"
 fi
 
 printf '\nswift test\n'

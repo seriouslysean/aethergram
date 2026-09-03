@@ -9,7 +9,7 @@ which is why every hook framework has the same step and each of them brings a ru
 git config core.hooksPath .githooks
 ```
 
-The pre-commit hook runs `test/no-leaks.sh`. It touches no network and takes milliseconds.
+The pre-commit hook runs `Scripts/scan-for-leaks.sh`. It touches no network and takes milliseconds.
 
 ## The rule that matters
 
@@ -24,11 +24,14 @@ neither the identifier nor the payload provider ran. A transport-only assertion 
 "dropped before enqueue" from "enqueued but not yet sent", and only the first is what consent
 means.
 
-Run the suite before you push.
+Run the checks before you push.
 
 ```sh
-test/run.sh
+Scripts/run-checks.sh
 ```
+
+`Tests/` is SwiftPM's and is reached by `swift test`. `Scripts/` holds the repo-level checks that
+are not Swift, which is where a Swift package puts them.
 
 ## Every change starts as an issue
 
@@ -61,7 +64,7 @@ This repo is public. The apps that use it are not, and the development model is 
 transport from inside one of them, so a comment written in that context can carry a private app
 name, a bundle identifier, or an issue number into a public commit. Prose is the leak, not code.
 
-`test/no-leaks.sh` runs in the suite and in the pre-commit hook. It refuses absolute home paths,
+`Scripts/scan-for-leaks.sh` runs in the checks and in the pre-commit hook. It refuses absolute home paths,
 email addresses, cross-repo issue references, and bare issue numbers. It matches shapes that point
 outside this repo, and it reads tracked files, so stage a file before expecting it to be scanned.
 
@@ -83,7 +86,7 @@ failure, not the reporter.
 
 ## Releasing
 
-1. `test/run.sh` passes on a clean checkout.
+1. `Scripts/run-checks.sh` passes on a clean checkout.
 2. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
    reader copying one gets the release being cut rather than the previous one.
 3. Merge the pull request.

@@ -9,11 +9,11 @@
 set -eu
 
 ROOT="$(git rev-parse --show-toplevel)"
-SCAN="$ROOT/test/no-leaks.sh"
+SCAN="$ROOT/Scripts/scan-for-leaks.sh"
 
 # A missing or non-executable gate must not look like one that passed.
 [ -x "$SCAN" ] || {
-    echo "[pre-commit] test/no-leaks.sh missing or not executable" >&2
+    echo "[pre-commit] Scripts/scan-for-leaks.sh missing or not executable" >&2
     exit 1
 }
 

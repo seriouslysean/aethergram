@@ -13,8 +13,8 @@
 # matches every ordinary word, and a deny-list tracked here would itself carry the names it
 # protects. That shape rests on review of the diff.
 #
-#   test/no-leaks.sh          scan tracked files
-#   test/no-leaks.sh --all    also scan every commit message in history
+#   scan-for-leaks.sh          scan tracked files
+#   scan-for-leaks.sh --all    also scan every commit message in history
 
 set -u
 
@@ -24,11 +24,11 @@ FOUND=0
 
 scan() {
     _what="$1"; _re="$2"
-    # Exclude this file and the suite: they contain the patterns by definition.
-    _hits="$(git grep -nE "$_re" -- . ':!test/no-leaks.sh' ':!test/run.sh' 2>/dev/null)"
+    # Exclude this file and the runner: they contain the patterns by definition.
+    _hits="$(git grep -nE "$_re" -- . ':!Scripts/scan-for-leaks.sh' ':!Scripts/run-checks.sh' 2>/dev/null)"
     [ -n "$_hits" ] && printf '%s\n' "$_hits" | while IFS= read -r _l; do printf '  %s: %s\n' "$_what" "$_l"; done
     # A leak can live entirely in a tracked filename with clean content, invisible to git grep above.
-    _names="$(git ls-files -- . ':!test/no-leaks.sh' ':!test/run.sh' | grep -E "$_re" 2>/dev/null)"
+    _names="$(git ls-files -- . ':!Scripts/scan-for-leaks.sh' ':!Scripts/run-checks.sh' | grep -E "$_re" 2>/dev/null)"
     [ -n "$_names" ] && printf '%s\n' "$_names" | while IFS= read -r _n; do printf '  %s (filename): %s\n' "$_what" "$_n"; done
     [ -z "$_hits" ] && [ -z "$_names" ]
 }

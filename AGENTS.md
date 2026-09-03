@@ -32,7 +32,7 @@ Rules for working in this repo.
 20. Remember that a gate which never fires looks exactly like one that passes.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
 22. Keep the tag vocabulary short by design, and add one only when a suite applies it, because a tag nothing uses is a category nobody is thinking in.
-23. Write POSIX `sh` in `test/` and `.githooks/`, and avoid bashisms so the same scripts run under `dash`.
+23. Write POSIX `sh` in `Scripts/` and `.githooks/`, and avoid bashisms so the same scripts run under `dash`.
 24. Run the adversarial pass over concurrency, the consent path, and published prose before reporting work done, because the suite only re-proves past failures.
 
 ## Working
