@@ -13,14 +13,28 @@
 # matches every ordinary word, and a deny-list tracked here would itself carry the names it
 # protects. That shape rests on review of the diff.
 #
-#   scan-for-leaks.sh          scan tracked files
-#   scan-for-leaks.sh --all    also scan every commit message in history
+#   scan-for-leaks.sh                 scan tracked files
+#   scan-for-leaks.sh --all           also scan every commit message in history
+#   scan-for-leaks.sh --message FILE  scan one commit message, for the commit-msg hook
 
 set -u
+
+# Resolve the message path against the caller's directory, before the cd below moves out of it.
+MSG=""
+if [ "${1:-}" = "--message" ]; then
+    [ -n "${2:-}" ] || { printf 'usage: scan-for-leaks.sh --message FILE\n' >&2; exit 2; }
+    MSG="$2"
+    case "$MSG" in /*) ;; *) MSG="$PWD/$MSG" ;; esac
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 FOUND=0
+
+# What a message must not carry: the tracked-file shapes, plus the trailer keys that only ever
+# appear in one. Trailers stay out of the file tier, where a doc naming the shape would refuse
+# itself.
+MESSAGE_RE='/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):'
 
 scan() {
     _what="$1"; _re="$2"
@@ -32,6 +46,28 @@ scan() {
     [ -n "$_names" ] && printf '%s\n' "$_names" | while IFS= read -r _n; do printf '  %s (filename): %s\n' "$_what" "$_n"; done
     [ -z "$_hits" ] && [ -z "$_names" ]
 }
+
+# One tier, two callers: the commit-msg hook reads the message being written, the release sweep
+# reads every message already in history.
+scan_messages() {
+    _hits="$(printf '%s\n' "$1" | grep -nE "$MESSAGE_RE")"
+    [ -z "$_hits" ] && return 0
+    printf '%s\n' "$_hits" | head -20 | while IFS= read -r _l; do printf '  message: %s\n' "$_l"; done
+    return 1
+}
+
+if [ -n "$MSG" ]; then
+    printf 'scanning the commit message\n'
+    # `commit -v` appends the staged diff below a scissors line, and those lines carry no comment
+    # character, so the cut has to come before the comment strip or the diff gets scanned.
+    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG" | git stripspace --strip-comments)" || FOUND=1
+    if [ "$FOUND" -eq 0 ]; then
+        printf 'clean\n'
+        exit 0
+    fi
+    printf '\nrefusing: the above would be published.\n'
+    exit 1
+fi
 
 printf 'scanning tracked files\n'
 
@@ -46,9 +82,7 @@ scan "private record reference" '(DR|RL)-[0-9]{3}' || FOUND=1
 
 if [ "${1:-}" = "--all" ]; then
     printf 'scanning commit messages\n'
-    _hits="$(git log --all --format='%H %s%n%b' 2>/dev/null \
-        | grep -nE '/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}')"
-    [ -n "$_hits" ] && { printf '%s\n' "$_hits" | head -20; FOUND=1; }
+    scan_messages "$(git log --all --format='%H %s%n%b' 2>/dev/null)" || FOUND=1
 fi
 
 if [ "$FOUND" -eq 0 ]; then

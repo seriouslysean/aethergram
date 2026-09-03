@@ -64,9 +64,11 @@ This repo is public. The apps that use it are not, and the development model is 
 transport from inside one of them, so a comment written in that context can carry a private app
 name, a bundle identifier, or an issue number into a public commit. Prose is the leak, not code.
 
-`Scripts/scan-for-leaks.sh` runs in the checks and in the pre-commit hook. It refuses absolute home paths,
-email addresses, cross-repo issue references, and bare issue numbers. It matches shapes that point
-outside this repo, and it reads tracked files, so stage a file before expecting it to be scanned.
+`Scripts/scan-for-leaks.sh` runs in the checks, in the pre-commit hook over tracked files, and in
+the commit-msg hook over the message being written. It refuses absolute home paths, email
+addresses, cross-repo issue references, bare issue numbers, private record ids, and, in a message,
+agent-session trailers. It matches shapes that point outside this repo, and the file tier reads
+tracked files, so stage a file before expecting it to be scanned.
 
 **Issues and pull requests are published too, and no hook can gate them.** Before filing, read the
 body back and remove anything that is not about this repository: which app hit the bug, what its
