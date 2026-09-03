@@ -32,7 +32,7 @@ Rules for working in this repo.
 20. Remember that a gate which never fires looks exactly like one that passes.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
 22. Keep the tag vocabulary short by design, and add one only when a suite applies it, because a tag nothing uses is a category nobody is thinking in.
-23. Write POSIX `sh` in `test/` and `hooks/`, and avoid bashisms so the same scripts run under `dash`.
+23. Write POSIX `sh` in `Scripts/` and `.githooks/`, and avoid bashisms so the same scripts run under `dash`.
 24. Run the adversarial pass over concurrency, the consent path, and published prose before reporting work done, because the suite only re-proves past failures.
 
 ## Working
@@ -40,7 +40,7 @@ Rules for working in this repo.
 25. Start every change as an issue and a branch named for it, so the reason outlives the diff.
 26. Merge with a merge commit rather than a squash, so each commit on `main` stays individually revertable.
 27. Commit and open the pull request on the owner's behalf; the owner reviews the diff and merges.
-28. Put no session link, agent trailer, or co-author line in a commit message or a pull request body, because this repo's public history carries no reference to where the work was done.
+28. Keep session links, agent trailers, and co-author lines out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry.
 29. Write terse and factual prose, and never pad it with filler, preamble, or a motivational opener.
 30. Keep the orchestrating session to routing and judgement, and dispatch implementation and review to agents where a harness provides them.
 31. State the reason in one sentence when dispatching above an agent's pinned model, since escalation is a decision rather than a default.

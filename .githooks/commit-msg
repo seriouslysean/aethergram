@@ -1,0 +1,25 @@
+#!/bin/sh
+# Refuse a commit message that points outside this repo. Wire it up once per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# The pre-commit hook reads tracked files, so nothing there sees what gets typed into the message,
+# which is where a session trailer or a foreign issue number actually arrives.
+
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+SCAN="$ROOT/Scripts/scan-for-leaks.sh"
+
+# A missing or non-executable gate must not look like one that passed.
+[ -x "$SCAN" ] || {
+    echo "[commit-msg] Scripts/scan-for-leaks.sh missing or not executable" >&2
+    exit 1
+}
+
+"$SCAN" --message "$1" || {
+    echo "[commit-msg] refusing: the message would publish the above." >&2
+    exit 1
+}
+
+exit 0
