@@ -9,7 +9,8 @@ which is why every hook framework has the same step and each of them brings a ru
 git config core.hooksPath .githooks
 ```
 
-The pre-commit hook runs `Scripts/scan-for-leaks.sh`. It touches no network and takes milliseconds.
+The hooks run `Scripts/scan-for-leaks.sh`, over the staged tree before the commit and over the
+message as it is written. It touches no network and takes milliseconds.
 
 ## The rule that matters
 
