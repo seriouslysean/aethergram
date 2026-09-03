@@ -1,7 +1,7 @@
 #!/bin/sh
 # Refuse a commit that would publish a consumer's identity. Wire it up once per clone:
 #
-#   git config core.hooksPath hooks
+#   git config core.hooksPath .githooks
 #
 # The scan only, not the test suite: a hook that takes a minute is a hook people bypass, and
 # `swift test` is CI's gate. This one is milliseconds and touches no network.

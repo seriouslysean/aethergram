@@ -2,10 +2,11 @@
 
 ## Setup
 
-Point git at the committed hooks once per clone.
+Point git at the committed hooks once per clone. Git will not let a repo commit this setting,
+which is why every hook framework has the same step and each of them brings a runtime to do it.
 
 ```sh
-git config core.hooksPath hooks
+git config core.hooksPath .githooks
 ```
 
 The pre-commit hook runs `test/no-leaks.sh`. It touches no network and takes milliseconds.
