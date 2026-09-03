@@ -1,0 +1,44 @@
+name: ci
+
+# The suite is the merge gate. Offline and seconds, so nothing green depends on a vendor being
+# reachable: the adapter's tests assert the request a batch produces, they do not send it.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Pinned, not `macos-latest`: the label moves to a new image on GitHub's schedule, and a
+    # toolchain change arriving that way is a red build nobody asked for.
+    runs-on: macos-15
+    env:
+      # Pinned rather than whatever `xcode-select` points at, for the same reason. Swift tools 6.2
+      # is the manifest's floor, so the Xcode that provides it is part of what CI proves.
+      DEVELOPER_DIR: /Applications/Xcode_26.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      # A pin that silently falls back to the image default is a pin that proves nothing, so fail
+      # here and print what the image actually has rather than compiling against a surprise.
+      - name: verify the toolchain
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "pinned Xcode not on this image; available:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          swift --version
+          # A floor and a ceiling on purpose: 6.2 is the manifest's minimum, and a new major
+          # arriving through a changed image should be a deliberate bump, not a silent one.
+          swift --version 2>&1 | grep -qE 'Swift version 6\.([2-9]|[1-9][0-9])' || {
+            echo "the pinned Xcode does not provide Swift 6.2 or newer"
+            exit 1
+          }
+
+      - name: suite
+        run: test/run.sh

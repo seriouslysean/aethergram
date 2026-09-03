@@ -1,0 +1,25 @@
+#!/bin/sh
+# Refuse a commit that would publish a consumer's identity. Wire it up once per clone:
+#
+#   git config core.hooksPath hooks
+#
+# The scan only, not the test suite: a hook that takes a minute is a hook people bypass, and
+# `swift test` is CI's gate. This one is milliseconds and touches no network.
+
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+SCAN="$ROOT/test/no-leaks.sh"
+
+# A missing or non-executable gate must not look like one that passed.
+[ -x "$SCAN" ] || {
+    echo "[pre-commit] test/no-leaks.sh missing or not executable" >&2
+    exit 1
+}
+
+"$SCAN" || {
+    echo "[pre-commit] refusing: the staged tree would publish the above." >&2
+    exit 1
+}
+
+exit 0
