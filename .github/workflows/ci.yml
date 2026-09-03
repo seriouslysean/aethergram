@@ -15,11 +15,11 @@ jobs:
   test:
     # Pinned, not `macos-latest`: the label moves to a new image on GitHub's schedule, and a
     # toolchain change arriving that way is a red build nobody asked for.
-    runs-on: macos-15
+    runs-on: macos-26
     env:
-      # Pinned rather than whatever `xcode-select` points at, for the same reason. Swift tools 6.2
+      # Pinned rather than whatever `xcode-select` points at, for the same reason. Swift tools 6.3
       # is the manifest's floor, so the Xcode that provides it is part of what CI proves.
-      DEVELOPER_DIR: /Applications/Xcode_26.0.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
 
@@ -33,10 +33,10 @@ jobs:
             exit 1
           fi
           swift --version
-          # A floor and a ceiling on purpose: 6.2 is the manifest's minimum, and a new major
+          # A floor and a ceiling on purpose: 6.3 is the manifest's minimum, and a new major
           # arriving through a changed image should be a deliberate bump, not a silent one.
-          swift --version 2>&1 | grep -qE 'Swift version 6\.([2-9]|[1-9][0-9])' || {
-            echo "the pinned Xcode does not provide Swift 6.2 or newer"
+          swift --version 2>&1 | grep -qE 'Swift version 6\.([3-9]|[1-9][0-9])' || {
+            echo "the pinned Xcode does not provide Swift 6.3 or newer"
             exit 1
           }
 
