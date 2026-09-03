@@ -16,6 +16,9 @@ The pre-commit hook runs `Scripts/scan-for-leaks.sh`. It touches no network and 
 **A fix ships with a test that fails without it.** Not a test that passes afterwards, which proves
 nothing: a test you have watched fail on the unfixed code and pass on the fixed code.
 
+That is a regression test with the ordering made explicit: it fails before the fix is applied and
+passes after.
+
 This package is a consent gate with a queue attached. A gate is the one kind of code whose failure
 mode is silence — it keeps collecting, the tests keep passing, and nothing surfaces until someone
 reads a dashboard that should have been empty. So the consent suite asserts at four layers, not
@@ -52,8 +55,9 @@ prevents rather than the function it calls. `A corrupt queue file loads as empty
 says what breaks if it regresses; `testLoadCorrupt` does not.
 
 Nothing in the suite reaches the network. The adapter's tests assert the request a batch produces
-— its URL, its headers, its body — and drive outcomes through an injected `URLSession`, so a
-failure points at the wire format rather than at a vendor being slow.
+— its URL, its headers, its body. The suite is hermetic by construction: outcomes are driven
+through an injected `URLSession` and a recording queue storage, which are fakes rather than mocks,
+so a failure names the wire format rather than a vendor's availability.
 
 Before you write the fix, write the test and watch it fail. A test written afterwards tends to
 assert what the code now does rather than what it should do.
@@ -69,6 +73,11 @@ the commit-msg hook over the message being written. It refuses absolute home pat
 addresses, cross-repo issue references, bare issue numbers, private record ids, and, in a message,
 agent-session trailers. It matches shapes that point outside this repo, and the file tier reads
 tracked files, so stage a file before expecting it to be scanned.
+
+The scan is a handful of hand-written regexes rather than a secret scanner. What it refuses are
+identifying references, not credentials, so a scanner's entropy heuristics and maintained provider
+rules match none of them, and the rule set would be hand-written either way. A scanner is also a
+dependency, and this package takes none.
 
 **Issues and pull requests are published too, and no hook can gate them.** Before filing, read the
 body back and remove anything that is not about this repository: which app hit the bug, what its
@@ -88,12 +97,14 @@ failure, not the reporter.
 
 ## Releasing
 
-1. `Scripts/run-checks.sh` passes on a clean checkout.
-2. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
+1. `Scripts/scan-for-leaks.sh --all` passes. The hooks are local config a clone has to opt into,
+   so the history tier is the only check that covers a message written without them.
+2. `Scripts/run-checks.sh` passes on a clean checkout.
+3. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
    reader copying one gets the release being cut rather than the previous one.
-3. Merge the pull request.
-4. Confirm local `main` matches `origin/main`.
-5. Tag `vX.Y.Z` and push the tag, then publish a release naming the issues it closes.
+4. Merge the pull request.
+5. Confirm local `main` matches `origin/main`.
+6. Tag `vX.Y.Z` and push the tag, then publish a release naming the issues it closes.
 
 What a version number promises is in [STABILITY.md](STABILITY.md).
 
