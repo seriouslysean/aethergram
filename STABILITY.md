@@ -56,7 +56,7 @@ Depend on a release tag. `main` is a moving target.
 
 ## Platforms and toolchain
 
-iOS 18 and macOS 15, Swift tools 6.2, language mode 6. Raising a platform floor or the tools
+iOS 18 and macOS 15, Swift tools 6.3, language mode 6. Raising a platform floor or the tools
 version is a major release, because a host that cannot build it cannot use it.
 
 ## Dependencies
