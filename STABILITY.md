@@ -52,6 +52,17 @@ Semantic versioning, against the API list above.
 - Major: a removal or a signature change in the API list, or a change to a `PayloadKey` or
   `PresetSignal` string.
 
+While the package is 0.x the major position is not in play, so a change that would be major above
+1.0 is a minor release: `0.1.z` to `0.2.0`, never `0.1.1`. A patch on a 0.x line still promises
+what a patch promises, which is that nothing in the API list moved. This is the rule 0.1.1 was cut
+against and missed — it removed four `PayloadKey` constants and changed a signature in the API
+list, and shipped in the patch position.
+
+That distinction is what a range depends on. `from:` is `upToNextMajor`, so every 0.x release a
+host has not pinned exactly is one it will resolve into. A release that changes the API list
+cannot be reached that way without breaking a build, which is why the position it occupies is a
+promise rather than a label.
+
 Depend on a release tag. `main` is a moving target.
 
 ## Platforms and toolchain
