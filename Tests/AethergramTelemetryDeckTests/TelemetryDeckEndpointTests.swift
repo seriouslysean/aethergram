@@ -71,9 +71,9 @@ struct TelemetryDeckEndpointTests {
     }
 
     /// The whole base-shape matrix, spelled out: root and path-prefixed bases,
-    /// each with and without a trailing slash, each bare and namespaced. This
-    /// is the regression guard for the separator itself, which doubled into
-    /// `v2//` under Foundation 6.2 and resolved to `v2/` under 6.3.
+    /// each with no, one, and two trailing slashes, each bare and namespaced.
+    /// This is the regression guard for the separator itself, which doubled
+    /// into `v2//` under Foundation 6.2 and resolved to `v2/` under 6.3.
     @Test("Every base shape resolves to one exact ingest URL", arguments: Self.matrix)
     func endpointMatrix(shape: BaseShape) throws {
         let configuration = try TelemetryDeckFixture.configuration(
@@ -173,6 +173,22 @@ struct TelemetryDeckEndpointTests {
         ),
         BaseShape(
             base: "https://ingest.example.test/api/",
+            namespace: "ns",
+            expected: "https://ingest.example.test/api/v2/namespace/ns/"
+        ),
+        BaseShape(base: "https://ingest.example.test//", namespace: nil, expected: "https://ingest.example.test/v2/"),
+        BaseShape(
+            base: "https://ingest.example.test//",
+            namespace: "ns",
+            expected: "https://ingest.example.test/v2/namespace/ns/"
+        ),
+        BaseShape(
+            base: "https://ingest.example.test/api//",
+            namespace: nil,
+            expected: "https://ingest.example.test/api/v2/"
+        ),
+        BaseShape(
+            base: "https://ingest.example.test/api//",
             namespace: "ns",
             expected: "https://ingest.example.test/api/v2/namespace/ns/"
         )
