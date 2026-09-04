@@ -23,7 +23,7 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", from: "0.1.1")
+.package(url: "https://github.com/seriouslysean/aethergram", from: "0.2.0")
 ```
 
 ```swift
