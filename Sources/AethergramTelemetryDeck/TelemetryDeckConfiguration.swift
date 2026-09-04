@@ -58,9 +58,11 @@ public struct TelemetryDeckConfiguration: Sendable {
     /// because Foundation 6.2 and 6.3 disagree on that call's separator
     /// handling: a base URL already ending in a slash yields `v2//` on one and
     /// `v2/` on the other. Writing each separator exactly once here makes the
-    /// URL identical on every Foundation. Work happens on the *encoded* path so
-    /// an encoded base segment survives verbatim, and the namespace is encoded
-    /// as a single component, so a slash inside it stays data.
+    /// URL identical on every Foundation. Every trailing slash is stripped
+    /// rather than one, so a base ending in `//` cannot leave a doubled
+    /// separator behind. Work happens on the *encoded* path so an encoded base
+    /// segment survives verbatim, and the namespace is encoded as a single
+    /// component, so a slash inside it stays data.
     ///
     /// A base URL carrying a query or fragment is outside this configuration's
     /// contract; both ride through onto the ingest URL untouched.
@@ -69,7 +71,7 @@ public struct TelemetryDeckConfiguration: Sendable {
             preconditionFailure("An absolute base URL must decompose into URLComponents")
         }
         var path = components.percentEncodedPath
-        if path.hasSuffix("/") {
+        while path.hasSuffix("/") {
             path.removeLast()
         }
         path += "/v2/"
