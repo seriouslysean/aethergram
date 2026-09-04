@@ -12,9 +12,10 @@ enum Aethergram {
     /// The payload contract's version, not the app's. It bumps when the set of
     /// fields the package attaches changes, or when the form one of them takes
     /// changes; `app.version` answers which build a signal came from, this
-    /// answers which shape it arrived in. Starts at 1.0.0, the shape the
-    /// package shipped with.
-    static let version = "1.0.0"
+    /// answers which shape it arrived in. 1.0.0 was the shape the package
+    /// shipped with; 1.1.0 is that shape with the four run-context fields
+    /// collapsed to `runContext.channel`.
+    static let version = "1.1.0"
 
     /// The pair as one grouping key, in the form the vendor's own SDK sent it.
     /// Derived rather than written a second time, so a version bump cannot
