@@ -45,10 +45,7 @@ public enum PayloadKey {
 
     // MARK: Run context
 
-    public static let runContextIsDebug = "runContext.isDebug"
-    public static let runContextIsSimulator = "runContext.isSimulator"
-    public static let runContextIsTestFlight = "runContext.isTestFlight"
-    public static let runContextIsAppStore = "runContext.isAppStore"
+    public static let runContextChannel = "runContext.channel"
 
     // MARK: User preference
 

@@ -225,9 +225,9 @@ struct SignalPayloadTests {
     /// Regression, caught by the first sim walk of this transport rather than
     /// by any static check: a simulator ships a receipt file named `receipt`,
     /// so deriving `isAppStore` from the receipt name reported every simulator
-    /// run as an App Store install. The four run-context flags exist to
-    /// separate real usage from ours, so that answer put a developer's own
-    /// device inside every App Store filter.
+    /// run as an App Store install. `runContext.channel` exists to separate
+    /// real usage from ours, so that answer put a developer's own device
+    /// inside every App Store filter.
     ///
     /// The channel matrix matches the SDK this replaces
     /// (`Signal+Helpers.swift:109-131`): debug and simulator short-circuit both
@@ -308,10 +308,7 @@ struct SignalPayloadTests {
             platform: "iOS",
             systemVersion: "26.1.2",
             systemMajorMinorVersion: "26.1",
-            isDebug: false,
-            isSimulator: true,
-            isTestFlight: false,
-            isAppStore: true,
+            channel: .store,
             region: "US",
             language: "en"
         )
@@ -327,10 +324,7 @@ struct SignalPayloadTests {
             PayloadKey.devicePlatform,
             PayloadKey.deviceSystemVersion,
             PayloadKey.deviceSystemMajorMinorVersion,
-            PayloadKey.runContextIsDebug,
-            PayloadKey.runContextIsSimulator,
-            PayloadKey.runContextIsTestFlight,
-            PayloadKey.runContextIsAppStore,
+            PayloadKey.runContextChannel,
             PayloadKey.userPreferenceRegion,
             PayloadKey.userPreferenceLanguage
         ]
@@ -341,8 +335,7 @@ struct SignalPayloadTests {
         #expect(snapshot.parameters[PayloadKey.sdkName] == "Aethergram")
         #expect(snapshot.parameters[PayloadKey.sdkNameAndVersion]
             == "Aethergram \(snapshot.parameters[PayloadKey.sdkVersion] ?? "")")
-        #expect(snapshot.parameters[PayloadKey.runContextIsSimulator] == "true")
-        #expect(snapshot.parameters[PayloadKey.runContextIsDebug] == "false")
+        #expect(snapshot.parameters[PayloadKey.runContextChannel] == "store")
     }
 
     @Test("Calendar parameters are the only clock-derived fields")

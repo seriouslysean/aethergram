@@ -1,5 +1,21 @@
 import Foundation
 
+/// Which distribution channel a run came down.
+///
+/// `dev` is anything that is neither a TestFlight nor an App Store install:
+/// a debug build, a simulator run, or a Release build sideloaded straight to
+/// a device. `EnvironmentSnapshot.buildChannel` stays the source of truth for
+/// telling the three apart.
+public enum RunContextChannel: String, Sendable {
+    case dev
+    case beta
+    case store
+
+    init(isTestFlight: Bool, isAppStore: Bool) {
+        self = isTestFlight ? .beta : (isAppStore ? .store : .dev)
+    }
+}
+
 /// The authored default payload: what the package attaches to every signal
 /// beyond what the consumer passed.
 ///
@@ -17,10 +33,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         platform: String,
         systemVersion: String,
         systemMajorMinorVersion: String,
-        isDebug: Bool,
-        isSimulator: Bool,
-        isTestFlight: Bool,
-        isAppStore: Bool,
+        channel: RunContextChannel,
         region: String,
         language: String
     ) {
@@ -30,10 +43,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         self.platform = platform
         self.systemVersion = systemVersion
         self.systemMajorMinorVersion = systemMajorMinorVersion
-        self.isDebug = isDebug
-        self.isSimulator = isSimulator
-        self.isTestFlight = isTestFlight
-        self.isAppStore = isAppStore
+        self.channel = channel
         self.region = region
         self.language = language
     }
@@ -46,10 +56,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let platform: String
     public let systemVersion: String
     public let systemMajorMinorVersion: String
-    public let isDebug: Bool
-    public let isSimulator: Bool
-    public let isTestFlight: Bool
-    public let isAppStore: Bool
+    public let channel: RunContextChannel
     public let region: String
     public let language: String
 
@@ -69,10 +76,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             PayloadKey.devicePlatform: platform,
             PayloadKey.deviceSystemVersion: systemVersion,
             PayloadKey.deviceSystemMajorMinorVersion: systemMajorMinorVersion,
-            PayloadKey.runContextIsDebug: "\(isDebug)",
-            PayloadKey.runContextIsSimulator: "\(isSimulator)",
-            PayloadKey.runContextIsTestFlight: "\(isTestFlight)",
-            PayloadKey.runContextIsAppStore: "\(isAppStore)",
+            PayloadKey.runContextChannel: channel.rawValue,
             PayloadKey.userPreferenceRegion: region,
             PayloadKey.userPreferenceLanguage: language
         ]
@@ -93,7 +97,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         let simulatorModel = processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"]
         let isSimulator = simulatorModel != nil
         let receipt = receiptPath(in: bundle)
-        let channel = buildChannel(
+        let distribution = buildChannel(
             isDebug: isDebugBuild,
             isSimulator: isSimulator,
             isMacOS: isMacOSPlatform,
@@ -107,10 +111,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             platform: platformName,
             systemVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
             systemMajorMinorVersion: "\(version.majorVersion).\(version.minorVersion)",
-            isDebug: isDebugBuild,
-            isSimulator: isSimulator,
-            isTestFlight: channel.isTestFlight,
-            isAppStore: channel.isAppStore,
+            channel: RunContextChannel(isTestFlight: distribution.isTestFlight, isAppStore: distribution.isAppStore),
             region: locale.region?.identifier ?? "",
             language: locale.language.languageCode?.identifier ?? ""
         )
@@ -129,10 +130,10 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
 
     // MARK: Internal
 
-    /// Which distribution channel this build came down. Pure, because the four
-    /// run-context flags exist to separate real usage from ours, and a wrong
-    /// answer here quietly lets a developer's own simulator into an App Store
-    /// filter.
+    /// Which distribution channel this build came down. Pure, because
+    /// `runContext.channel` exists to separate real usage from ours, and a
+    /// wrong answer here quietly lets a developer's own simulator into an App
+    /// Store filter.
     ///
     /// Debug and simulator short-circuit both answers, matching the SDK this
     /// replaces. App Store is a negation, not

@@ -29,10 +29,7 @@ struct TelemetryDeckWireNameTests {
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
 
-        PayloadKey.runContextIsDebug: "TelemetryDeck.RunContext.isDebug",
-        PayloadKey.runContextIsSimulator: "TelemetryDeck.RunContext.isSimulator",
-        PayloadKey.runContextIsTestFlight: "TelemetryDeck.RunContext.isTestFlight",
-        PayloadKey.runContextIsAppStore: "TelemetryDeck.RunContext.isAppStore",
+        PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
 
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
@@ -208,10 +205,7 @@ struct TelemetryDeckWireNameTests {
             platform: "iOS",
             systemVersion: "26.1.2",
             systemMajorMinorVersion: "26.1",
-            isDebug: false,
-            isSimulator: false,
-            isTestFlight: false,
-            isAppStore: true,
+            channel: .store,
             region: "US",
             language: "en"
         )

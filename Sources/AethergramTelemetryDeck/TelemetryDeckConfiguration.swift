@@ -91,11 +91,11 @@ public struct TelemetryDeckConfiguration: Sendable {
     /// The vendor's own SDK derived the same flag from `DEBUG` alone, which is
     /// what let a Release build on the simulator, a Release run on a developer
     /// device, and every TestFlight install post to the live partition and
-    /// burn quota. `isAppStore` is the one flag `EnvironmentSnapshot` computes
-    /// by negation after ruling out debug, simulator, and macOS, so a `false`
-    /// answer already covers every one of those cases plus TestFlight.
+    /// burn quota. `.store` is the one case `EnvironmentSnapshot.channel`
+    /// reaches only after ruling out debug, simulator, macOS, and TestFlight,
+    /// so anything else already covers every one of those cases.
     public static func testPartition(for snapshot: EnvironmentSnapshot) -> Bool {
-        !snapshot.isAppStore
+        snapshot.channel != .store
     }
 
     // MARK: Private
