@@ -16,7 +16,7 @@ why the adapter carries a canonical-to-vendor wire-name table rather than renami
 ## Phase 1: add the package, emit nothing
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", from: "0.1.0")
+.package(url: "https://github.com/seriouslysean/aethergram", from: "0.1.1")
 ```
 
 Depend on a release tag, never on `main`. Add the `Aethergram` product to the target that owns
