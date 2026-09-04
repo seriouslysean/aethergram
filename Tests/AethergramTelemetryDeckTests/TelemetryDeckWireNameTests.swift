@@ -29,10 +29,7 @@ struct TelemetryDeckWireNameTests {
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
 
-        PayloadKey.runContextIsDebug: "TelemetryDeck.RunContext.isDebug",
-        PayloadKey.runContextIsSimulator: "TelemetryDeck.RunContext.isSimulator",
-        PayloadKey.runContextIsTestFlight: "TelemetryDeck.RunContext.isTestFlight",
-        PayloadKey.runContextIsAppStore: "TelemetryDeck.RunContext.isAppStore",
+        PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
 
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
@@ -67,7 +64,10 @@ struct TelemetryDeckWireNameTests {
 
         let mapped = TelemetryDeckWireNames.payload(from: parameters)
 
-        #expect(mapped.count == Self.expectedParameterKeys.count)
+        // One over the table: the channel key also emits the vendor's legacy
+        // isTestFlight flag, which has no canonical payload key of its own.
+        #expect(mapped.count == Self.expectedParameterKeys.count + 1)
+        #expect(mapped["TelemetryDeck.RunContext.isTestFlight"] != nil)
         for (canonical, wireName) in Self.expectedParameterKeys {
             #expect(mapped[wireName] == "value-of-\(canonical)", "\(canonical) must map to \(wireName)")
             #expect(mapped[canonical] == nil, "\(canonical) must not also ride under its canonical name")
@@ -122,6 +122,31 @@ struct TelemetryDeckWireNameTests {
         let mapped = TelemetryDeckWireNames.payload(from: ["packID": "starter", "roundIndex": "3"])
 
         #expect(mapped == ["packID": "starter", "roundIndex": "3"])
+    }
+
+    @Test("A beta channel also emits the vendor's legacy isTestFlight flag")
+    func betaChannelEmitsLegacyTestFlightFlag() {
+        let mapped = TelemetryDeckWireNames.payload(
+            from: [PayloadKey.runContextChannel: RunContextChannel.beta.rawValue]
+        )
+
+        #expect(mapped["TelemetryDeck.RunContext.channel"] == "beta")
+        #expect(mapped["TelemetryDeck.RunContext.isTestFlight"] == "true")
+    }
+
+    /// Sent reading false rather than omitted: a chart grouping or filtering on
+    /// `isTestFlight == false` would read an absent key as missing, not false,
+    /// which is the compatibility the flag is retained for.
+    @Test(
+        "Dev and store channels send the legacy isTestFlight flag as false",
+        arguments: [RunContextChannel.dev, .store]
+    )
+    func nonBetaChannelsEmitLegacyTestFlightFlagAsFalse(channel: RunContextChannel) {
+        let mapped = TelemetryDeckWireNames.payload(
+            from: [PayloadKey.runContextChannel: channel.rawValue]
+        )
+
+        #expect(mapped["TelemetryDeck.RunContext.isTestFlight"] == "false")
     }
 
     /// The SDK sends `"\((components.hour ?? -1) + 1)"`, so midnight arrives as
@@ -208,10 +233,7 @@ struct TelemetryDeckWireNameTests {
             platform: "iOS",
             systemVersion: "26.1.2",
             systemMajorMinorVersion: "26.1",
-            isDebug: false,
-            isSimulator: false,
-            isTestFlight: false,
-            isAppStore: true,
+            channel: .store,
             region: "US",
             language: "en"
         )

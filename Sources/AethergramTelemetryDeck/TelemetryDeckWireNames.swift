@@ -25,11 +25,25 @@ enum TelemetryDeckWireNames {
         mapped.reserveCapacity(parameters.count)
         for (key, value) in parameters {
             mapped[parameterKeys[key] ?? key] = wireValue(forKey: key, value: value)
+            // Dashboards built on the vendor's own isTestFlight flag keep
+            // resolving after the collapse to one channel field. Emitted for
+            // every channel, not only beta: a chart that groups or filters on
+            // `isTestFlight == false` needs dev and store to send the field
+            // reading false, not to omit it and read as missing.
+            if key == PayloadKey.runContextChannel {
+                let isBeta = value == RunContextChannel.beta.rawValue
+                mapped[legacyIsTestFlightWireName] = isBeta ? "true" : "false"
+            }
         }
         return mapped
     }
 
     // MARK: Private
+
+    /// The vendor's pre-`channel` flag, kept alongside `runContext.channel`
+    /// for dashboards built before the collapse. Remove once those move to
+    /// `channel`; nothing in this package reads it back.
+    private static let legacyIsTestFlightWireName = "TelemetryDeck.RunContext.isTestFlight"
 
     /// Both vendor-namespaced names bypass the SDK's signal prefix, which is
     /// why the core leaves preset names unprefixed.
@@ -55,10 +69,7 @@ enum TelemetryDeckWireNames {
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
 
-        PayloadKey.runContextIsDebug: "TelemetryDeck.RunContext.isDebug",
-        PayloadKey.runContextIsSimulator: "TelemetryDeck.RunContext.isSimulator",
-        PayloadKey.runContextIsTestFlight: "TelemetryDeck.RunContext.isTestFlight",
-        PayloadKey.runContextIsAppStore: "TelemetryDeck.RunContext.isAppStore",
+        PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
 
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",

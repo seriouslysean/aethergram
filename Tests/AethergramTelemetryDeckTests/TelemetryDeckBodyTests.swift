@@ -33,14 +33,9 @@ struct TelemetryDeckBodyTests {
     ]
 
     /// Minimal `EnvironmentSnapshot` construction for the partition-mapping
-    /// suite: only the four run-context flags matter to `testPartition(for:)`,
-    /// so every other field is a placeholder.
-    static func snapshot(
-        isDebug: Bool = false,
-        isSimulator: Bool = false,
-        isTestFlight: Bool = false,
-        isAppStore: Bool = false
-    ) -> EnvironmentSnapshot {
+    /// suite: only `channel` matters to `testPartition(for:)`, so every other
+    /// field is a placeholder.
+    static func snapshot(channel: RunContextChannel = .dev) -> EnvironmentSnapshot {
         EnvironmentSnapshot(
             appVersion: "1.0",
             appBuild: "1",
@@ -48,10 +43,7 @@ struct TelemetryDeckBodyTests {
             platform: "iOS",
             systemVersion: "18.0",
             systemMajorMinorVersion: "18.0",
-            isDebug: isDebug,
-            isSimulator: isSimulator,
-            isTestFlight: isTestFlight,
-            isAppStore: isAppStore,
+            channel: channel,
             region: "US",
             language: "en"
         )
@@ -158,28 +150,9 @@ struct TelemetryDeckBodyTests {
     @Test(
         "Only an App Store install reads the live partition",
         arguments: [
-            PartitionRow(name: "debug device", snapshot: Self.snapshot(isDebug: true), expectedIsTestMode: true),
-            PartitionRow(
-                name: "debug simulator",
-                snapshot: Self.snapshot(isDebug: true, isSimulator: true),
-                expectedIsTestMode: true
-            ),
-            PartitionRow(
-                name: "release simulator",
-                snapshot: Self.snapshot(isSimulator: true),
-                expectedIsTestMode: true
-            ),
-            PartitionRow(
-                name: "release TestFlight",
-                snapshot: Self.snapshot(isTestFlight: true),
-                expectedIsTestMode: true
-            ),
-            PartitionRow(
-                name: "release App Store",
-                snapshot: Self.snapshot(isAppStore: true),
-                expectedIsTestMode: false
-            ),
-            PartitionRow(name: "macOS test host", snapshot: Self.snapshot(), expectedIsTestMode: true)
+            PartitionRow(name: "dev channel", snapshot: Self.snapshot(channel: .dev), expectedIsTestMode: true),
+            PartitionRow(name: "beta channel", snapshot: Self.snapshot(channel: .beta), expectedIsTestMode: true),
+            PartitionRow(name: "store channel", snapshot: Self.snapshot(channel: .store), expectedIsTestMode: false)
         ]
     )
     func partitionMatchesTheDistributionChannel(row: PartitionRow) throws {
@@ -232,13 +205,13 @@ struct TelemetryDeckBodyTests {
     func payloadValuesStayStrings() throws {
         let signal = TelemetryDeckFixture.signal(parameters: [
             PayloadKey.retentionTotalSessionsCount: "12",
-            PayloadKey.runContextIsDebug: "true"
+            PayloadKey.runContextChannel: RunContextChannel.dev.rawValue
         ])
 
         let element = try TelemetryDeckFixture.element(for: signal)
 
         let payload = try #require(element["payload"] as? [String: String])
         #expect(payload["TelemetryDeck.Retention.totalSessionsCount"] == "12")
-        #expect(payload["TelemetryDeck.RunContext.isDebug"] == "true")
+        #expect(payload["TelemetryDeck.RunContext.channel"] == "dev")
     }
 }

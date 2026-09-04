@@ -54,15 +54,33 @@ public struct TelemetryDeckConfiguration: Sendable {
     /// `v2/namespace/{ns}/` when a namespace is set, `v2/` otherwise — the
     /// vendor's documented ingest shape.
     ///
-    /// `appending(path:)` handles the separator, so this cannot fail and the
-    /// caller has no invalid-endpoint case to carry. The hand-rolled version
-    /// re-parsed a concatenated string, which is what made the result optional
-    /// in the first place.
+    /// The path is assembled explicitly rather than through `appending(path:)`
+    /// because Foundation 6.2 and 6.3 disagree on that call's separator
+    /// handling: a base URL already ending in a slash yields `v2//` on one and
+    /// `v2/` on the other. Writing each separator exactly once here makes the
+    /// URL identical on every Foundation. Work happens on the *encoded* path so
+    /// an encoded base segment survives verbatim, and the namespace is encoded
+    /// as a single component, so a slash inside it stays data.
+    ///
+    /// A base URL carrying a query or fragment is outside this configuration's
+    /// contract; both ride through onto the ingest URL untouched.
     public var ingestURL: URL {
-        if let namespace, !namespace.isEmpty {
-            return baseURL.appending(path: "v2/namespace/\(namespace)/", directoryHint: .isDirectory)
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
+            preconditionFailure("An absolute base URL must decompose into URLComponents")
         }
-        return baseURL.appending(path: "v2/", directoryHint: .isDirectory)
+        var path = components.percentEncodedPath
+        if path.hasSuffix("/") {
+            path.removeLast()
+        }
+        path += "/v2/"
+        if let namespace, !namespace.isEmpty {
+            path += "namespace/\(Self.encodedPathSegment(namespace))/"
+        }
+        components.percentEncodedPath = path
+        guard let url = components.url else {
+            preconditionFailure("Appending an encoded path to absolute components must recompose")
+        }
+        return url
     }
 
     /// Maps a vendor-neutral `EnvironmentSnapshot` to this vendor's Test Mode
@@ -73,10 +91,23 @@ public struct TelemetryDeckConfiguration: Sendable {
     /// The vendor's own SDK derived the same flag from `DEBUG` alone, which is
     /// what let a Release build on the simulator, a Release run on a developer
     /// device, and every TestFlight install post to the live partition and
-    /// burn quota. `isAppStore` is the one flag `EnvironmentSnapshot` computes
-    /// by negation after ruling out debug, simulator, and macOS, so a `false`
-    /// answer already covers every one of those cases plus TestFlight.
+    /// burn quota. `.store` is the one case `EnvironmentSnapshot.channel`
+    /// reaches only after ruling out debug, simulator, macOS, and TestFlight,
+    /// so anything else already covers every one of those cases.
     public static func testPartition(for snapshot: EnvironmentSnapshot) -> Bool {
-        !snapshot.isAppStore
+        snapshot.channel != .store
+    }
+
+    // MARK: Private
+
+    /// `.urlPathAllowed` permits `/`, which would let a namespace invent path
+    /// structure; removing it keeps the namespace one component.
+    private static func encodedPathSegment(_ segment: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove("/")
+        guard let encoded = segment.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            preconditionFailure("Percent-encoding a String against a CharacterSet must succeed")
+        }
+        return encoded
     }
 }
