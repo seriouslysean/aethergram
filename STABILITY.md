@@ -42,6 +42,10 @@ the payload contract's, not the package's: it moves when the set of fields the p
 changes, or when the form one of them takes changes. A release that changes only behaviour leaves
 it alone.
 
+It follows semantic versioning against the field set, and the reader is who it promises to: a
+removed field breaks whoever keyed on it, so a removal is major, an addition is minor, and a
+changed form is whichever of the two a reader would have to react to.
+
 ## How versions move
 
 Semantic versioning, against the API list above.

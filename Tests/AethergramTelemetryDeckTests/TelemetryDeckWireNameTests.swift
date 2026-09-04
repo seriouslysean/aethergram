@@ -243,8 +243,8 @@ struct TelemetryDeckWireNameTests {
 
         let payload = try #require(element["payload"] as? [String: String])
         #expect(payload["TelemetryDeck.SDK.name"] == "Aethergram")
-        #expect(payload["TelemetryDeck.SDK.version"] == "1.1.0")
-        #expect(payload["TelemetryDeck.SDK.nameAndVersion"] == "Aethergram 1.1.0")
+        #expect(payload["TelemetryDeck.SDK.version"] == "2.0.0")
+        #expect(payload["TelemetryDeck.SDK.nameAndVersion"] == "Aethergram 2.0.0")
         #expect(payload["sdk.name"] == nil)
         #expect(payload["sdk.version"] == nil)
         #expect(payload["sdk.nameAndVersion"] == nil)
