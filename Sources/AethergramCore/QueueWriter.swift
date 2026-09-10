@@ -52,9 +52,10 @@ final class QueueWriter: @unchecked Sendable {
 
     /// Waits for any pending write to reach disk.
     ///
-    /// Bounded by one encode and one atomic write, and used only on the
+    /// Bounded by one encode and one atomic write. Two callers need that: the
     /// consumer's deactivation path, where the process is about to stop being
-    /// allowed to run and durability is the whole point of the queue.
+    /// allowed to run, and an erase, which promises the file is gone rather
+    /// than that a delete was asked for.
     func waitForPendingWrites() {
         queue.sync {}
     }
@@ -74,14 +75,17 @@ final class QueueWriter: @unchecked Sendable {
 
     private func submit(_ intent: Intent) {
         lock.lock()
+        defer { lock.unlock() }
         pending = intent
-        let shouldSchedule = !scheduled
-        if shouldSchedule { scheduled = true }
-        lock.unlock()
-        guard shouldSchedule else { return }
-        queue.async { [weak self] in
-            self?.drain()
-        }
+        guard !scheduled else { return }
+        scheduled = true
+        // Dispatched inside the lock: unlocking first leaves a window where a
+        // concurrent `waitForPendingWrites()` returns before this intent is on
+        // the queue at all. `self` is captured strongly because a snapshot has
+        // to outlive the recorder that submitted it: `record` does not wait,
+        // so a recorder released before the queue runs would take the writer,
+        // and the unwritten signal, down with it.
+        queue.async { self.drain() }
     }
 
     /// Runs on `queue`. Keeps writing the newest pending intent until none is

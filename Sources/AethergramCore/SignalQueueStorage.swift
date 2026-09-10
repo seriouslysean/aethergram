@@ -6,6 +6,10 @@ import os
 /// A protocol rather than a concrete type because where the queue lives is
 /// host-specific: an app extension writes to its own Application Support
 /// directory, a host app may want somewhere else, and tests want memory.
+///
+/// `load()` is called under the recorder's non-recursive lock, and `persist`
+/// and `purge` run on the writer queue that an erase and `flush()` wait on, so
+/// a conformance must not call back into the recorder: doing so deadlocks.
 public protocol SignalQueueStorage: Sendable {
     /// Everything persisted and not yet delivered. Empty on first read and
     /// after `purge()`.

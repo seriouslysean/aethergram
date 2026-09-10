@@ -76,6 +76,9 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
 
 /// Where the retention record lives. The consumer backs this with storage its
 /// own data reset already clears.
+///
+/// Every call here is made under the recorder's non-recursive lock, so a
+/// conformance must not call back into the recorder: doing so deadlocks.
 public protocol RetentionStore: Sendable {
     func load() -> RetentionRecord?
     func save(_ record: RetentionRecord)
