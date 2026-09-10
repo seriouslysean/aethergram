@@ -347,8 +347,18 @@ public final class SignalRecorder: Sendable {
                 // `clear()` and restore counters an erase dropped.
                 if touched.shouldPersist { retentionStore.save(touched.record) }
             }
+            // Stamped at record time rather than at send: a signal restored
+            // after a kill would otherwise leave under a session that opened
+            // after it happened. Never empty while the gate is open — a grant
+            // and a reset both mint one.
             current.pending.append(
-                Signal(name: name, parameters: merged, floatValue: floatValue, recordedAt: recordedAt)
+                Signal(
+                    name: name,
+                    parameters: merged,
+                    floatValue: floatValue,
+                    sessionID: current.sessionID,
+                    recordedAt: recordedAt
+                )
             )
             if current.pending.count > configuration.queueLimit {
                 let overflow = current.pending.count - configuration.queueLimit
@@ -418,8 +428,7 @@ public final class SignalRecorder: Sendable {
             }
             let batch = SignalBatch(
                 signals: Array(current.pending.prefix(configuration.batchSize)),
-                clientUser: clientUser,
-                sessionID: current.sessionID
+                clientUser: clientUser
             )
             return (batch, current.eraseGeneration, current.evictedFromFront)
         }

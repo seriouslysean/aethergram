@@ -92,7 +92,7 @@ public struct TelemetryDeckTransport: SignalTransport {
                 receivedAt: signal.recordedAt,
                 appID: configuration.appID,
                 clientUser: clientUser,
-                sessionID: batch.sessionID,
+                sessionID: signal.sessionID,
                 type: TelemetryDeckWireNames.signalName(for: signal.name),
                 floatValue: signal.floatValue,
                 payload: TelemetryDeckWireNames.payload(from: signal.parameters),

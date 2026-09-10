@@ -1,14 +1,13 @@
 import Foundation
 
-/// A batch of signals handed to a transport, plus the two per-batch fields
-/// every ingest API this package targets requires.
+/// A batch of signals handed to a transport, plus the one field every ingest
+/// API this package targets takes per batch rather than per signal.
 public struct SignalBatch: Equatable, Sendable {
     // MARK: Lifecycle
 
-    public init(signals: [Signal], clientUser: String, sessionID: String) {
+    public init(signals: [Signal], clientUser: String) {
         self.signals = signals
         self.clientUser = clientUser
-        self.sessionID = sessionID
     }
 
     // MARK: Public
@@ -19,9 +18,6 @@ public struct SignalBatch: Equatable, Sendable {
     /// needs it hashed hashes it; the core never invents an identifier and
     /// never persists one.
     public let clientUser: String
-
-    /// Stable for the length of one consumer-defined session.
-    public let sessionID: String
 }
 
 /// What the core does next with a batch it just handed over.
