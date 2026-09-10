@@ -120,9 +120,10 @@ struct TelemetryDeckBodyTests {
         #expect(stamps == ["2001-09-09T01:46:40+0000", TelemetryDeckFixture.instantOnTheWire])
     }
 
-    /// The vendor types this field `String`, not `Bool`. A JSON boolean is a
-    /// decode failure server-side, so the raw bytes are checked as well as the
-    /// parsed value.
+    /// The vendor's ingest doc types this field `Bool`, but the vendor's own
+    /// SDK sends the string `"true"`/`"false"`; the string is kept here for
+    /// continuity with what the SDK sends, so the raw bytes are checked as
+    /// well as the parsed value.
     @Test("isTestMode is a JSON string", arguments: [true, false])
     func isTestModeIsAString(isTestMode: Bool) throws {
         let configuration = TelemetryDeckFixture.configuration(isTestMode: isTestMode)
@@ -135,9 +136,9 @@ struct TelemetryDeckBodyTests {
         let text = try TelemetryDeckFixture.bodyText(for: batch, configuration: configuration)
 
         #expect(try TelemetryDeckFixture.string(element["isTestMode"], "isTestMode") == expected)
-        // `NSNumber as? Bool` succeeds by bridging, so a parsed-value check
-        // cannot tell a JSON boolean from the string the vendor requires. The
-        // raw bytes are the only assertion that can fail here.
+        // `TelemetryDeckFixture.string` already rejects a JSON boolean, since
+        // `NSNumber as? String` does not bridge; the raw-bytes checks below
+        // pin the exact wire form directly rather than relying on that cast.
         #expect(text.contains("\"isTestMode\":\"\(expected)\""))
         #expect(!text.contains("\"isTestMode\":\(expected)"))
     }

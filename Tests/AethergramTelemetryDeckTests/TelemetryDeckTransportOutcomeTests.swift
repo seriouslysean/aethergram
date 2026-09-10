@@ -74,6 +74,29 @@ struct TelemetryDeckTransportOutcomeTests {
         #expect(outcome == .delivered)
     }
 
+    /// An adapter that persists a request body to disk leaves a decline or a
+    /// reset with nothing to erase it — SECURITY.md calls that a bug in this
+    /// model regardless of build configuration, so the check does not gate on
+    /// `DEBUG`. Any file left over from an earlier run is cleared first so a
+    /// stale one cannot fail this for the wrong reason.
+    @Test("send does not persist a request body to the caches directory")
+    func sendDoesNotPersistARequestBody() async {
+        let envelopeName = "aethergram-debug-envelopes.ndjson"
+        let cachesDirectories = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        for directory in cachesDirectories {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(envelopeName))
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let transport = TelemetryDeckFixture.transport(session: URLSession(configuration: configuration))
+        _ = await transport.send(TelemetryDeckFixture.batch())
+
+        for directory in cachesDirectories {
+            #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(envelopeName).path))
+        }
+    }
+
     // MARK: Private
 
     private static func response(_ code: Int) throws -> HTTPURLResponse {
