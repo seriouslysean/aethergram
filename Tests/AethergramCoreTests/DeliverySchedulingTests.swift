@@ -147,7 +147,7 @@ struct DeliverySchedulingTests {
             calendar: testCalendar,
             now: steppingClock(from: start)
         )
-        // Runs on the drain's own task, so the record lands while the slot
+        // Runs inside the first send, so the record lands while the slot
         // holds this drain and can schedule nothing of its own.
         transport.duringFirstSend = { recorder.record("late") }
 

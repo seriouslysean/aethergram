@@ -212,8 +212,8 @@ struct SignalQueueDurabilityTests {
     /// Every signal here is deliberately equal to every other, and three sends
     /// is the only correct total: two says the mid-send record was dropped
     /// unsent, four says a delivered one was sent again. The eviction lands
-    /// inside the send because `duringFirstSend` runs on the drain's own task,
-    /// which puts it after the claim and before the verdict on every run.
+    /// inside the send because `duringFirstSend` runs while the send is held
+    /// open, which puts it after the claim and before the verdict on every run.
     @Test(
         "A batch whose front was evicted during the send removes only what it sent",
         arguments: [TransportOutcome.delivered, .permanent(reason: "rejected")]
