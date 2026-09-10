@@ -23,24 +23,67 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n         %s\n' "$CURRENT" "$1";
 
 printf '\nleak scan\n'
 
-it "nothing tracked identifies a consumer, a person, or a machine"
-if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" 2>&1)"; then
+it "nothing tracked or in history identifies a consumer, a person, or a machine"
+if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --all 2>&1)"; then
     pass
 else
     printf '%s\n' "$OUT"
-    fail "Scripts/scan-for-leaks.sh refused the tree"
+    fail "Scripts/scan-for-leaks.sh --all refused the tree or its history"
 fi
-
-printf '\ncommit message gate\n'
 
 # The hook is only worth having once it has been watched refusing input it is meant to refuse.
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/aethergram-checks.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
+it "a leak staged then reverted in the working tree is still refused"
+CLONE="$TMP/clone"
+mkdir -p "$CLONE/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$CLONE/Scripts/scan-for-leaks.sh"
+chmod +x "$CLONE/Scripts/scan-for-leaks.sh"
+(
+    cd "$CLONE" \
+    && git init -q \
+    && printf 'see /Users/example\n' > leak.txt \
+    && git add leak.txt \
+    && printf 'clean\n' > leak.txt
+)
+# Trust nothing about the fixture: confirm it actually staged a leak the working copy no
+# longer carries, or a scanner that always refuses would pass this test for the wrong reason.
+(cd "$CLONE" && git diff --quiet); WORKING_RC=$?
+(cd "$CLONE" && git diff --cached --quiet); STAGED_RC=$?
+OUT="$(cd "$CLONE" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+if [ "$WORKING_RC" -eq 0 ] || [ "$STAGED_RC" -eq 0 ]; then
+    fail "the fixture did not leave a staged file whose working copy differs"
+elif [ "$SCAN_RC" -eq 0 ]; then
+    fail "a leak staged then reverted in the working tree was not caught"
+elif ! printf '%s\n' "$OUT" | grep -q "absolute home path" || ! printf '%s\n' "$OUT" | grep -q "leak.txt"; then
+    fail "the scanner refused for a reason other than the staged leak"
+else
+    pass
+fi
+
+printf '\ncommit message gate\n'
+
 it "a session trailer in a message is refused"
 printf 'fix: a thing\n\nAgent-Session: 0f21\n' > "$TMP/trailer"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/trailer" >/dev/null 2>&1; then
     fail "a message carrying a session trailer was accepted"
+else
+    pass
+fi
+
+it "an issue or pull request URL in a message is refused"
+printf 'fix: a thing\n\nSee github.com/foo/bar/issues/42\n' > "$TMP/issueurl"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/issueurl" >/dev/null 2>&1; then
+    fail "a message carrying an issue or pull request URL was accepted"
+else
+    pass
+fi
+
+it "a hash-prefixed leak line in a message is refused"
+printf 'fix: a thing\n\n# see github.com/foo/bar/issues/42\n' > "$TMP/hashline"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/hashline" >/dev/null 2>&1; then
+    fail "a message carrying a #-prefixed leak line was accepted"
 else
     pass
 fi
