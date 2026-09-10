@@ -33,7 +33,9 @@ public struct TelemetryDeckTransport: SignalTransport {
         do {
             request = try makeRequest(for: batch)
         } catch {
-            // An unencodable batch will not become encodable on a retry.
+            // Defensive: `Signal` admits no value the encoder refuses, so this
+            // is unreachable today, and a batch that ever is unencodable will
+            // not become encodable on a retry.
             return .permanent(reason: "encode-failed")
         }
         // Which partition this build posts to, on every batch and in every

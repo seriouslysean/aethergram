@@ -19,7 +19,9 @@ public struct Signal: Codable, Equatable, Sendable {
     ) {
         self.name = name
         self.parameters = parameters
-        self.floatValue = floatValue
+        // `JSONEncoder` throws on a non-finite value and the queue encodes as
+        // one array, so keeping one would cost every queued signal its file.
+        self.floatValue = (floatValue?.isFinite ?? false) ? floatValue : nil
         self.recordedAt = recordedAt
     }
 
@@ -32,7 +34,9 @@ public struct Signal: Codable, Equatable, Sendable {
     /// `floatValue`; every transport this package targets stringifies the rest.
     public let parameters: [String: String]
 
-    /// The one numeric field a dashboard can aggregate across signals.
+    /// The one numeric field a dashboard can aggregate across signals. Never
+    /// non-finite: a value no encoder can carry is dropped at init rather than
+    /// left to fail at the one place every signal shares.
     public let floatValue: Double?
 
     /// When the consumer recorded it, not when it was transmitted. A batch that

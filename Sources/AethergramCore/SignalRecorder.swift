@@ -212,8 +212,24 @@ public final class SignalRecorder: Sendable {
     /// the same batch again and walk straight through the backoff.
     private enum DrainSlot {
         case idle
-        case waiting(Task<Void, Never>)
-        case running(Task<Void, Never>)
+        case waiting(OwnedDrain)
+        case running(OwnedDrain)
+
+        var owned: OwnedDrain? {
+            switch self {
+            case .idle: nil
+            case let .waiting(owned), let .running(owned): owned
+            }
+        }
+    }
+
+    /// The task in the slot, under the identifier it was minted with. A task
+    /// names itself when it gives the slot back, because a cancelled or
+    /// superseded one reaching that point would otherwise evict the drain that
+    /// replaced it.
+    private struct OwnedDrain {
+        let id: Int
+        let task: Task<Void, Never>
     }
 
     private struct State {
@@ -228,6 +244,9 @@ public final class SignalRecorder: Sendable {
         /// the three states it is in rather than leaving that to be inferred
         /// from a pair of flags and an optional.
         var drain: DrainSlot = .idle
+        /// The last identifier handed to a drain. Monotonic, so an identifier
+        /// a task holds is never the one a later task was given.
+        var lastDrainID = 0
         var consecutiveFailures = 0
         var sessionID = ""
         /// The start this instance stamped on the session it opened, so a
@@ -238,6 +257,12 @@ public final class SignalRecorder: Sendable {
         /// value it was claimed under, so work in flight across an erase can be
         /// told from work that belongs to the queue that exists now.
         var eraseGeneration = 0
+        /// How many signals have ever been dropped from the front of the queue.
+        /// A batch carries the value it was claimed under, which is the only
+        /// way to know how much of what it sent the queue still holds: two
+        /// signals recorded alike are equal, so a value match cannot tell a
+        /// sent signal from the one that replaced it.
+        var evictedFromFront = 0
 
         /// Drops everything collected under a grant. Both callers — a decline
         /// and a data reset — mean the same thing by it, and had drifted: only
@@ -328,6 +353,7 @@ public final class SignalRecorder: Sendable {
             if current.pending.count > configuration.queueLimit {
                 let overflow = current.pending.count - configuration.queueLimit
                 current.pending.removeFirst(overflow)
+                current.evictedFromFront &+= overflow
                 logger.error("queue overflow dropped=\(overflow)")
             }
             // Submitted under the same lock that produced it, which is what
@@ -361,22 +387,32 @@ public final class SignalRecorder: Sendable {
         // and nothing further follows.
         guard permitsCollection(at: claimed.generation) else { return false }
         let outcome = await transport.send(claimed.batch)
-        return apply(outcome, sent: claimed.batch.signals, generation: claimed.generation)
+        return apply(
+            outcome,
+            sent: claimed.batch.signals,
+            generation: claimed.generation,
+            evicted: claimed.evicted
+        )
     }
 
-    /// Claims the front of the queue, with the erase generation it was claimed
-    /// under, so a verdict on it can be told from a verdict on the queue that
-    /// replaced it.
+    /// Claims the front of the queue, with the erase generation and the
+    /// eviction count it was claimed under, so a verdict on it can be told from
+    /// a verdict on the queue that replaced it and from one on a queue an
+    /// overflow has since shortened.
     ///
     /// The identifier is resolved in here rather than by the caller: outside
     /// the lock, a decline landing between the consent check and the read would
     /// let the host mint one while the answer is withheld.
-    private func nextBatch() -> (batch: SignalBatch, generation: Int)? {
-        lock.withLock { current -> (batch: SignalBatch, generation: Int)? in
+    private func nextBatch() -> (batch: SignalBatch, generation: Int, evicted: Int)? {
+        lock.withLock { current -> (batch: SignalBatch, generation: Int, evicted: Int)? in
             guard current.consent.permitsCollection else { return nil }
             restoreQueueIfNeeded(&current)
             guard !current.pending.isEmpty else { return nil }
             guard let clientUser = clientUserProvider() else {
+                // Counted as a failure so the capped backoff damps the retry:
+                // a host that never resolves an identifier would otherwise be
+                // woken at the steady interval for the life of the process.
+                current.consecutiveFailures += 1
                 logger.error("drain halt reason=no-client-user")
                 return nil
             }
@@ -385,14 +421,14 @@ public final class SignalRecorder: Sendable {
                 clientUser: clientUser,
                 sessionID: current.sessionID
             )
-            return (batch, current.eraseGeneration)
+            return (batch, current.eraseGeneration, current.evictedFromFront)
         }
     }
 
     /// Applies a transport verdict to the queue. Delivered and permanently
     /// rejected batches both leave it: a batch the server will keep refusing is
     /// not worth a retry slot forever.
-    private func apply(_ outcome: TransportOutcome, sent: [Signal], generation: Int) -> Bool {
+    private func apply(_ outcome: TransportOutcome, sent: [Signal], generation: Int, evicted: Int) -> Bool {
         // Submitted under the same lock that mutated the queue, matching
         // `enqueue`: persisting after releasing the lock let a concurrent
         // enqueue's own in-lock persist land first, then get clobbered by
@@ -405,13 +441,13 @@ public final class SignalRecorder: Sendable {
             guard current.consent.permitsCollection, current.eraseGeneration == generation else { return nil }
             switch outcome {
             case .delivered, .permanent:
-                // Removes only when the queue still starts with the sent
-                // signals: a concurrent overflow eviction or drain can shift
-                // the front first, and blindly removing here would discard
-                // signals that were never actually sent.
-                if current.pending.starts(with: sent) {
-                    current.pending.removeFirst(sent.count)
-                }
+                // An overflow eviction during the send already dropped part of
+                // what was sent, and the rest is still at the front. Counting
+                // is what tells those apart: signals recorded alike are equal,
+                // so matching the queue against the batch by value would take
+                // the signal that replaced one it removes.
+                let evictedSinceClaim = current.evictedFromFront &- evicted
+                current.pending.removeFirst(max(0, sent.count - evictedSinceClaim))
                 current.consecutiveFailures = 0
                 writer.persist(current.pending)
                 return !current.pending.isEmpty
@@ -469,6 +505,7 @@ public final class SignalRecorder: Sendable {
         // a higher limit must not transmit past the cap now in force.
         let overflow = state.pending.count - configuration.queueLimit
         state.pending.removeFirst(overflow)
+        state.evictedFromFront &+= overflow
         logger.error("restore overflow dropped=\(overflow)")
         writer.persist(state.pending)
     }
@@ -501,18 +538,27 @@ public final class SignalRecorder: Sendable {
                 return nil
             case let .waiting(existing):
                 guard delay == 0 else { return nil }
-                current.drain = .running(makeDrainTask(after: 0))
-                return existing
+                let owned = makeOwnedDrain(&current, after: 0)
+                current.drain = .running(owned)
+                return existing.task
             case .idle:
-                let task = makeDrainTask(after: delay)
-                current.drain = delay > 0 ? .waiting(task) : .running(task)
+                let owned = makeOwnedDrain(&current, after: delay)
+                current.drain = delay > 0 ? .waiting(owned) : .running(owned)
                 return nil
             }
         }
         preempted?.cancel()
     }
 
-    private func makeDrainTask(after delay: TimeInterval) -> Task<Void, Never> {
+    /// Mints the identifier and the task together, so a task always knows the
+    /// name the slot holds it under. Call from inside the lock.
+    private func makeOwnedDrain(_ state: inout State, after delay: TimeInterval) -> OwnedDrain {
+        state.lastDrainID &+= 1
+        let id = state.lastDrainID
+        return OwnedDrain(id: id, task: makeDrainTask(id: id, after: delay))
+    }
+
+    private func makeDrainTask(id: Int, after delay: TimeInterval) -> Task<Void, Never> {
         Task { [weak self] in
             if delay > 0 {
                 do {
@@ -523,47 +569,56 @@ public final class SignalRecorder: Sendable {
                     // that replaced this one.
                     return
                 }
-                self?.promoteWaitingDrain()
+                guard self?.promoteWaitingDrain(id: id) == true else { return }
             }
             guard !Task.isCancelled, let self else { return }
             await drain()
-            let retry = retryDelay()
-            releaseDrainSlot()
-            if let retry { startDrain(after: retry) }
+            releaseDrainSlot(id: id)
         }
     }
 
     /// The delay is served; from here the task cannot be hurried, only awaited.
-    private func promoteWaitingDrain() {
+    ///
+    /// False when the slot moved on while this one slept. Draining anyway would
+    /// take `isDraining` from the live drain and hold it for a whole
+    /// transmission, so the replacement wakes to find a queue it cannot claim.
+    private func promoteWaitingDrain(id: Int) -> Bool {
         lock.withLock { current in
-            guard case let .waiting(task) = current.drain else { return }
-            current.drain = .running(task)
+            guard case let .waiting(owned) = current.drain, owned.id == id else { return false }
+            current.drain = .running(owned)
+            return true
         }
     }
 
-    private func releaseDrainSlot() {
-        lock.withLock { $0.drain = .idle }
+    /// Gives the slot back and decides the next drain in the same lock section.
+    ///
+    /// Both halves have to happen here. A record that landed while this drain
+    /// was running found the slot taken and scheduled nothing, so anything
+    /// still queued now has nobody coming for it: deciding after the release
+    /// would leave the same gap one lock section wide. And only the task the
+    /// slot still holds may free it — a cancelled or superseded one would
+    /// evict the drain that replaced it.
+    private func releaseDrainSlot(id: Int) {
+        lock.withLock { current in
+            guard current.drain.owned?.id == id else { return }
+            current.drain = .idle
+            guard current.consent.permitsCollection, !current.pending.isEmpty else { return }
+            // Steady interval when nothing failed, the backoff when something
+            // did; `backoffInterval` is the one place that distinction lives.
+            let owned = makeOwnedDrain(
+                &current,
+                after: configuration.backoffInterval(consecutiveFailures: current.consecutiveFailures)
+            )
+            current.drain = .waiting(owned)
+        }
     }
 
     private func cancelOwnedDrain() {
         let task: Task<Void, Never>? = lock.withLock { current in
-            switch current.drain {
-            case .idle:
-                return nil
-            case let .waiting(task), let .running(task):
-                current.drain = .idle
-                return task
-            }
+            let owned = current.drain.owned
+            current.drain = .idle
+            return owned?.task
         }
         task?.cancel()
-    }
-
-    /// How long before trying again, or nil when there is nothing queued or
-    /// nothing has failed.
-    private func retryDelay() -> TimeInterval? {
-        lock.withLock { current in
-            guard !current.pending.isEmpty, current.consecutiveFailures > 0 else { return nil }
-            return configuration.backoffInterval(consecutiveFailures: current.consecutiveFailures)
-        }
     }
 }
