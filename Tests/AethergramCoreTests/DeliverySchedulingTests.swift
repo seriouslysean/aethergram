@@ -33,11 +33,12 @@ struct DeliverySchedulingTests {
         let directory = try #require(TestTempDirectory.url)
         let fixture = try makeFixture(
             directory: directory,
-            configuration: testConfiguration(transmitInterval: 0),
             now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
         )
         fixture.recorder.updateConsent(state)
         fixture.recorder.record("Game.started")
+        // `flush()` asks for a drain at zero delay whatever the interval is, so
+        // the schedule this asserts against is the hurried one.
         fixture.recorder.flush()
         // Driving the drain directly is the stronger form of this
         // assertion: even handed the work, a withheld answer sends nothing.
@@ -149,8 +150,8 @@ struct DeliverySchedulingTests {
     }
 
     /// Two `beginSession()` calls land in one activation whenever consent is
-    /// adopted from another device: `reconcileSyncedPreferences` grants before
-    /// the cycle's own session emit. Without a guard the second call closes the
+    /// adopted from another device: the host grants on that arrival, before the
+    /// cycle's own session emit. Without a guard the second call closes the
     /// first at a near-zero duration and counts the cycle twice, dragging the
     /// average down with a session nobody had.
     @Test("A second begin in the same activation leaves the open session alone")

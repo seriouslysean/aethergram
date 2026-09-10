@@ -13,6 +13,31 @@ import Testing
 /// closures that would otherwise mint an identifier or read a payload.
 @Suite("Consent enforcement", .tempDirectory, .tags(.consent))
 struct ConsentEnforcementTests {
+    /// The two ways everything collected under a grant is dropped. They differ
+    /// only in whether the consent answer moves with it, which is exactly why
+    /// a gate that reads the answer alone catches one and misses the other.
+    enum Erasure: CaseIterable, CustomTestStringConvertible {
+        case reset
+        case declineThenRegrant
+
+        var testDescription: String {
+            switch self {
+            case .reset: "reset()"
+            case .declineThenRegrant: "decline then regrant"
+            }
+        }
+
+        func apply(to recorder: SignalRecorder) {
+            switch self {
+            case .reset:
+                recorder.reset()
+            case .declineThenRegrant:
+                recorder.updateConsent(.declined)
+                recorder.updateConsent(.granted)
+            }
+        }
+    }
+
     /// Three arms, because the pristine one is the strongest: a recorder that
     /// has never been handed an answer must behave exactly like one handed a
     /// decline. `nil` means `updateConsent` is never called at all.
@@ -279,5 +304,212 @@ struct ConsentEnforcementTests {
 
         await fixture.recorder.drain()
         #expect(fixture.transport.sendCount == 0)
+    }
+
+    /// A batch in flight when an erase lands indexes a queue that no longer
+    /// exists, so its verdict applies to nothing. The consent answer cannot
+    /// answer that on its own: `reset()` erases without moving it.
+    ///
+    /// The fixed clock is what lets this test fail. It makes the signal
+    /// recorded after the erase byte-identical to the one sent before it, so an
+    /// `apply` that only asks whether the queue starts with what it sent
+    /// removes a signal that was never transmitted.
+    @Test("An outcome for an erased batch cannot drop what replaced it", arguments: Erasure.allCases)
+    func outcomeForAnErasedBatchLeavesTheNewQueueAlone(erasure: Erasure) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let noon = try testDate(year: 2026, month: 1, day: 5)
+        let storage = RecordingQueueStorage(directory: directory)
+        let transport = MidSendTransport()
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(),
+            transport: transport,
+            queueStorage: storage,
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: fixedClock(at: noon)
+        )
+        storage.settle = { [weak recorder] in recorder?.writer.waitForPendingWrites() }
+
+        recorder.updateConsent(.granted)
+        recorder.record("alpha")
+        transport.duringFirstSend = {
+            erasure.apply(to: recorder)
+            recorder.record("alpha")
+        }
+        await recorder.drain()
+
+        let sent = try #require(transport.sentSignals.first)
+        #expect(transport.sendCount == 1)
+        // Known-bad input, kept as the assertion: the front of the queue the
+        // erase left behind is indistinguishable from the batch this verdict
+        // was for, which is the case a mismatched removal destroys.
+        #expect(storage.signalsOnDisk == [sent])
+
+        // Still deliverable, rather than merely still on disk.
+        await recorder.drain()
+        #expect(transport.sentSignals == [sent, sent])
+    }
+
+    /// A session is collected under a grant like anything else. Reusing its
+    /// identifier after an erase joins what follows to what was erased, which
+    /// is the one thing a decline is supposed to have made impossible.
+    @Test("An erased session identifier is never reused", arguments: Erasure.allCases)
+    func erasedSessionIdentifierIsNotReused(erasure: Erasure) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let fixture = makeFixture(directory: directory, now: steppingClock(from: start))
+
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("alpha")
+        await fixture.recorder.drain()
+        let before = try #require(fixture.transport.batches.first).sessionID
+
+        erasure.apply(to: fixture.recorder)
+        fixture.recorder.record("beta")
+        await fixture.recorder.drain()
+
+        let after = try #require(fixture.transport.batches.last).sessionID
+        #expect(!before.isEmpty)
+        // A reset leaves the gate open, so the next batch needs a session
+        // rather than the empty string the erase left.
+        #expect(!after.isEmpty)
+        #expect(after != before)
+    }
+
+    /// An erase drops what was collected and deletes the durable copies of it.
+    /// A `record` between those two — a reset leaves consent granted, so
+    /// nothing stops one — belongs to the queue that replaced the erased one,
+    /// and the older delete must not reach it: the writer keeps only the newest
+    /// intent, and the store only the newest write.
+    ///
+    /// Holding the purge open is what puts the fresh record inside that window
+    /// without timing it. The erase is past its lock section either way by
+    /// then; what differs is whether the delete went with it.
+    @Test("An erase's delete cannot reach what was recorded after it")
+    func eraseDeletesNothingRecordedAfterIt() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let storage = GatedQueueStorage()
+        let store = SpyRetentionStore()
+        let recorder = Self.makeRecorder(storage: storage, retention: store, now: steppingClock(from: start))
+        recorder.updateConsent(.granted)
+        recorder.beginSession()
+        recorder.record("old")
+
+        storage.holdPurge()
+        let resetDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            recorder.reset()
+            resetDone.signal()
+        }
+        storage.purgeEntered.wait()
+        recorder.beginSession()
+        recorder.record("fresh")
+        storage.releasePurge()
+        resetDone.wait()
+
+        #expect(storage.signals.map(\.name) == ["fresh"])
+        // A counter set is the other durable copy, and the count says which
+        // one: a session opened against the erased record would read two.
+        let counters = try #require(store.record)
+        #expect(counters.totalSessionsCount == 1)
+    }
+
+    /// A decline promises the file is gone, not that a delete was requested.
+    /// The recorder can be released the instant `updateConsent` returns — an
+    /// extension is suspended moments after resigning — and a delete still
+    /// sitting on a background queue at that point never happens.
+    ///
+    /// The purge is held open, so a decline that waits for the delete cannot
+    /// return while it is held. The bounded wait is what proving that negative
+    /// costs; a decline that only asks returns at once and trips it.
+    @Test("A decline does not return before the queue file is deleted")
+    func declineReturnsOnlyAfterThePurgeHasLanded() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let storage = GatedQueueStorage()
+        let recorder = Self.makeRecorder(storage: storage, retention: SpyRetentionStore(), now: steppingClock(from: start))
+        recorder.updateConsent(.granted)
+        recorder.record("alpha")
+
+        storage.holdPurge()
+        let declineReturned = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            recorder.updateConsent(.declined)
+            declineReturned.signal()
+        }
+        storage.purgeEntered.wait()
+        let returnedWithTheDeletePending = declineReturned.wait(timeout: .now() + 0.5) == .success
+        storage.releasePurge()
+        // Only when the timed wait did not already take the signal, or this
+        // would wait for a second one that is never coming.
+        if !returnedWithTheDeletePending { declineReturned.wait() }
+
+        #expect(!returnedWithTheDeletePending)
+        #expect(storage.isPurged)
+        #expect(storage.signals.isEmpty)
+    }
+
+    /// A counter written after the erase that was supposed to drop it is a
+    /// counter the reset did not reach — the defect `reset()` exists to fix,
+    /// reintroduced by timing.
+    ///
+    /// The save is held open from inside the store, so the erase arrives while
+    /// it is in flight. What decides the outcome is whether the recorder's lock
+    /// is still held at that moment: a save issued under it blocks the erase
+    /// until it lands, and one issued after releasing it does not.
+    @Test("A retention save cannot land behind the reset that cleared it")
+    func retentionSaveCannotLandAfterAReset() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let store = GatedRetentionStore()
+        let recorder = Self.makeRecorder(storage: GatedQueueStorage(), retention: store, now: steppingClock(from: start))
+        recorder.updateConsent(.granted)
+
+        // Real threads rather than tasks: the halves have to run concurrently,
+        // and an unstructured task on a saturated cooperative pool need not.
+        let sessionOpened = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            recorder.beginSession()
+            sessionOpened.signal()
+        }
+        store.saveEntered.wait()
+        let resetDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            recorder.reset()
+            resetDone.signal()
+        }
+        // A clear arriving while the save is still held is a clear that save
+        // can land behind. Issued under the lock the save holds, it cannot
+        // arrive at all, and the bound is what proving that costs.
+        let clearedWithTheSaveInFlight = store.cleared.wait(timeout: .now() + 0.5) == .success
+        store.releaseSave()
+        sessionOpened.wait()
+        resetDone.wait()
+
+        // The gate had something to fire on: a save really was in flight.
+        #expect(store.saveCallCount == 1)
+        #expect(!clearedWithTheSaveInFlight)
+        #expect(store.record == nil)
+    }
+
+    // MARK: Private
+
+    /// A recorder over doubles the test brings itself, for the arms
+    /// `makeFixture` cannot serve: its collaborators are the concrete spies.
+    private static func makeRecorder(
+        storage: any SignalQueueStorage,
+        retention: any RetentionStore,
+        now: @escaping @Sendable () -> Date
+    ) -> SignalRecorder {
+        SignalRecorder(
+            configuration: testConfiguration(),
+            transport: SpyTransport(),
+            queueStorage: storage,
+            retentionStore: retention,
+            clientUserProvider: { "client-user" },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: now
+        )
     }
 }

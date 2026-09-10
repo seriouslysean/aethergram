@@ -87,7 +87,8 @@ struct SignalPayloadTests {
             parameters: [
                 PayloadKey.appVersion: "caller-wins",
                 PayloadKey.calendarHourOfDay: "99",
-                PayloadKey.retentionTotalSessionsCount: "999"
+                PayloadKey.retentionTotalSessionsCount: "999",
+                PayloadKey.sdkName: "caller-wins"
             ]
         )
         await fixture.recorder.drain()
@@ -96,6 +97,47 @@ struct SignalPayloadTests {
         #expect(signal.parameters[PayloadKey.appVersion] == "caller-wins")
         #expect(signal.parameters[PayloadKey.calendarHourOfDay] == "99")
         #expect(signal.parameters[PayloadKey.retentionTotalSessionsCount] == "999")
+        // The identity is a package default like any other: stamped so an
+        // environment override cannot drop it, not so a caller cannot name it.
+        #expect(signal.parameters[PayloadKey.sdkName] == "caller-wins")
+    }
+
+    /// `sdk.name`, `sdk.version` and `sdk.nameAndVersion` are promised on every
+    /// signal, and the authored payload is the host's to replace. A host that
+    /// overrides it drops nothing, because the package stamps its own identity
+    /// rather than reading it back out of the environment.
+    ///
+    /// Both arms are known-bad input: the empty one proves the fields are not
+    /// merely inherited, the contradicting one proves the stamp is applied over
+    /// the environment rather than under it.
+    @Test(
+        "An environment override cannot drop the package identity",
+        arguments: [
+            [:],
+            [
+                PayloadKey.sdkName: "not-us",
+                PayloadKey.sdkVersion: "0.0.0",
+                PayloadKey.sdkNameAndVersion: "not-us 0.0.0"
+            ]
+        ] as [[String: String]]
+    )
+    func environmentOverrideCannotDropThePackageIdentity(environment: [String: String]) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let fixture = makeFixture(
+            directory: directory,
+            environment: environment,
+            now: steppingClock(from: start)
+        )
+
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("alpha")
+        await fixture.recorder.drain()
+
+        let signal = try #require(fixture.transport.sentSignals.first)
+        #expect(signal.parameters[PayloadKey.sdkName] == "Aethergram")
+        #expect(signal.parameters[PayloadKey.sdkVersion] == Aethergram.version)
+        #expect(signal.parameters[PayloadKey.sdkNameAndVersion] == Aethergram.nameAndVersion)
     }
 
     @Test("A weekday signal reports its local hour and clears the weekend flag")
@@ -299,6 +341,8 @@ struct SignalPayloadTests {
         #expect(!missing.isAppStore)
     }
 
+    /// The package's identity is not among them: it is stamped per signal by
+    /// the recorder, so that a host replacing this payload cannot drop it.
     @Test("The environment snapshot emits exactly its declared keys")
     func environmentSnapshotEmitsExactlyItsDeclaredKeys() {
         let snapshot = EnvironmentSnapshot(
@@ -317,9 +361,6 @@ struct SignalPayloadTests {
             PayloadKey.appVersion,
             PayloadKey.appBuild,
             PayloadKey.appVersionAndBuild,
-            PayloadKey.sdkName,
-            PayloadKey.sdkVersion,
-            PayloadKey.sdkNameAndVersion,
             PayloadKey.deviceModelName,
             PayloadKey.devicePlatform,
             PayloadKey.deviceSystemVersion,
@@ -331,10 +372,6 @@ struct SignalPayloadTests {
         #expect(Set(snapshot.parameters.keys) == expected)
         #expect(snapshot.parameters.count == expected.count)
         #expect(snapshot.parameters[PayloadKey.appVersionAndBuild] == "1.2 (build 34)")
-        // Constants, so they hold for a snapshot built with any other values.
-        #expect(snapshot.parameters[PayloadKey.sdkName] == "Aethergram")
-        #expect(snapshot.parameters[PayloadKey.sdkNameAndVersion]
-            == "Aethergram \(snapshot.parameters[PayloadKey.sdkVersion] ?? "")")
         #expect(snapshot.parameters[PayloadKey.runContextChannel] == "store")
     }
 
