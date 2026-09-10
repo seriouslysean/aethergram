@@ -16,6 +16,8 @@ jobs:
     # Pinned, not `macos-latest`: the label moves to a new image on GitHub's schedule, and a
     # toolchain change arriving that way is a red build nobody asked for.
     runs-on: macos-26
+    # A wedged suite hangs rather than fails, so cap the job: the default is six hours of nothing.
+    timeout-minutes: 15
     strategy:
       # One leg, deliberately. The matrix is here for the name it composes -- `test (macos)` -- so
       # the context a required status check names is platform-qualified before a second leg exists
@@ -28,7 +30,12 @@ jobs:
       # is the manifest's floor, so the Xcode that provides it is part of what CI proves.
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
+      # Full history: the leak scan's history tier runs with --all, and a shallow (depth-1)
+      # checkout would leave it scanning the one fetched commit -- a gate that never fires
+      # looks exactly like one that passes.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # A pin that silently falls back to the image default is a pin that proves nothing, so fail
       # here and print what the image actually has rather than compiling against a surprise.

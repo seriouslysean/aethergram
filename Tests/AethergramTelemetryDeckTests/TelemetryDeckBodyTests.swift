@@ -79,12 +79,10 @@ struct TelemetryDeckBodyTests {
         #expect(Set(element.keys) == Self.vendorFields)
     }
 
-    @Test("Per-batch fields ride every element")
-    func batchFieldsRideEveryElement() throws {
-        let batch = SignalBatch(
-            signals: [TelemetryDeckFixture.signal(), TelemetryDeckFixture.signal(name: "Example.Turn.sent")],
-            clientUser: "abc",
-            sessionID: "session-7"
+    @Test("The configured app identifier rides every element")
+    func appIDRidesEveryElement() throws {
+        let batch = TelemetryDeckFixture.batch(
+            signals: [TelemetryDeckFixture.signal(), TelemetryDeckFixture.signal(name: "Example.Turn.sent")]
         )
         let configuration = TelemetryDeckFixture.configuration(appID: "app-42")
 
@@ -92,8 +90,33 @@ struct TelemetryDeckBodyTests {
 
         for element in elements {
             #expect(try TelemetryDeckFixture.string(element["appID"], "appID") == "app-42")
-            #expect(try TelemetryDeckFixture.string(element["sessionID"], "sessionID") == "session-7")
         }
+    }
+
+    /// The vendor's own SDK stamps the session at enqueue, and the field is
+    /// read off the signal here for the same reason: the session a batch is
+    /// sent under is not the one its signals were recorded in.
+    @Test("sessionID is the session the signal was recorded in")
+    func sessionIDIsPerSignal() throws {
+        let element = try TelemetryDeckFixture.element(for: TelemetryDeckFixture.signal(sessionID: "session-7"))
+
+        #expect(try TelemetryDeckFixture.string(element["sessionID"], "sessionID") == "session-7")
+    }
+
+    /// One batch spans a session boundary whenever a restored queue drains
+    /// after the host opened a new session. A field read once per batch cannot
+    /// encode that: both elements would carry whichever session the send found.
+    @Test("Two signals from different sessions keep their own identifiers in one batch")
+    func sessionsInOneBatchAreNotCollapsedToOne() throws {
+        let batch = TelemetryDeckFixture.batch(signals: [
+            TelemetryDeckFixture.signal(name: "Example.Game.started", sessionID: "session-before"),
+            TelemetryDeckFixture.signal(name: "Example.Turn.sent", sessionID: "session-after")
+        ])
+
+        let elements = try TelemetryDeckFixture.elements(for: batch)
+
+        let sessions = try elements.map { try TelemetryDeckFixture.string($0["sessionID"], "sessionID") }
+        #expect(sessions == ["session-before", "session-after"])
     }
 
     /// The vendor's decoder is `.formatted("yyyy-MM-dd'T'HH:mm:ssZ")`, which
@@ -120,9 +143,10 @@ struct TelemetryDeckBodyTests {
         #expect(stamps == ["2001-09-09T01:46:40+0000", TelemetryDeckFixture.instantOnTheWire])
     }
 
-    /// The vendor types this field `String`, not `Bool`. A JSON boolean is a
-    /// decode failure server-side, so the raw bytes are checked as well as the
-    /// parsed value.
+    /// The vendor's ingest doc types this field `Bool`, but the vendor's own
+    /// SDK sends the string `"true"`/`"false"`; the string is kept here for
+    /// continuity with what the SDK sends, so the raw bytes are checked as
+    /// well as the parsed value.
     @Test("isTestMode is a JSON string", arguments: [true, false])
     func isTestModeIsAString(isTestMode: Bool) throws {
         let configuration = TelemetryDeckFixture.configuration(isTestMode: isTestMode)
@@ -135,9 +159,9 @@ struct TelemetryDeckBodyTests {
         let text = try TelemetryDeckFixture.bodyText(for: batch, configuration: configuration)
 
         #expect(try TelemetryDeckFixture.string(element["isTestMode"], "isTestMode") == expected)
-        // `NSNumber as? Bool` succeeds by bridging, so a parsed-value check
-        // cannot tell a JSON boolean from the string the vendor requires. The
-        // raw bytes are the only assertion that can fail here.
+        // `TelemetryDeckFixture.string` already rejects a JSON boolean, since
+        // `NSNumber as? String` does not bridge; the raw-bytes checks below
+        // pin the exact wire form directly rather than relying on that cast.
         #expect(text.contains("\"isTestMode\":\"\(expected)\""))
         #expect(!text.contains("\"isTestMode\":\(expected)"))
     }

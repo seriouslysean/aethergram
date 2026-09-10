@@ -5,9 +5,9 @@
 # gets edited from inside a consumer, so a comment written in that context can carry a private app
 # name or an issue number into a public commit.
 #
-# It matches shapes: paths, addresses, and references that point outside this repo. It reads
-# tracked files, so an unstaged file is invisible to it -- the pre-commit hook runs after staging,
-# which is where the shapes it guards actually reach a commit.
+# It matches shapes: paths, addresses, and references that point outside this repo. It reads the
+# index (`git grep --cached`), not the working tree, so it sees exactly what a commit would carry:
+# staging a leak and then reverting the working copy does not make it invisible.
 #
 # A bare app name with no surrounding shape is beyond this scanner: the pattern that would catch it
 # matches every ordinary word, and a deny-list tracked here would itself carry the names it
@@ -31,15 +31,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 FOUND=0
 
+# github.com/<owner>/<repo>/issues/<n> or /pull/<n> is the same cross-repo pointer as
+# owner/repo#123, spelled as a URL. Defined once so the file tier and MESSAGE_RE agree.
+ISSUE_URL_RE='github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(issues|pull)/[0-9]+'
+
 # What a message must not carry: the tracked-file shapes, plus the trailer keys that only ever
 # appear in one. Trailers stay out of the file tier, where a doc naming the shape would refuse
 # itself.
-MESSAGE_RE='/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):'
+MESSAGE_RE="/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|$ISSUE_URL_RE|^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):"
 
 scan() {
     _what="$1"; _re="$2"
     # Exclude this file and the runner: they contain the patterns by definition.
-    _hits="$(git grep -nE "$_re" -- . ':!Scripts/scan-for-leaks.sh' ':!Scripts/run-checks.sh' 2>/dev/null)"
+    _hits="$(git grep --cached -nE "$_re" -- . ':!Scripts/scan-for-leaks.sh' ':!Scripts/run-checks.sh' 2>/dev/null)"
     [ -n "$_hits" ] && printf '%s\n' "$_hits" | while IFS= read -r _l; do printf '  %s: %s\n' "$_what" "$_l"; done
     # A leak can live entirely in a tracked filename with clean content, invisible to git grep above.
     _names="$(git ls-files -- . ':!Scripts/scan-for-leaks.sh' ':!Scripts/run-checks.sh' | grep -E "$_re" 2>/dev/null)"
@@ -58,9 +62,11 @@ scan_messages() {
 
 if [ -n "$MSG" ]; then
     printf 'scanning the commit message\n'
-    # `commit -v` appends the staged diff below a scissors line, and those lines carry no comment
-    # character, so the cut has to come before the comment strip or the diff gets scanned.
-    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG" | git stripspace --strip-comments)" || FOUND=1
+    # `commit -v` appends the staged diff below a scissors line, which is never part of the
+    # published message, so that gets cut first. Nothing after is comment-stripped: whether git
+    # itself drops a `#` line depends on commit.cleanup (default "strip" for an editor commit,
+    # "whitespace" for `-m`), and a line `-m` keeps must still be caught here.
+    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG")" || FOUND=1
     if [ "$FOUND" -eq 0 ]; then
         printf 'clean\n'
         exit 0
@@ -79,6 +85,7 @@ scan "cross-repo issue reference" '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+' || FOUN
 scan "foreign issue number" '#[0-9]{3,}' || FOUND=1
 # Decision-record and ruling ids point into a private doc tree and mean nothing published.
 scan "private record reference" '(DR|RL)-[0-9]{3}' || FOUND=1
+scan "issue or pull request URL" "$ISSUE_URL_RE" || FOUND=1
 
 if [ "${1:-}" = "--all" ]; then
     printf 'scanning commit messages\n'

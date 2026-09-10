@@ -191,4 +191,64 @@ struct RetentionCountersTests {
         let final = RetentionCounters.touching(record, at: start.addingTimeInterval(11))
         #expect(final.shouldPersist, "11 real seconds since the last checkpoint must cross the interval")
     }
+
+    /// A corrupt or hostile record must not crash its host. Without the
+    /// saturating increment this traps on the record's `totalSessionsCount
+    /// += 1`.
+    @Test("A totalSessionsCount already at Int.max does not trap the next session start")
+    func sessionStartDoesNotTrapAtCountLimit() throws {
+        let day = try testDate(year: 2026, month: 1, day: 5)
+        let record = RetentionRecord(firstSessionDay: "2026-01-05", totalSessionsCount: .max)
+
+        let updated = RetentionCounters.recordingSessionStart(in: record, at: day, calendar: testCalendar)
+
+        #expect(updated.totalSessionsCount == .max)
+    }
+
+    /// A corrupt or hostile record must not crash its host. Without the
+    /// saturating increment this traps on `folding`'s `completedSessionsCount
+    /// += 1`.
+    @Test("A completedSessionsCount already at Int.max does not trap the next session end")
+    func sessionEndDoesNotTrapAtCountLimit() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let record = RetentionRecord(
+            firstSessionDay: "2026-01-05",
+            completedSessionsCount: .max,
+            openSessionStartedAt: start
+        )
+
+        let updated = RetentionCounters.recordingSessionEnd(in: record, at: start.addingTimeInterval(30))
+
+        #expect(updated.completedSessionsCount == .max)
+    }
+
+    /// A corrupt or hostile record must not crash its host. Without the
+    /// range check this traps `Int(...)` in `averageSessionSeconds` once the
+    /// division exceeds what `Int` can hold.
+    @Test("An average seconds value wider than Int reports the no-data sentinel instead of trapping")
+    func averageWiderThanIntReportsSentinel() throws {
+        let day = try testDate(year: 2026, month: 1, day: 5)
+        let record = RetentionRecord(
+            firstSessionDay: "2026-01-05",
+            completedSessionsCount: 1,
+            totalSessionSeconds: 1e308
+        )
+
+        let parameters = RetentionCounters.parameters(from: record, at: day, calendar: testCalendar)
+
+        #expect(parameters[PayloadKey.retentionAverageSessionSeconds] == "\(RetentionCounters.noCompletedSessions)")
+    }
+
+    /// A corrupt or hostile record must not crash its host. Without the range
+    /// check this traps the same `Int(...)` conversion as
+    /// `averageSessionSeconds`, on `previousSessionSeconds` instead.
+    @Test("A previousSessionSeconds value wider than Int omits the key instead of trapping")
+    func previousSessionSecondsWiderThanIntOmitsKey() throws {
+        let day = try testDate(year: 2026, month: 1, day: 5)
+        let record = RetentionRecord(firstSessionDay: "2026-01-05", previousSessionSeconds: 1e308)
+
+        let parameters = RetentionCounters.parameters(from: record, at: day, calendar: testCalendar)
+
+        #expect(parameters[PayloadKey.retentionPreviousSessionSeconds] == nil)
+    }
 }

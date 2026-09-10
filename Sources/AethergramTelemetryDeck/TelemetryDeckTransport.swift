@@ -33,19 +33,18 @@ public struct TelemetryDeckTransport: SignalTransport {
         do {
             request = try makeRequest(for: batch)
         } catch {
-            // An unencodable batch will not become encodable on a retry.
+            // Defensive: `Signal` admits no value the encoder refuses, so this
+            // is unreachable today, and a batch that ever is unencodable will
+            // not become encodable on a retry.
             return .permanent(reason: "encode-failed")
         }
         // Which partition this build posts to, on every batch and in every
         // configuration. Carries no payload, so it is safe in a shipping build,
         // and it is the only channel that can show a Release build sending
-        // `isTestMode` false — the envelope dump below compiles out there.
+        // `isTestMode` false.
         logger.info(
             "post count=\(batch.signals.count) testMode=\(configuration.isTestMode, privacy: .public)"
         )
-        #if DEBUG
-            Self.recordEnvelopeForInspection(request.httpBody, logger: logger)
-        #endif
         do {
             let (_, response) = try await session.data(for: request)
             return Self.outcome(for: response)
@@ -59,9 +58,11 @@ public struct TelemetryDeckTransport: SignalTransport {
     // MARK: Internal
 
     /// Status handling mirrors the SDK's own table so the swap does not change
-    /// which failures cost signals. Codes the server uses to say "this request
-    /// is wrong" drop the batch; everything else — 429, 5xx, no response —
-    /// stays queued for the core's backoff.
+    /// which failures cost signals. The vendor's ingest API documents no status
+    /// contract; 400, 401, 403, 404, 413, 422, 501, and 505 drop the batch
+    /// because the SDK's own `disposition()` treats them as permanent —
+    /// everything else, including 429, other 5xx, and no response, stays
+    /// queued for the core's backoff.
     static func outcome(for response: URLResponse) -> TransportOutcome {
         guard let http = response as? HTTPURLResponse else { return .retryable(reason: "non-http-response") }
         if (200 ... 299).contains(http.statusCode) { return .delivered }
@@ -91,7 +92,7 @@ public struct TelemetryDeckTransport: SignalTransport {
                 receivedAt: signal.recordedAt,
                 appID: configuration.appID,
                 clientUser: clientUser,
-                sessionID: batch.sessionID,
+                sessionID: signal.sessionID,
                 type: TelemetryDeckWireNames.signalName(for: signal.name),
                 floatValue: signal.floatValue,
                 payload: TelemetryDeckWireNames.payload(from: signal.parameters),
@@ -117,37 +118,6 @@ public struct TelemetryDeckTransport: SignalTransport {
     private let configuration: TelemetryDeckConfiguration
     private let session: URLSession
     private let logger: Logger
-
-    #if DEBUG
-        /// Appends each outgoing body to an NDJSON file in the host's caches
-        /// directory, one envelope per line.
-        ///
-        /// A file rather than a log line because `os_log` truncates a dynamic
-        /// string at roughly a kilobyte and these bodies run past that, so the
-        /// logged form silently loses the tail — which is exactly the part a
-        /// payload audit needs. Caches, so the OS may evict it and nothing
-        /// depends on it surviving. Compiled out of any shipping build.
-        private static func recordEnvelopeForInspection(_ body: Data?, logger: Logger) {
-            guard let body else { return }
-            guard let directory = try? FileManager.default.url(
-                for: .cachesDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            ) else { return }
-            let url = directory.appendingPathComponent("aethergram-debug-envelopes.ndjson")
-            var line = body
-            line.append(0x0A)
-            if let handle = try? FileHandle(forWritingTo: url) {
-                defer { try? handle.close() }
-                try? handle.seekToEnd()
-                try? handle.write(contentsOf: line)
-            } else {
-                try? line.write(to: url, options: [.atomic])
-            }
-            logger.debug("post envelope recorded bytes=\(body.count)")
-        }
-    #endif
 
     private static func sha256(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))

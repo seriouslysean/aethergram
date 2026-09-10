@@ -6,7 +6,11 @@ import Testing
 /// The queue is durable because the OS kills a suspended extension without
 /// warning, and a signal that only exists in memory at that moment is a signal
 /// that never happened.
-@Suite("Signal queue durability", .tempDirectory, .serialized, .tags(.persistence))
+///
+/// The time limit covers the mid-send arms, which drive a drain against work
+/// running on another thread: a wait that never returns has to fail under its
+/// own name rather than stall the run until a runner is cancelled.
+@Suite("Signal queue durability", .tempDirectory, .serialized, .timeLimit(.minutes(1)), .tags(.persistence))
 struct SignalQueueDurabilityTests {
     /// Simulates the kill: the first recorder records and is then discarded
     /// without ever draining, and a second recorder is built over the same
@@ -41,6 +45,48 @@ struct SignalQueueDurabilityTests {
         #expect(deadTransport.sendCount == 0)
         #expect(revived.transport.sentSignalNames == ["old.a", "old.b", "new.c"])
         #expect(!revived.storage.fileExists)
+    }
+
+    /// The other half of surviving a kill: a signal that outlives the process
+    /// that recorded it also outlives the session it ran in, and the process
+    /// that finally sends it has opened one of its own. Attribution belongs to
+    /// the record, so the restored signal keeps the session it happened in
+    /// while the new one takes the session now open — in the same batch, which
+    /// a session read once per send cannot express.
+    @Test("A restored signal carries the session it was recorded in, not the one that sent it")
+    func restoredSignalsKeepTheSessionTheyWereRecordedIn() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let dead = makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: start)
+        )
+        dead.recorder.updateConsent(.granted)
+        dead.recorder.beginSession()
+        dead.recorder.record("old")
+        dead.recorder.writer.waitForPendingWrites()
+        #expect(dead.transport.sendCount == 0)
+
+        let revived = makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: start.addingTimeInterval(3600))
+        )
+        revived.recorder.updateConsent(.granted)
+        revived.recorder.beginSession()
+        revived.recorder.record("new")
+        await revived.recorder.drain()
+
+        // One batch, so a session stamped at send time would hand both signals
+        // the identifier the second process opened.
+        #expect(revived.transport.sendCount == 1)
+        let sent = revived.transport.sentSignals
+        #expect(sent.map(\.name) == ["old", "new"])
+        let restored = try #require(sent.first)
+        let fresh = try #require(sent.last)
+        #expect(!restored.sessionID.isEmpty)
+        #expect(restored.sessionID != fresh.sessionID)
     }
 
     /// A batch the endpoint could not take stays queued and stays on disk, so
@@ -156,6 +202,114 @@ struct SignalQueueDurabilityTests {
         #expect(fixture.transport.sentSignalNames == ["signal.2", "signal.3", "signal.4"])
     }
 
+    /// A record landing mid-send can evict the front of a full queue, so the
+    /// queue no longer starts with the batch in flight. Part of that batch is
+    /// still there and part of it is gone, and no comparison of the signals
+    /// themselves can say which: the clock is the host's and need not advance,
+    /// so two signals recorded alike are equal. Only a count of what was
+    /// evicted since the claim tells them apart.
+    ///
+    /// Every signal here is deliberately equal to every other, and three sends
+    /// is the only correct total: two says the mid-send record was dropped
+    /// unsent, four says a delivered one was sent again. The eviction lands
+    /// inside the send because `duringFirstSend` runs while the send is held
+    /// open, which puts it after the claim and before the verdict on every run.
+    @Test(
+        "A batch whose front was evicted during the send removes only what it sent",
+        arguments: [TransportOutcome.delivered, .permanent(reason: "rejected")]
+    )
+    func evictionDuringSendRemovesOnlyWhatItSent(outcome: TransportOutcome) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let noon = try testDate(year: 2026, month: 1, day: 5)
+        let storage = RecordingQueueStorage(directory: directory)
+        let transport = MidSendTransport(outcome: outcome)
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(queueLimit: 2, transmitInterval: 3600),
+            transport: transport,
+            queueStorage: storage,
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: fixedClock(at: noon)
+        )
+        storage.settle = { [weak recorder] in recorder?.writer.waitForPendingWrites() }
+
+        recorder.updateConsent(.granted)
+        recorder.record("x")
+        recorder.record("x")
+        // Takes the queue one past its cap while the batch above is in flight,
+        // so the eviction drops a signal that batch already carried.
+        transport.duringFirstSend = { recorder.record("x") }
+        await recorder.drain()
+
+        let sent = transport.sentSignals
+        #expect(sent.count == 3)
+        // Known-bad input kept as the assertion: nothing in these signals tells
+        // them apart, which is what a removal keyed on value gets wrong.
+        #expect(sent.allSatisfy { $0 == sent.first })
+        #expect(storage.signalsOnDisk.isEmpty)
+    }
+
+    /// `JSONEncoder` throws on a non-finite `Double`, and it encodes the queue
+    /// as one array: a single such signal stops every signal from persisting
+    /// and takes the batch down with it at the transport.
+    @Test(
+        "A non-finite measure costs its own value and nothing else",
+        arguments: [Double.nan, Double.infinity]
+    )
+    func nonFiniteMeasureDoesNotStopTheQueueFromPersisting(measure: Double) throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let fixture = makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
+            now: steppingClock(from: start)
+        )
+
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("before", floatValue: 1)
+        fixture.recorder.record("during", floatValue: measure)
+        fixture.recorder.record("after", floatValue: 2)
+
+        let onDisk = fixture.storage.signalsOnDisk
+        #expect(onDisk.map(\.name) == ["before", "during", "after"])
+        #expect(onDisk.map(\.floatValue) == [1, nil, 2])
+    }
+
+    /// The coercion is the type's invariant rather than one initializer's, so
+    /// it has to hold for a value read back as well as for one recorded. The
+    /// package's own encoder cannot write a non-finite measure, but the
+    /// decoder belongs to `Signal` and a host's `SignalQueueStorage` chooses
+    /// its own coder: a decoded NaN would reach the encoder that refuses it and
+    /// cost the whole file, which is the failure `record` is already spared.
+    @Test(
+        "A non-finite measure decoded off disk loads as no measure",
+        arguments: ["nan", "inf"]
+    )
+    func nonFiniteMeasureDecodedOffDiskLoadsAsNoMeasure(measure: String) throws {
+        let recordedAt = try testDate(year: 2026, month: 1, day: 5).timeIntervalSinceReferenceDate
+        let json = """
+        [{"name":"old.a","parameters":{},"floatValue":"\(measure)",\
+        "sessionID":"session-a","recordedAt":\(recordedAt)}]
+        """
+        // The one strategy that can carry a non-finite value through JSON at
+        // all; the default refuses to write it and has nothing to read.
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "inf",
+            negativeInfinity: "-inf",
+            nan: "nan"
+        )
+
+        let signals = try decoder.decode([Signal].self, from: Data(json.utf8))
+
+        let signal = try #require(signals.first)
+        #expect(signal.name == "old.a")
+        #expect(signal.floatValue == nil)
+    }
+
     /// A queue that cannot be decoded is a queue that cannot be sent. Dropping
     /// it beats retrying a corrupt file on every launch forever, and the drop
     /// has to be a delete rather than a silent empty read.
@@ -171,6 +325,36 @@ struct SignalQueueDurabilityTests {
 
         #expect(storage.load().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    /// A queue file written before signals carried a session cannot be
+    /// attributed to one, and defaulting the key would file its signals under a
+    /// session they never ran in. Required is what makes the file unreadable
+    /// instead, which is the upgrade path: purge and keep recording.
+    @Test("A queue file with no session identifier loads as empty and is purged")
+    func queueFileWithoutSessionIdentifierLoadsEmptyAndPurges() throws {
+        let directory = try #require(TestTempDirectory.url)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        // Written by hand rather than encoded, because the shape under test is
+        // one this package can no longer produce. `JSONDecoder`'s default date
+        // strategy reads seconds since the reference date.
+        let recordedAt = try testDate(year: 2026, month: 1, day: 5).timeIntervalSinceReferenceDate
+        let fields = #""name":"old.a","parameters":{"env.key":"env-value"},"recordedAt":\#(recordedAt)"#
+        try Data("[{\(fields)}]".utf8).write(to: fileURL)
+
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+
+        #expect(storage.load().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+
+        // The control: the same object with the session key present decodes.
+        // Without it the purge above would pass for any reason at all — a date
+        // in the wrong form, a key spelled differently — rather than for the
+        // one this test is about.
+        try Data("[{\(fields),\"sessionID\":\"session-a\"}]".utf8).write(to: fileURL)
+
+        #expect(storage.load().map(\.sessionID) == ["session-a"])
     }
 
     /// The recorder recovers from the same corruption rather than wedging: a
@@ -189,5 +373,43 @@ struct SignalQueueDurabilityTests {
         await fixture.recorder.drain()
 
         #expect(fixture.transport.sentSignalNames == ["alpha"])
+    }
+
+    /// `removeItem` can fail while the file it targets is still writable — a
+    /// directory that refuses deletion but not writes to what it already
+    /// holds. `purge()` must still leave nothing to restore: a fresh store
+    /// over the same file, opened later under a new grant, must not find
+    /// signals recorded before the purge that was supposed to erase them.
+    @Test(
+        "A purge that cannot remove the file still reads back empty under a later grant",
+        .enabled(if: getuid() != 0, "root bypasses the permission that makes removal fail")
+    )
+    func purgeOverwritesWhenRemovalFailsSoDeclinedSignalsNeverReturn() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "declined.a", sessionID: "declined-session", recordedAt: signalDate)])
+        #expect(!storage.load().isEmpty)
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        // The temp-directory trait removes this tree on teardown, which needs
+        // write access back on the directory itself.
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        storage.purge()
+
+        // Removal was refused, so the file is still there — proves the
+        // overwrite fallback ran rather than a deletion nobody blocked.
+        #expect(try Data(contentsOf: fileURL) == Data("[]".utf8))
+        let revived = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(revived.load().isEmpty)
     }
 }

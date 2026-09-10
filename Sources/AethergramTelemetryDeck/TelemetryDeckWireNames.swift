@@ -75,7 +75,7 @@ enum TelemetryDeckWireNames {
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
 
         // The vendor documents `hourOfDay` by name; `isWeekend` is the other
-        // half of the only question a party game asks of a calendar.
+        // half of the only question an app asks of a calendar.
         PayloadKey.calendarHourOfDay: "TelemetryDeck.Calendar.hourOfDay",
         PayloadKey.calendarIsWeekend: "TelemetryDeck.Calendar.isWeekend",
 

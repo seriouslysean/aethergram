@@ -48,18 +48,6 @@ struct TelemetryDeckTransportOutcomeTests {
         #expect(TelemetryDeckTransport.outcome(for: response) == .retryable(reason: "non-http-response"))
     }
 
-    /// `makeRequest` runs before the session is touched, so an unencodable
-    /// batch never reaches the network. `.nan` is the reachable case:
-    /// `JSONEncoder` defaults to throwing on non-conforming floats.
-    @Test("An unencodable batch is permanent and never sent")
-    func unencodableBatchIsPermanent() async {
-        let batch = TelemetryDeckFixture.batch(signals: [TelemetryDeckFixture.signal(floatValue: .nan)])
-
-        let outcome = await TelemetryDeckFixture.transport().send(batch)
-
-        #expect(outcome == .permanent(reason: "encode-failed"))
-    }
-
     /// The one end-to-end case. Everything above asserts on the pieces; this
     /// proves they are wired together, against a stubbed protocol rather than
     /// the vendor's host.
@@ -72,6 +60,29 @@ struct TelemetryDeckTransportOutcomeTests {
         let outcome = await transport.send(TelemetryDeckFixture.batch())
 
         #expect(outcome == .delivered)
+    }
+
+    /// An adapter that persists a request body to disk leaves a decline or a
+    /// reset with nothing to erase it — SECURITY.md calls that a bug in this
+    /// model regardless of build configuration, so the check does not gate on
+    /// `DEBUG`. Any file left over from an earlier run is cleared first so a
+    /// stale one cannot fail this for the wrong reason.
+    @Test("send does not persist a request body to the caches directory")
+    func sendDoesNotPersistARequestBody() async {
+        let envelopeName = "aethergram-debug-envelopes.ndjson"
+        let cachesDirectories = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        for directory in cachesDirectories {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(envelopeName))
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let transport = TelemetryDeckFixture.transport(session: URLSession(configuration: configuration))
+        _ = await transport.send(TelemetryDeckFixture.batch())
+
+        for directory in cachesDirectories {
+            #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(envelopeName).path))
+        }
     }
 
     // MARK: Private

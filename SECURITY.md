@@ -15,7 +15,7 @@ This is a solo project. It offers no response-time commitment, because it could 
 ## What the consent gate covers
 
 Consent is the trust boundary and it is checked before anything happens. Until the host calls
-`updateConsent(.granted)`, `record` allocates nothing, writes nothing to disk, resolves no
+`updateConsent(.granted)`, `record` enqueues nothing, writes nothing to disk, resolves no
 identifier, advances no counter, and reaches no transport. Withdrawing consent erases the queue
 file, the retention record, and the pending batch.
 

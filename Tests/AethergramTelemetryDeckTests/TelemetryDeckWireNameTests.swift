@@ -224,6 +224,11 @@ struct TelemetryDeckWireNameTests {
     /// package fixes rather than reads, so they are asserted as literals: a
     /// test that recomputed them from `Aethergram` would keep passing through a
     /// rename that silently re-buckets every chart grouped on this family.
+    ///
+    /// The input carries the same literals for the same reason. The recorder
+    /// stamps the identity itself rather than reading it back out of the
+    /// environment, so a signal built here from the snapshot alone would carry
+    /// none of these fields and the name table would go unexercised.
     @Test("The transport stamps its own identity on the encoded signal")
     func sdkIdentityReachesTheEncodedBody() throws {
         let environment = EnvironmentSnapshot(
@@ -237,7 +242,12 @@ struct TelemetryDeckWireNameTests {
             region: "US",
             language: "en"
         )
-        let signal = TelemetryDeckFixture.signal(parameters: environment.parameters)
+        let identity = [
+            PayloadKey.sdkName: "Aethergram",
+            PayloadKey.sdkVersion: "2.0.0",
+            PayloadKey.sdkNameAndVersion: "Aethergram 2.0.0"
+        ]
+        let signal = TelemetryDeckFixture.signal(parameters: environment.parameters.merging(identity) { $1 })
 
         let element = try TelemetryDeckFixture.element(for: signal)
 

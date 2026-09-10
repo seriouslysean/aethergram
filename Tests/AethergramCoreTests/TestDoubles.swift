@@ -44,6 +44,57 @@ final class Counter: @unchecked Sendable {
     private var value = 0
 }
 
+/// A one-shot signal a test suspends on rather than blocks on.
+///
+/// The half that opens a gate is on a GCD thread — the writer's serial queue, a
+/// `DispatchQueue.global()` block — and cannot suspend; the half that waits is a
+/// test body on a cooperative thread, and a cooperative thread parked on a
+/// semaphore is one the release can never be scheduled on. A finished stream
+/// squares those: `open()` blocks nothing, and a `wait()` arriving after it
+/// ends at once rather than waiting for a signal that already came.
+///
+/// `AsyncStream` rather than a bare continuation, because it resumes its
+/// iterator when the waiting task is cancelled. A suite time limit cancels; a
+/// task suspended on something that ignores cancellation is a hang the limit
+/// cannot fail, which is the failure this whole type exists to make reportable.
+/// One waiter per gate: the stream has a single consumer.
+final class Gate: @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init() {
+        (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    // MARK: Internal
+
+    /// Whether the gate is open, without waiting for it. The bounded negative
+    /// checks read this after a sleep, because "still shut" is not something a
+    /// wait can express.
+    var isOpen: Bool {
+        lock.withLock { opened }
+    }
+
+    /// Set before the finish, so anything the wait releases reads the state
+    /// that released it. Idempotent, as a signal nobody counts should be.
+    func open() {
+        lock.withLock { opened = true }
+        continuation.finish()
+    }
+
+    /// Nothing is ever yielded: the finish is the whole signal, and a stream
+    /// finished before the first iteration ends it immediately.
+    func wait() async {
+        for await _ in stream {}
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private let stream: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private var opened = false
+}
+
 /// Records every batch it is handed and answers from a scripted outcome list,
 /// falling back to `defaultOutcome` once the script runs out.
 final class SpyTransport: SignalTransport, @unchecked Sendable {
@@ -90,6 +141,191 @@ final class SpyTransport: SignalTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var scripted: [TransportOutcome]
     private var received: [SignalBatch] = []
+}
+
+/// Runs the test's own work while it holds a batch.
+///
+/// That is the window a real network call opens between the recorder claiming a
+/// batch and applying the verdict on it, and it is where an erase does its
+/// damage. A second thread would open the same window without being able to say
+/// when, so the send waits for the work instead: the erase lands after the
+/// claim and before the verdict, every run.
+///
+/// The work runs on a global queue rather than on the drain's own task because
+/// it is usually a call back into the recorder that waits on the writer queue,
+/// and a drain that parks its cooperative thread there is one thread fewer for
+/// every other suspended test to resume onto.
+final class MidSendTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init(outcome: TransportOutcome = .delivered) {
+        self.outcome = outcome
+    }
+
+    // MARK: Internal
+
+    /// Run once, inside the first `send`. Assigned after the recorder exists,
+    /// because the work under test is usually a call back into it — which is
+    /// also why the first send drops it: the closure holding the recorder that
+    /// holds this transport is a cycle until it does.
+    var duringFirstSend: (@Sendable () -> Void)? {
+        get { lock.withLock { work } }
+        set { lock.withLock { work = newValue } }
+    }
+
+    var batches: [SignalBatch] {
+        lock.withLock { received }
+    }
+
+    var sendCount: Int {
+        lock.withLock { received.count }
+    }
+
+    var sentSignals: [Signal] {
+        lock.withLock { received.flatMap(\.signals) }
+    }
+
+    func send(_ batch: SignalBatch) async -> TransportOutcome {
+        await Task.yield()
+        let pending: (@Sendable () -> Void)? = lock.withLock {
+            received.append(batch)
+            let next = work
+            work = nil
+            return next
+        }
+        if let pending {
+            let finished = Gate()
+            DispatchQueue.global().async {
+                pending()
+                finished.open()
+            }
+            await finished.wait()
+        }
+        return outcome
+    }
+
+    // MARK: Private
+
+    private let outcome: TransportOutcome
+    private let lock = NSLock()
+    private var work: (@Sendable () -> Void)?
+    private var received: [SignalBatch] = []
+}
+
+/// In-memory queue storage that announces its purge and can be told to hold it
+/// open until released.
+///
+/// The hold is what puts a test inside the window an erase's durable half
+/// occupies, rather than timing it: a purge that waits is a purge the test can
+/// act around, and a recorder that waits for the delete cannot return while it
+/// is held.
+///
+/// The hold blocks the writer's serial queue, which is the GCD thread that
+/// called `purge()`; the announcement is a gate, because what acts on it is a
+/// test body the cooperative pool has to be free to resume.
+final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
+    // MARK: Internal
+
+    /// Opened as `purge()` is entered, before it is held or takes effect.
+    let purgeEntered = Gate()
+
+    var isPurged: Bool {
+        lock.withLock { purged }
+    }
+
+    var signals: [Signal] {
+        lock.withLock { stored }
+    }
+
+    /// Makes the next `purge()` wait for `releasePurge()`.
+    func holdPurge() {
+        lock.withLock { held = true }
+    }
+
+    func releasePurge() {
+        release.signal()
+    }
+
+    func load() -> [Signal] {
+        lock.withLock { stored }
+    }
+
+    func persist(_ signals: [Signal]) {
+        lock.withLock { stored = signals }
+    }
+
+    func purge() {
+        purgeEntered.open()
+        if lock.withLock({ held }) { release.wait() }
+        lock.withLock {
+            stored = []
+            purged = true
+        }
+    }
+
+    // MARK: Private
+
+    private let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var stored: [Signal] = []
+    private var purged = false
+    private var held = false
+}
+
+/// A `RetentionStore` that holds every `save` open until the test releases it,
+/// and announces the clear.
+///
+/// A save held open is a save still in flight, which is the state the ordering
+/// question is about: whether an erase can get past the recorder's lock while
+/// one is outstanding. Announcing the clear is how the test finds out, without
+/// waiting on a clock to tell it.
+///
+/// The hold blocks whichever GCD thread called `save`, as `GatedQueueStorage`
+/// does; both announcements are gates for the same reason.
+final class GatedRetentionStore: RetentionStore, @unchecked Sendable {
+    // MARK: Internal
+
+    /// Opened as `save` is entered, before it is held.
+    let saveEntered = Gate()
+    /// Opened once `clear` has taken effect.
+    let cleared = Gate()
+
+    var record: RetentionRecord? {
+        lock.withLock { stored }
+    }
+
+    var saveCallCount: Int {
+        lock.withLock { saveCalls }
+    }
+
+    func releaseSave() {
+        release.signal()
+    }
+
+    func load() -> RetentionRecord? {
+        lock.withLock { stored }
+    }
+
+    func save(_ record: RetentionRecord) {
+        saveEntered.open()
+        release.wait()
+        lock.withLock {
+            stored = record
+            saveCalls += 1
+        }
+    }
+
+    func clear() {
+        lock.withLock { stored = nil }
+        cleared.open()
+    }
+
+    // MARK: Private
+
+    private let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var stored: RetentionRecord?
+    private var saveCalls = 0
 }
 
 /// In-memory `RetentionStore` that counts every call, so a test can tell

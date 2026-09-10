@@ -61,17 +61,14 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let language: String
 
     /// The snapshot as payload parameters under canonical keys.
+    ///
+    /// The package's own identity is not among them: it is stamped by the
+    /// recorder, so that an override of this payload cannot drop it.
     public var parameters: [String: String] {
         [
             PayloadKey.appVersion: appVersion,
             PayloadKey.appBuild: appBuild,
             PayloadKey.appVersionAndBuild: "\(appVersion) (build \(appBuild))",
-            // Constants, not process reads, which is why they are not init
-            // parameters: the transport's identity is the same in every
-            // process that links it.
-            PayloadKey.sdkName: Aethergram.name,
-            PayloadKey.sdkVersion: Aethergram.version,
-            PayloadKey.sdkNameAndVersion: Aethergram.nameAndVersion,
             PayloadKey.deviceModelName: modelName,
             PayloadKey.devicePlatform: platform,
             PayloadKey.deviceSystemVersion: systemVersion,

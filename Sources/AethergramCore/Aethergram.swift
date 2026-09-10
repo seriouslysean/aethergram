@@ -25,4 +25,14 @@ enum Aethergram {
     /// Derived rather than written a second time, so a version bump cannot
     /// leave half the identity behind.
     static let nameAndVersion = "\(name) \(version)"
+
+    /// The identity as payload fields. It lives here rather than in
+    /// `EnvironmentSnapshot`, because the recorder stamps it on every signal
+    /// independently of the authored payload — a host that overrides the
+    /// environment must not be able to drop it.
+    static let parameters: [String: String] = [
+        PayloadKey.sdkName: name,
+        PayloadKey.sdkVersion: version,
+        PayloadKey.sdkNameAndVersion: nameAndVersion
+    ]
 }

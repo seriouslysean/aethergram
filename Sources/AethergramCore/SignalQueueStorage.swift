@@ -6,6 +6,10 @@ import os
 /// A protocol rather than a concrete type because where the queue lives is
 /// host-specific: an app extension writes to its own Application Support
 /// directory, a host app may want somewhere else, and tests want memory.
+///
+/// `load()` is called under the recorder's non-recursive lock, and `persist`
+/// and `purge` run on the writer queue that an erase and `flush()` wait on, so
+/// a conformance must not call back into the recorder: doing so deadlocks.
 public protocol SignalQueueStorage: Sendable {
     /// Everything persisted and not yet delivered. Empty on first read and
     /// after `purge()`.
@@ -85,7 +89,17 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         } catch let error as NSError where error.code == NSFileNoSuchFileError {
             // Nothing persisted yet. Purging is still the right postcondition.
         } catch {
-            logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+            // Removal can fail on a directory that refuses it while the file
+            // itself still accepts writes. Overwriting in place reaches the
+            // same postcondition: nothing left to restore under a later grant.
+            // Non-atomic, deliberately — an atomic write needs a temp file in
+            // this same directory, which the failure above already refused.
+            do {
+                try Data("[]".utf8).write(to: fileURL)
+                logger.info("queue purge ok via overwrite")
+            } catch {
+                logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
