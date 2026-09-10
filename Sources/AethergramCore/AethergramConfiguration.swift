@@ -21,11 +21,25 @@ public struct AethergramConfiguration: Sendable {
         // so the transport sends empty batches forever without ever draining
         // the queue. A negative queueLimit makes enqueue's overflow eviction
         // (`removeFirst(pending.count - queueLimit)`) request more elements
-        // than the array holds and trap. Both are caller configuration
-        // errors, not a runtime condition to recover from; fail at
-        // construction, not at the first signal.
+        // than the array holds and trap. A zero, negative, or NaN
+        // transmitInterval reaches the recorder as a retry delay that is not
+        // greater than zero, retrying a retryable failure immediately in a hot
+        // loop, and an infinite one never delivers. maxBackoffInterval is
+        // floored at transmitInterval by `backoffInterval`, so a non-positive
+        // value there is only a contradiction and an infinite one removes the
+        // cap. All four are caller configuration errors, not a runtime
+        // condition to recover from; fail at construction, not at the first
+        // signal.
         precondition(batchSize > 0, "AethergramConfiguration.batchSize must be positive")
         precondition(queueLimit > 0, "AethergramConfiguration.queueLimit must be positive")
+        precondition(
+            transmitInterval.isFinite && transmitInterval > 0,
+            "AethergramConfiguration.transmitInterval must be finite and positive"
+        )
+        precondition(
+            maxBackoffInterval.isFinite && maxBackoffInterval > 0,
+            "AethergramConfiguration.maxBackoffInterval must be finite and positive"
+        )
         self.signalPrefix = signalPrefix
         self.logSubsystem = logSubsystem
         self.batchSize = batchSize
@@ -57,7 +71,9 @@ public struct AethergramConfiguration: Sendable {
     /// Delay between transmission attempts in the steady state.
     public let transmitInterval: TimeInterval
 
-    /// Ceiling on the exponential backoff after repeated failures.
+    /// Ceiling on the exponential backoff after repeated failures. A value
+    /// below `transmitInterval` means no growth rather than a retry faster
+    /// than the steady state it is meant to back off from.
     public let maxBackoffInterval: TimeInterval
 
     /// How long delivery waits after a signal is recorded: nothing once the
@@ -76,6 +92,6 @@ public struct AethergramConfiguration: Sendable {
     public func backoffInterval(consecutiveFailures: Int) -> TimeInterval {
         guard consecutiveFailures > 0 else { return transmitInterval }
         let scaled = transmitInterval * pow(2, Double(consecutiveFailures))
-        return min(scaled, maxBackoffInterval)
+        return min(scaled, max(maxBackoffInterval, transmitInterval))
     }
 }

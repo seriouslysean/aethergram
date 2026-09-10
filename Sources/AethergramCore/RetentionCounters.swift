@@ -137,7 +137,7 @@ enum RetentionCounters {
         // first, against its own last activity rather than against now, so the
         // gap between that kill and this activation is not counted as use.
         var updated = closingOpenSession(in: record ?? RetentionRecord(firstSessionDay: day))
-        updated.totalSessionsCount += 1
+        updated.totalSessionsCount = saturatingIncrement(updated.totalSessionsCount)
         updated.openSessionStartedAt = date
         updated.lastActivityAt = date
         if !updated.distinctDaysUsed.contains(day) {
@@ -211,8 +211,12 @@ enum RetentionCounters {
                 .retentionDistinctDaysUsedLastMonth: "\(recentDayCount(in: record, at: date, calendar: calendar))",
             PayloadKey.retentionAverageSessionSeconds: "\(averageSessionSeconds(in: record))"
         ]
-        if let previous = record.previousSessionSeconds {
-            parameters[PayloadKey.retentionPreviousSessionSeconds] = "\(Int(previous.rounded()))"
+        // Same trap as `averageSessionSeconds`, and the same fix: a corrupt or
+        // hostile total must not crash its host. There is no sentinel for a
+        // single session's duration, so an unconvertible value omits the key
+        // instead of reporting one.
+        if let previous = record.previousSessionSeconds, let rounded = Int(exactly: previous.rounded()) {
+            parameters[PayloadKey.retentionPreviousSessionSeconds] = "\(rounded)"
         }
         return parameters
     }
@@ -236,14 +240,23 @@ enum RetentionCounters {
         guard seconds > 0, seconds.isFinite, seconds <= maximumSessionSeconds else { return updated }
         updated.totalSessionSeconds += seconds
         updated.previousSessionSeconds = seconds
-        updated.completedSessionsCount += 1
+        updated.completedSessionsCount = saturatingIncrement(updated.completedSessionsCount)
         return updated
     }
 
-    /// Averaged over sessions that finished. `-1` when none have.
+    /// Saturates at `Int.max` instead of trapping. A corrupt or hostile
+    /// record must not crash its host over a counter already at the limit.
+    private static func saturatingIncrement(_ value: Int) -> Int {
+        min(value, Int.max - 1) + 1
+    }
+
+    /// Averaged over sessions that finished. `-1` when none have, and also
+    /// when a corrupt or hostile total makes the average non-finite or wider
+    /// than `Int` — `Int(exactly:)` reports that instead of trapping.
     private static func averageSessionSeconds(in record: RetentionRecord) -> Int {
         guard record.completedSessionsCount > 0 else { return noCompletedSessions }
-        return Int((record.totalSessionSeconds / Double(record.completedSessionsCount)).rounded())
+        let average = (record.totalSessionSeconds / Double(record.completedSessionsCount)).rounded()
+        return Int(exactly: average) ?? noCompletedSessions
     }
 
     private static func recentDayCount(in record: RetentionRecord, at date: Date, calendar: Calendar) -> Int {
