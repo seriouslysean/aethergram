@@ -85,7 +85,17 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         } catch let error as NSError where error.code == NSFileNoSuchFileError {
             // Nothing persisted yet. Purging is still the right postcondition.
         } catch {
-            logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+            // Removal can fail on a directory that refuses it while the file
+            // itself still accepts writes. Overwriting in place reaches the
+            // same postcondition: nothing left to restore under a later grant.
+            // Non-atomic, deliberately — an atomic write needs a temp file in
+            // this same directory, which the failure above already refused.
+            do {
+                try Data("[]".utf8).write(to: fileURL)
+                logger.info("queue purge ok via overwrite")
+            } catch {
+                logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
