@@ -156,6 +156,82 @@ struct SignalQueueDurabilityTests {
         #expect(fixture.transport.sentSignalNames == ["signal.2", "signal.3", "signal.4"])
     }
 
+    /// A record landing mid-send can evict the front of a full queue, so the
+    /// queue no longer starts with the batch in flight. Part of that batch is
+    /// still there and part of it is gone, and no comparison of the signals
+    /// themselves can say which: the clock is the host's and need not advance,
+    /// so two signals recorded alike are equal. Only a count of what was
+    /// evicted since the claim tells them apart.
+    ///
+    /// Every signal here is deliberately equal to every other, and three sends
+    /// is the only correct total: two says the mid-send record was dropped
+    /// unsent, four says a delivered one was sent again. The eviction lands
+    /// inside the send because `duringFirstSend` runs on the drain's own task,
+    /// which puts it after the claim and before the verdict on every run.
+    @Test(
+        "A batch whose front was evicted during the send removes only what it sent",
+        arguments: [TransportOutcome.delivered, .permanent(reason: "rejected")]
+    )
+    func evictionDuringSendRemovesOnlyWhatItSent(outcome: TransportOutcome) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let noon = try testDate(year: 2026, month: 1, day: 5)
+        let storage = RecordingQueueStorage(directory: directory)
+        let transport = MidSendTransport(outcome: outcome)
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(queueLimit: 2, transmitInterval: 3600),
+            transport: transport,
+            queueStorage: storage,
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: fixedClock(at: noon)
+        )
+        storage.settle = { [weak recorder] in recorder?.writer.waitForPendingWrites() }
+
+        recorder.updateConsent(.granted)
+        recorder.record("x")
+        recorder.record("x")
+        // Takes the queue one past its cap while the batch above is in flight,
+        // so the eviction drops a signal that batch already carried.
+        transport.duringFirstSend = { recorder.record("x") }
+        await recorder.drain()
+
+        let sent = transport.sentSignals
+        #expect(sent.count == 3)
+        // Known-bad input kept as the assertion: nothing in these signals tells
+        // them apart, which is what a removal keyed on value gets wrong.
+        #expect(sent.allSatisfy { $0 == sent.first })
+        #expect(storage.signalsOnDisk.isEmpty)
+    }
+
+    /// `JSONEncoder` throws on a non-finite `Double`, and it encodes the queue
+    /// as one array: a single such signal stops every signal from persisting
+    /// and takes the batch down with it at the transport.
+    @Test(
+        "A non-finite measure costs its own value and nothing else",
+        arguments: [Double.nan, Double.infinity]
+    )
+    func nonFiniteMeasureDoesNotStopTheQueueFromPersisting(measure: Double) throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let fixture = makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
+            now: steppingClock(from: start)
+        )
+
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("before", floatValue: 1)
+        fixture.recorder.record("during", floatValue: measure)
+        fixture.recorder.record("after", floatValue: 2)
+
+        let onDisk = fixture.storage.signalsOnDisk
+        #expect(onDisk.map(\.name) == ["before", "during", "after"])
+        #expect(onDisk.map(\.floatValue) == [1, nil, 2])
+    }
+
     /// A queue that cannot be decoded is a queue that cannot be sent. Dropping
     /// it beats retrying a corrupt file on every launch forever, and the drop
     /// has to be a delete rather than a silent empty read.

@@ -48,18 +48,6 @@ struct TelemetryDeckTransportOutcomeTests {
         #expect(TelemetryDeckTransport.outcome(for: response) == .retryable(reason: "non-http-response"))
     }
 
-    /// `makeRequest` runs before the session is touched, so an unencodable
-    /// batch never reaches the network. `.nan` is the reachable case:
-    /// `JSONEncoder` defaults to throwing on non-conforming floats.
-    @Test("An unencodable batch is permanent and never sent")
-    func unencodableBatchIsPermanent() async {
-        let batch = TelemetryDeckFixture.batch(signals: [TelemetryDeckFixture.signal(floatValue: .nan)])
-
-        let outcome = await TelemetryDeckFixture.transport().send(batch)
-
-        #expect(outcome == .permanent(reason: "encode-failed"))
-    }
-
     /// The one end-to-end case. Everything above asserts on the pieces; this
     /// proves they are wired together, against a stubbed protocol rather than
     /// the vendor's host.

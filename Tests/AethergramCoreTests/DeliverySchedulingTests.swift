@@ -12,17 +12,27 @@ import Testing
 /// collapse delivers no resign event at all, so the one delivery path almost
 /// never completed. Ten signals sat queued through two minutes of active use.
 ///
-/// **What this suite does not assert, and why.** Whether the task the recorder
-/// schedules actually gets to run is not testable here. These tests share a
-/// cooperative thread pool with CPU-bound fill benchmarks, and an unstructured
-/// task created while those saturate it can go unscheduled for their whole
-/// duration — measured, not assumed: whichever test asserted it failed roughly
-/// three runs in four inside the full suite while passing twenty for twenty in
-/// isolation, with the transport never called rather than called late. So the
-/// coverage splits three ways: the delay decision is pinned pool-free by
+/// **What this suite does not assert, and why.** How soon a scheduled task runs
+/// is nobody's to promise here. These tests share a cooperative thread pool
+/// with every suite beside them, and a task created while something saturates
+/// it can go unscheduled for as long as that lasts — measured once against
+/// CPU-bound fill benchmarks the package no longer contains: the test that
+/// asserted a scheduled delivery failed roughly three runs in four inside the
+/// full suite while passing twenty for twenty in isolation, with the transport
+/// never called rather than called late. So the coverage splits three ways: the
+/// delay decision is pinned pool-free by
 /// `AethergramConfiguration.deliveryDelay`, the work a drain performs is pinned
-/// by driving `drain()` from the test's own task, and that a scheduled task
-/// runs at all is left to a runtime walk against a live host process.
+/// by driving `drain()` from the test's own task, and the latency of a
+/// scheduled task is left to a runtime walk against a live host process.
+///
+/// **What the two scheduling tests do assert.** Whether the recorder schedules
+/// anything at all, and roughly how often, has no other observer: the drain
+/// slot is private, and a task that was never created looks exactly like one
+/// the pool has not reached. One polls to a deadline far longer than the
+/// interval it waits on; the other counts wake-ups inside a window and bounds
+/// them on both sides, because too few and too many are different defects. A
+/// pool busy enough to starve either would read as a failure, which is the
+/// price of asserting this at all.
 @Suite("Delivery scheduling", .tempDirectory, .serialized, .tags(.lifecycle))
 struct DeliverySchedulingTests {
     /// The scheduler sits inside the consent gate. A drain scheduled while the
@@ -102,6 +112,92 @@ struct DeliverySchedulingTests {
 
         #expect(fixture.transport.sendCount == 0)
         #expect(fixture.storage.signalsOnDisk.isEmpty)
+    }
+
+    /// A record landing while a drain is running schedules nothing: the slot
+    /// says running, and a second task would send the batch already in flight
+    /// a second time. The running drain has to take that signal, and when it
+    /// ends without having taken it, the release is the last moment anything
+    /// can be scheduled for it — otherwise it waits for a record or a flush
+    /// the consumer may never make.
+    ///
+    /// The record lands inside the send of the batch the drain turns out to end
+    /// on, which is the latest point a test can reach: between that batch's
+    /// verdict and the release there is no seam to hold. Withholding the
+    /// identifier from the claim that follows is what makes the miss
+    /// deterministic instead of a race — it is exactly the claim the late
+    /// signal would have ridden.
+    @Test("A signal recorded while a drain is finishing is delivered without another record")
+    func signalRecordedDuringADrainIsDeliveredByTheRestart() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let transport = MidSendTransport()
+        let claims = Counter()
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(transmitInterval: 0.05),
+            transport: transport,
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { claims.nextIndex() == 1 ? nil : "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: steppingClock(from: start)
+        )
+        // Runs on the drain's own task, so the record lands while the slot
+        // holds this drain and can schedule nothing of its own.
+        transport.duringFirstSend = { recorder.record("late") }
+
+        recorder.updateConsent(.granted)
+        recorder.record("first")
+        // Nothing past this line records or flushes, so the only thing that
+        // can deliver "late" is a drain the recorder scheduled for itself.
+        await waitUntil { transport.sendCount == 2 }
+        // A scheduled drain holds the recorder weakly, so across the wait this
+        // local is the only thing keeping it alive to be delivered from.
+        withExtendedLifetime(recorder) {}
+
+        #expect(transport.sentSignals.map(\.name) == ["first", "late"])
+    }
+
+    /// A host that cannot resolve an identifier yet halts every drain before
+    /// the claim, and the restart keys on a queue that is not empty — which
+    /// stays true for as long as the identifier is missing. Counting the halt
+    /// as a failure is what keeps that from costing a wake-up at the steady
+    /// interval for the life of the process.
+    ///
+    /// Bounded on both sides, because from one sample the two defects look
+    /// alike: fewer than two wakes says the halt scheduled nothing at all,
+    /// more than ten says nothing damped it — flat retries across this window
+    /// would be roughly fifty, and the backoff makes five.
+    @Test("A drain halted for want of an identifier backs off instead of waking at the interval")
+    func haltedDrainBacksOffRatherThanWakingAtTheInterval() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let transport = SpyTransport()
+        let claims = Counter()
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(transmitInterval: 0.01),
+            transport: transport,
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: {
+                claims.increment()
+                return nil
+            },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: steppingClock(from: start)
+        )
+
+        recorder.updateConsent(.granted)
+        recorder.record("stranded")
+        try await Task.sleep(for: .milliseconds(500))
+        withExtendedLifetime(recorder) {}
+
+        #expect(claims.count >= 2)
+        #expect(claims.count <= 10)
+        // The identifier is what the halt is for: nothing may leave without it.
+        #expect(transport.sendCount == 0)
     }
 
     /// The invariant through the recorder rather than the pure
@@ -210,5 +306,18 @@ struct DeliverySchedulingTests {
         let after = try #require(retention.record)
         #expect(after.completedSessionsCount == 1)
         #expect(after.totalSessionsCount == 2)
+    }
+}
+
+// MARK: - Waiting on scheduled work
+
+/// Returns as soon as `condition` holds, and at the deadline regardless, so the
+/// assertion that follows reports the state rather than a timeout. The deadline
+/// is wall time: what is being waited on is a task the pool schedules, not
+/// anything the recorder's own clock advances.
+private func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !condition(), Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(5))
     }
 }
