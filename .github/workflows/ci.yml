@@ -28,7 +28,12 @@ jobs:
       # is the manifest's floor, so the Xcode that provides it is part of what CI proves.
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
+      # Full history: the leak scan's history tier runs with --all, and a shallow (depth-1)
+      # checkout would leave it scanning the one fetched commit -- a gate that never fires
+      # looks exactly like one that passes.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # A pin that silently falls back to the image default is a pin that proves nothing, so fail
       # here and print what the image actually has rather than compiling against a surprise.

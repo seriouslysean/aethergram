@@ -69,11 +69,13 @@ This repo is public. The apps that use it are not, and the development model is 
 transport from inside one of them, so a comment written in that context can carry a private app
 name, a bundle identifier, or an issue number into a public commit. Prose is the leak, not code.
 
-`Scripts/scan-for-leaks.sh` runs in the checks, in the pre-commit hook over tracked files, and in
+`Scripts/scan-for-leaks.sh` runs in the checks, in the pre-commit hook over the staged tree, and in
 the commit-msg hook over the message being written. It refuses absolute home paths, email
-addresses, cross-repo issue references, bare issue numbers, private record ids, and, in a message,
-agent-session trailers. It matches shapes that point outside this repo, and the file tier reads
-tracked files, so stage a file before expecting it to be scanned.
+addresses, cross-repo issue references, bare issue numbers, private record ids,
+and, in a message, agent-session trailers. It also refuses a numbered issue or pull request URL
+(`github.com/.../issues|pull/N`) naming any repository, this one included, since a bare number is
+not a stable reference either. The file tier reads the index, so stage a file before expecting it
+to be scanned.
 
 The scan is a handful of hand-written regexes rather than a secret scanner. What it refuses are
 identifying references, not credentials, so a scanner's entropy heuristics and maintained provider
