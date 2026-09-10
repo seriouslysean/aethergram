@@ -48,17 +48,23 @@ enum TelemetryDeckFixture {
         name: String = "Example.Game.started",
         parameters: [String: String] = [:],
         floatValue: Double? = nil,
+        sessionID: String = "test-session",
         recordedAt: Date = TelemetryDeckFixture.instant
     ) -> Signal {
-        Signal(name: name, parameters: parameters, floatValue: floatValue, recordedAt: recordedAt)
+        Signal(
+            name: name,
+            parameters: parameters,
+            floatValue: floatValue,
+            sessionID: sessionID,
+            recordedAt: recordedAt
+        )
     }
 
     static func batch(
         signals: [Signal] = [TelemetryDeckFixture.signal()],
-        clientUser: String = "abc",
-        sessionID: String = "test-session"
+        clientUser: String = "abc"
     ) -> SignalBatch {
-        SignalBatch(signals: signals, clientUser: clientUser, sessionID: sessionID)
+        SignalBatch(signals: signals, clientUser: clientUser)
     }
 
     static func url(_ string: String) throws -> URL {

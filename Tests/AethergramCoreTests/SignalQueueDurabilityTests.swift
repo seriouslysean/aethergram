@@ -43,6 +43,48 @@ struct SignalQueueDurabilityTests {
         #expect(!revived.storage.fileExists)
     }
 
+    /// The other half of surviving a kill: a signal that outlives the process
+    /// that recorded it also outlives the session it ran in, and the process
+    /// that finally sends it has opened one of its own. Attribution belongs to
+    /// the record, so the restored signal keeps the session it happened in
+    /// while the new one takes the session now open — in the same batch, which
+    /// a session read once per send cannot express.
+    @Test("A restored signal carries the session it was recorded in, not the one that sent it")
+    func restoredSignalsKeepTheSessionTheyWereRecordedIn() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let dead = makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: start)
+        )
+        dead.recorder.updateConsent(.granted)
+        dead.recorder.beginSession()
+        dead.recorder.record("old")
+        dead.recorder.writer.waitForPendingWrites()
+        #expect(dead.transport.sendCount == 0)
+
+        let revived = makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: start.addingTimeInterval(3600))
+        )
+        revived.recorder.updateConsent(.granted)
+        revived.recorder.beginSession()
+        revived.recorder.record("new")
+        await revived.recorder.drain()
+
+        // One batch, so a session stamped at send time would hand both signals
+        // the identifier the second process opened.
+        #expect(revived.transport.sendCount == 1)
+        let sent = revived.transport.sentSignals
+        #expect(sent.map(\.name) == ["old", "new"])
+        let restored = try #require(sent.first)
+        let fresh = try #require(sent.last)
+        #expect(!restored.sessionID.isEmpty)
+        #expect(restored.sessionID != fresh.sessionID)
+    }
+
     /// A batch the endpoint could not take stays queued and stays on disk, so
     /// the next process picks it up.
     @Test("A retryable outcome leaves the batch queued and on disk")
@@ -232,6 +274,38 @@ struct SignalQueueDurabilityTests {
         #expect(onDisk.map(\.floatValue) == [1, nil, 2])
     }
 
+    /// The coercion is the type's invariant rather than one initializer's, so
+    /// it has to hold for a value read back as well as for one recorded. The
+    /// package's own encoder cannot write a non-finite measure, but the
+    /// decoder belongs to `Signal` and a host's `SignalQueueStorage` chooses
+    /// its own coder: a decoded NaN would reach the encoder that refuses it and
+    /// cost the whole file, which is the failure `record` is already spared.
+    @Test(
+        "A non-finite measure decoded off disk loads as no measure",
+        arguments: ["nan", "inf"]
+    )
+    func nonFiniteMeasureDecodedOffDiskLoadsAsNoMeasure(measure: String) throws {
+        let recordedAt = try testDate(year: 2026, month: 1, day: 5).timeIntervalSinceReferenceDate
+        let json = """
+        [{"name":"old.a","parameters":{},"floatValue":"\(measure)",\
+        "sessionID":"session-a","recordedAt":\(recordedAt)}]
+        """
+        // The one strategy that can carry a non-finite value through JSON at
+        // all; the default refuses to write it and has nothing to read.
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "inf",
+            negativeInfinity: "-inf",
+            nan: "nan"
+        )
+
+        let signals = try decoder.decode([Signal].self, from: Data(json.utf8))
+
+        let signal = try #require(signals.first)
+        #expect(signal.name == "old.a")
+        #expect(signal.floatValue == nil)
+    }
+
     /// A queue that cannot be decoded is a queue that cannot be sent. Dropping
     /// it beats retrying a corrupt file on every launch forever, and the drop
     /// has to be a delete rather than a silent empty read.
@@ -247,6 +321,36 @@ struct SignalQueueDurabilityTests {
 
         #expect(storage.load().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    /// A queue file written before signals carried a session cannot be
+    /// attributed to one, and defaulting the key would file its signals under a
+    /// session they never ran in. Required is what makes the file unreadable
+    /// instead, which is the upgrade path: purge and keep recording.
+    @Test("A queue file with no session identifier loads as empty and is purged")
+    func queueFileWithoutSessionIdentifierLoadsEmptyAndPurges() throws {
+        let directory = try #require(TestTempDirectory.url)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        // Written by hand rather than encoded, because the shape under test is
+        // one this package can no longer produce. `JSONDecoder`'s default date
+        // strategy reads seconds since the reference date.
+        let recordedAt = try testDate(year: 2026, month: 1, day: 5).timeIntervalSinceReferenceDate
+        let fields = #""name":"old.a","parameters":{"env.key":"env-value"},"recordedAt":\#(recordedAt)"#
+        try Data("[{\(fields)}]".utf8).write(to: fileURL)
+
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+
+        #expect(storage.load().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+
+        // The control: the same object with the session key present decodes.
+        // Without it the purge above would pass for any reason at all — a date
+        // in the wrong form, a key spelled differently — rather than for the
+        // one this test is about.
+        try Data("[{\(fields),\"sessionID\":\"session-a\"}]".utf8).write(to: fileURL)
+
+        #expect(storage.load().map(\.sessionID) == ["session-a"])
     }
 
     /// The recorder recovers from the same corruption rather than wedging: a
@@ -281,7 +385,7 @@ struct SignalQueueDurabilityTests {
         let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
         let signalDate = try testDate(year: 2026, month: 1, day: 5)
         let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
-        storage.persist([Signal(name: "declined.a", recordedAt: signalDate)])
+        storage.persist([Signal(name: "declined.a", sessionID: "declined-session", recordedAt: signalDate)])
         #expect(!storage.load().isEmpty)
 
         let originalPermissions = try FileManager.default

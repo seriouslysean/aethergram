@@ -115,7 +115,10 @@ struct ConsentEnforcementTests {
 
         let batch = try #require(fixture.transport.batches.first)
         #expect(batch.clientUser == "client-user")
-        #expect(!batch.sessionID.isEmpty)
+        #expect(batch.signals.allSatisfy { !$0.sessionID.isEmpty })
+        // Read from the session that is open, not minted per signal: an
+        // identifier unique to every signal groups nothing.
+        #expect(Set(batch.signals.map(\.sessionID)).count == 1)
         #expect(fixture.clientUserCalls.wasCalled)
     }
 
@@ -310,10 +313,11 @@ struct ConsentEnforcementTests {
     /// exists, so its verdict applies to nothing. The consent answer cannot
     /// answer that on its own: `reset()` erases without moving it.
     ///
-    /// The fixed clock is what lets this test fail. It makes the signal
-    /// recorded after the erase byte-identical to the one sent before it, so an
-    /// `apply` that only asks whether the queue starts with what it sent
-    /// removes a signal that was never transmitted.
+    /// `apply` removes by count rather than by value: the front of the queue
+    /// goes for as much as the batch carried. The erase generation is what
+    /// tells a verdict on the erased queue from one on the queue that replaced
+    /// it, and without that gate this verdict takes one signal off a queue it
+    /// never indexed — the record made after the erase, which was never sent.
     @Test("An outcome for an erased batch cannot drop what replaced it", arguments: Erasure.allCases)
     func outcomeForAnErasedBatchLeavesTheNewQueueAlone(erasure: Erasure) async throws {
         let directory = try #require(TestTempDirectory.url)
@@ -342,14 +346,46 @@ struct ConsentEnforcementTests {
 
         let sent = try #require(transport.sentSignals.first)
         #expect(transport.sendCount == 1)
-        // Known-bad input, kept as the assertion: the front of the queue the
-        // erase left behind is indistinguishable from the batch this verdict
-        // was for, which is the case a mismatched removal destroys.
-        #expect(storage.signalsOnDisk == [sent])
+        // The survivor is the record made after the erase, and the fixed clock
+        // leaves it matching the batch this verdict was for in everything but
+        // the session the erase re-minted. It is what a removal that skips the
+        // generation gate drops.
+        let onDisk = storage.signalsOnDisk
+        #expect(onDisk.count == 1)
+        let survivor = try #require(onDisk.first)
+        #expect(survivor.name == sent.name)
+        #expect(survivor.recordedAt == sent.recordedAt)
+        #expect(survivor.sessionID != sent.sessionID)
 
         // Still deliverable, rather than merely still on disk.
         await recorder.drain()
-        #expect(transport.sentSignals == [sent, sent])
+        #expect(transport.sentSignals == [sent, survivor])
+    }
+
+    /// A host need not open a session before it records, so the grant mints
+    /// one. Without that the first signals of an install would ride out under
+    /// an empty session, which no dashboard can group.
+    @Test("A signal recorded before any session boundary carries the one the grant minted")
+    func signalRecordedBeforeAnyBeginSessionCarriesTheGrantsSession() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let fixture = makeFixture(directory: directory, now: steppingClock(from: start))
+
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("alpha")
+        await fixture.recorder.drain()
+
+        let early = try #require(fixture.transport.sentSignals.first)
+        #expect(!early.sessionID.isEmpty)
+
+        // The grant's is a session like any other: the host's first boundary
+        // replaces it rather than filling a blank.
+        fixture.recorder.beginSession()
+        fixture.recorder.record("beta")
+        await fixture.recorder.drain()
+
+        let later = try #require(fixture.transport.sentSignals.last)
+        #expect(later.sessionID != early.sessionID)
     }
 
     /// A session is collected under a grant like anything else. Reusing its
@@ -364,13 +400,13 @@ struct ConsentEnforcementTests {
         fixture.recorder.updateConsent(.granted)
         fixture.recorder.record("alpha")
         await fixture.recorder.drain()
-        let before = try #require(fixture.transport.batches.first).sessionID
+        let before = try #require(fixture.transport.sentSignals.first).sessionID
 
         erasure.apply(to: fixture.recorder)
         fixture.recorder.record("beta")
         await fixture.recorder.drain()
 
-        let after = try #require(fixture.transport.batches.last).sessionID
+        let after = try #require(fixture.transport.sentSignals.last).sessionID
         #expect(!before.isEmpty)
         // A reset leaves the gate open, so the next batch needs a session
         // rather than the empty string the erase left.

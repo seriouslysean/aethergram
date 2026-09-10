@@ -79,12 +79,10 @@ struct TelemetryDeckBodyTests {
         #expect(Set(element.keys) == Self.vendorFields)
     }
 
-    @Test("Per-batch fields ride every element")
-    func batchFieldsRideEveryElement() throws {
-        let batch = SignalBatch(
-            signals: [TelemetryDeckFixture.signal(), TelemetryDeckFixture.signal(name: "Example.Turn.sent")],
-            clientUser: "abc",
-            sessionID: "session-7"
+    @Test("The configured app identifier rides every element")
+    func appIDRidesEveryElement() throws {
+        let batch = TelemetryDeckFixture.batch(
+            signals: [TelemetryDeckFixture.signal(), TelemetryDeckFixture.signal(name: "Example.Turn.sent")]
         )
         let configuration = TelemetryDeckFixture.configuration(appID: "app-42")
 
@@ -92,8 +90,33 @@ struct TelemetryDeckBodyTests {
 
         for element in elements {
             #expect(try TelemetryDeckFixture.string(element["appID"], "appID") == "app-42")
-            #expect(try TelemetryDeckFixture.string(element["sessionID"], "sessionID") == "session-7")
         }
+    }
+
+    /// The vendor's own SDK stamps the session at enqueue, and the field is
+    /// read off the signal here for the same reason: the session a batch is
+    /// sent under is not the one its signals were recorded in.
+    @Test("sessionID is the session the signal was recorded in")
+    func sessionIDIsPerSignal() throws {
+        let element = try TelemetryDeckFixture.element(for: TelemetryDeckFixture.signal(sessionID: "session-7"))
+
+        #expect(try TelemetryDeckFixture.string(element["sessionID"], "sessionID") == "session-7")
+    }
+
+    /// One batch spans a session boundary whenever a restored queue drains
+    /// after the host opened a new session. A field read once per batch cannot
+    /// encode that: both elements would carry whichever session the send found.
+    @Test("Two signals from different sessions keep their own identifiers in one batch")
+    func sessionsInOneBatchAreNotCollapsedToOne() throws {
+        let batch = TelemetryDeckFixture.batch(signals: [
+            TelemetryDeckFixture.signal(name: "Example.Game.started", sessionID: "session-before"),
+            TelemetryDeckFixture.signal(name: "Example.Turn.sent", sessionID: "session-after")
+        ])
+
+        let elements = try TelemetryDeckFixture.elements(for: batch)
+
+        let sessions = try elements.map { try TelemetryDeckFixture.string($0["sessionID"], "sessionID") }
+        #expect(sessions == ["session-before", "session-after"])
     }
 
     /// The vendor's decoder is `.formatted("yyyy-MM-dd'T'HH:mm:ssZ")`, which
