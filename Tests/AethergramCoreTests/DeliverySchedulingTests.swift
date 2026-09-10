@@ -33,7 +33,11 @@ import Testing
 /// them on both sides, because too few and too many are different defects. A
 /// pool busy enough to starve either would read as a failure, which is the
 /// price of asserting this at all.
-@Suite("Delivery scheduling", .tempDirectory, .serialized, .tags(.lifecycle))
+///
+/// The time limit is the outer bound on those polls: a pool starved badly
+/// enough never to run the scheduled task must name the test rather than stall
+/// the run until a runner is cancelled.
+@Suite("Delivery scheduling", .tempDirectory, .serialized, .timeLimit(.minutes(1)), .tags(.lifecycle))
 struct DeliverySchedulingTests {
     /// The scheduler sits inside the consent gate. A drain scheduled while the
     /// answer is withheld would resolve the identifier the gate exists to keep

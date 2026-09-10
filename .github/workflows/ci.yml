@@ -16,6 +16,8 @@ jobs:
     # Pinned, not `macos-latest`: the label moves to a new image on GitHub's schedule, and a
     # toolchain change arriving that way is a red build nobody asked for.
     runs-on: macos-26
+    # A wedged suite hangs rather than fails, so cap the job: the default is six hours of nothing.
+    timeout-minutes: 15
     strategy:
       # One leg, deliberately. The matrix is here for the name it composes -- `test (macos)` -- so
       # the context a required status check names is platform-qualified before a second leg exists

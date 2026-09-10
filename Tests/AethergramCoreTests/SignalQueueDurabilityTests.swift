@@ -6,7 +6,11 @@ import Testing
 /// The queue is durable because the OS kills a suspended extension without
 /// warning, and a signal that only exists in memory at that moment is a signal
 /// that never happened.
-@Suite("Signal queue durability", .tempDirectory, .serialized, .tags(.persistence))
+///
+/// The time limit covers the mid-send arms, which drive a drain against work
+/// running on another thread: a wait that never returns has to fail under its
+/// own name rather than stall the run until a runner is cancelled.
+@Suite("Signal queue durability", .tempDirectory, .serialized, .timeLimit(.minutes(1)), .tags(.persistence))
 struct SignalQueueDurabilityTests {
     /// Simulates the kill: the first recorder records and is then discarded
     /// without ever draining, and a second recorder is built over the same

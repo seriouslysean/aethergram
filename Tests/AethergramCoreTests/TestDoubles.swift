@@ -44,6 +44,57 @@ final class Counter: @unchecked Sendable {
     private var value = 0
 }
 
+/// A one-shot signal a test suspends on rather than blocks on.
+///
+/// The half that opens a gate is on a GCD thread — the writer's serial queue, a
+/// `DispatchQueue.global()` block — and cannot suspend; the half that waits is a
+/// test body on a cooperative thread, and a cooperative thread parked on a
+/// semaphore is one the release can never be scheduled on. A finished stream
+/// squares those: `open()` blocks nothing, and a `wait()` arriving after it
+/// ends at once rather than waiting for a signal that already came.
+///
+/// `AsyncStream` rather than a bare continuation, because it resumes its
+/// iterator when the waiting task is cancelled. A suite time limit cancels; a
+/// task suspended on something that ignores cancellation is a hang the limit
+/// cannot fail, which is the failure this whole type exists to make reportable.
+/// One waiter per gate: the stream has a single consumer.
+final class Gate: @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init() {
+        (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    // MARK: Internal
+
+    /// Whether the gate is open, without waiting for it. The bounded negative
+    /// checks read this after a sleep, because "still shut" is not something a
+    /// wait can express.
+    var isOpen: Bool {
+        lock.withLock { opened }
+    }
+
+    /// Set before the finish, so anything the wait releases reads the state
+    /// that released it. Idempotent, as a signal nobody counts should be.
+    func open() {
+        lock.withLock { opened = true }
+        continuation.finish()
+    }
+
+    /// Nothing is ever yielded: the finish is the whole signal, and a stream
+    /// finished before the first iteration ends it immediately.
+    func wait() async {
+        for await _ in stream {}
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private let stream: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private var opened = false
+}
+
 /// Records every batch it is handed and answers from a scripted outcome list,
 /// falling back to `defaultOutcome` once the script runs out.
 final class SpyTransport: SignalTransport, @unchecked Sendable {
@@ -97,8 +148,13 @@ final class SpyTransport: SignalTransport, @unchecked Sendable {
 /// That is the window a real network call opens between the recorder claiming a
 /// batch and applying the verdict on it, and it is where an erase does its
 /// damage. A second thread would open the same window without being able to say
-/// when, so the work runs on the drain's own task instead: the erase lands
-/// after the claim and before the verdict, every run.
+/// when, so the send waits for the work instead: the erase lands after the
+/// claim and before the verdict, every run.
+///
+/// The work runs on a global queue rather than on the drain's own task because
+/// it is usually a call back into the recorder that waits on the writer queue,
+/// and a drain that parks its cooperative thread there is one thread fewer for
+/// every other suspended test to resume onto.
 final class MidSendTransport: SignalTransport, @unchecked Sendable {
     // MARK: Lifecycle
 
@@ -137,7 +193,14 @@ final class MidSendTransport: SignalTransport, @unchecked Sendable {
             work = nil
             return next
         }
-        pending?()
+        if let pending {
+            let finished = Gate()
+            DispatchQueue.global().async {
+                pending()
+                finished.open()
+            }
+            await finished.wait()
+        }
         return outcome
     }
 
@@ -156,11 +219,15 @@ final class MidSendTransport: SignalTransport, @unchecked Sendable {
 /// occupies, rather than timing it: a purge that waits is a purge the test can
 /// act around, and a recorder that waits for the delete cannot return while it
 /// is held.
+///
+/// The hold blocks the writer's serial queue, which is the GCD thread that
+/// called `purge()`; the announcement is a gate, because what acts on it is a
+/// test body the cooperative pool has to be free to resume.
 final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
     // MARK: Internal
 
-    /// Signalled as `purge()` is entered, before it is held or takes effect.
-    let purgeEntered = DispatchSemaphore(value: 0)
+    /// Opened as `purge()` is entered, before it is held or takes effect.
+    let purgeEntered = Gate()
 
     var isPurged: Bool {
         lock.withLock { purged }
@@ -188,7 +255,7 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
     }
 
     func purge() {
-        purgeEntered.signal()
+        purgeEntered.open()
         if lock.withLock({ held }) { release.wait() }
         lock.withLock {
             stored = []
@@ -212,13 +279,16 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
 /// question is about: whether an erase can get past the recorder's lock while
 /// one is outstanding. Announcing the clear is how the test finds out, without
 /// waiting on a clock to tell it.
+///
+/// The hold blocks whichever GCD thread called `save`, as `GatedQueueStorage`
+/// does; both announcements are gates for the same reason.
 final class GatedRetentionStore: RetentionStore, @unchecked Sendable {
     // MARK: Internal
 
-    /// Signalled as `save` is entered, before it is held.
-    let saveEntered = DispatchSemaphore(value: 0)
-    /// Signalled once `clear` has taken effect.
-    let cleared = DispatchSemaphore(value: 0)
+    /// Opened as `save` is entered, before it is held.
+    let saveEntered = Gate()
+    /// Opened once `clear` has taken effect.
+    let cleared = Gate()
 
     var record: RetentionRecord? {
         lock.withLock { stored }
@@ -237,7 +307,7 @@ final class GatedRetentionStore: RetentionStore, @unchecked Sendable {
     }
 
     func save(_ record: RetentionRecord) {
-        saveEntered.signal()
+        saveEntered.open()
         release.wait()
         lock.withLock {
             stored = record
@@ -247,7 +317,7 @@ final class GatedRetentionStore: RetentionStore, @unchecked Sendable {
 
     func clear() {
         lock.withLock { stored = nil }
-        cleared.signal()
+        cleared.open()
     }
 
     // MARK: Private

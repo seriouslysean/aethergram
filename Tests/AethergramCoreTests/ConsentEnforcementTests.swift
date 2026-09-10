@@ -11,7 +11,11 @@ import Testing
 /// So every arm here asserts at all four layers the recorder touches: the
 /// transport, the queue-storage calls, the bytes on disk, and the two provider
 /// closures that would otherwise mint an identifier or read a payload.
-@Suite("Consent enforcement", .tempDirectory, .tags(.consent))
+///
+/// The time limit is the gate on the erase arms below, which hand work to real
+/// threads: one that never comes back has to fail under its own name rather
+/// than stall the run until a runner is cancelled.
+@Suite("Consent enforcement", .tempDirectory, .timeLimit(.minutes(1)), .tags(.consent))
 struct ConsentEnforcementTests {
     /// The two ways everything collected under a grant is dropped. They differ
     /// only in whether the consent answer moves with it, which is exactly why
@@ -424,7 +428,7 @@ struct ConsentEnforcementTests {
     /// without timing it. The erase is past its lock section either way by
     /// then; what differs is whether the delete went with it.
     @Test("An erase's delete cannot reach what was recorded after it")
-    func eraseDeletesNothingRecordedAfterIt() throws {
+    func eraseDeletesNothingRecordedAfterIt() async throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
         let storage = GatedQueueStorage()
         let store = SpyRetentionStore()
@@ -434,16 +438,19 @@ struct ConsentEnforcementTests {
         recorder.record("old")
 
         storage.holdPurge()
-        let resetDone = DispatchSemaphore(value: 0)
+        // The reset blocks until the test releases the purge, so it goes to a
+        // real thread; the test suspends on the gate rather than parking a
+        // cooperative thread the reset's own release would need.
+        let resetDone = Gate()
         DispatchQueue.global().async {
             recorder.reset()
-            resetDone.signal()
+            resetDone.open()
         }
-        storage.purgeEntered.wait()
+        await storage.purgeEntered.wait()
         recorder.beginSession()
         recorder.record("fresh")
         storage.releasePurge()
-        resetDone.wait()
+        await resetDone.wait()
 
         #expect(storage.signals.map(\.name) == ["fresh"])
         // A counter set is the other durable copy, and the count says which
@@ -458,10 +465,11 @@ struct ConsentEnforcementTests {
     /// sitting on a background queue at that point never happens.
     ///
     /// The purge is held open, so a decline that waits for the delete cannot
-    /// return while it is held. The bounded wait is what proving that negative
-    /// costs; a decline that only asks returns at once and trips it.
+    /// return while it is held. Reading the gate after a bounded sleep is what
+    /// proving that negative costs; a decline that only asks returns at once
+    /// and is open by the time the sleep ends.
     @Test("A decline does not return before the queue file is deleted")
-    func declineReturnsOnlyAfterThePurgeHasLanded() throws {
+    func declineReturnsOnlyAfterThePurgeHasLanded() async throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
         let storage = GatedQueueStorage()
         let recorder = Self.makeRecorder(storage: storage, retention: SpyRetentionStore(), now: steppingClock(from: start))
@@ -469,17 +477,18 @@ struct ConsentEnforcementTests {
         recorder.record("alpha")
 
         storage.holdPurge()
-        let declineReturned = DispatchSemaphore(value: 0)
+        let declineReturned = Gate()
         DispatchQueue.global().async {
             recorder.updateConsent(.declined)
-            declineReturned.signal()
+            declineReturned.open()
         }
-        storage.purgeEntered.wait()
-        let returnedWithTheDeletePending = declineReturned.wait(timeout: .now() + 0.5) == .success
+        await storage.purgeEntered.wait()
+        // A sleep the pool may overrun only lengthens the window the decline
+        // had to return in, which a negative check can only be helped by.
+        try await Task.sleep(for: .milliseconds(500))
+        let returnedWithTheDeletePending = declineReturned.isOpen
         storage.releasePurge()
-        // Only when the timed wait did not already take the signal, or this
-        // would wait for a second one that is never coming.
-        if !returnedWithTheDeletePending { declineReturned.wait() }
+        await declineReturned.wait()
 
         #expect(!returnedWithTheDeletePending)
         #expect(storage.isPurged)
@@ -495,7 +504,7 @@ struct ConsentEnforcementTests {
     /// is still held at that moment: a save issued under it blocks the erase
     /// until it lands, and one issued after releasing it does not.
     @Test("A retention save cannot land behind the reset that cleared it")
-    func retentionSaveCannotLandAfterAReset() throws {
+    func retentionSaveCannotLandAfterAReset() async throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
         let store = GatedRetentionStore()
         let recorder = Self.makeRecorder(storage: GatedQueueStorage(), retention: store, now: steppingClock(from: start))
@@ -503,24 +512,25 @@ struct ConsentEnforcementTests {
 
         // Real threads rather than tasks: the halves have to run concurrently,
         // and an unstructured task on a saturated cooperative pool need not.
-        let sessionOpened = DispatchSemaphore(value: 0)
+        let sessionOpened = Gate()
         DispatchQueue.global().async {
             recorder.beginSession()
-            sessionOpened.signal()
+            sessionOpened.open()
         }
-        store.saveEntered.wait()
-        let resetDone = DispatchSemaphore(value: 0)
+        await store.saveEntered.wait()
+        let resetDone = Gate()
         DispatchQueue.global().async {
             recorder.reset()
-            resetDone.signal()
+            resetDone.open()
         }
         // A clear arriving while the save is still held is a clear that save
         // can land behind. Issued under the lock the save holds, it cannot
         // arrive at all, and the bound is what proving that costs.
-        let clearedWithTheSaveInFlight = store.cleared.wait(timeout: .now() + 0.5) == .success
+        try await Task.sleep(for: .milliseconds(500))
+        let clearedWithTheSaveInFlight = store.cleared.isOpen
         store.releaseSave()
-        sessionOpened.wait()
-        resetDone.wait()
+        await sessionOpened.wait()
+        await resetDone.wait()
 
         // The gate had something to fire on: a save really was in flight.
         #expect(store.saveCallCount == 1)
