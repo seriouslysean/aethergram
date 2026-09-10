@@ -16,7 +16,7 @@ why the adapter carries a canonical-to-vendor wire-name table rather than renami
 ## Phase 1: add the package, emit nothing
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", from: "0.2.1")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.0")
 ```
 
 Depend on a release tag, never on `main`. Add the `Aethergram` product to the target that owns
@@ -45,9 +45,14 @@ implementation that mints and persists on first read still cannot plant an ident
 user answers. Keep it that way: do not pre-warm it.
 
 **What the default payload says.** `environmentProvider` defaults to
-`EnvironmentSnapshot.current().parameters`, which reports OS, locale, build channel, and the
-package's own payload version. Override it only to add fields, and only fields that survive data
-minimisation.
+`EnvironmentSnapshot.current().parameters`, which reports OS, locale, and build channel. An
+override replaces the whole environment, not adds to it: start from
+`EnvironmentSnapshot.current().parameters` and merge your own fields in, or you lose OS, locale,
+and build channel, keeping only whatever fields you added. `sdk.name`, `sdk.version`, and
+`sdk.nameAndVersion` are not part of that default — the recorder stamps them on every signal
+itself, independently of `environmentProvider`, so no override, merged or not, can drop them. A
+parameter passed to `record` still wins a key collision over any of this, including `sdk.name`;
+naming it there is the caller's decision, not one the package catches.
 
 ## Phase 3: wire the adapter
 

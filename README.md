@@ -3,7 +3,7 @@
 An app-agnostic analytics transport for Swift. Consent-gated, durable, and dependency-free: it
 talks to an ingest API over `URLSession` and pulls in no SDK to do it.
 
-Nothing is collected until the host says consent was granted. Until then `record` allocates
+Nothing is collected until the host says consent was granted. Until then `record` enqueues
 nothing, writes nothing, resolves no identifier, advances no counter, and reaches no transport. A
 later decline erases what was collected under the grant — the queue file, the retention counters,
 and the pending batch — rather than merely stopping new writes. That is the package's one
@@ -23,7 +23,7 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", from: "0.2.1")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.0")
 ```
 
 ```swift
@@ -76,8 +76,11 @@ interpret them, because names are your domain vocabulary.
 
 ## What it does with a signal
 
-A recorded signal is appended to an in-memory queue and written to a durable file, so a process the
-OS kills without warning loses nothing. Delivery is coalesced: nothing waits once a batch is full,
+A recorded signal is appended to an in-memory queue and handed to a durable writer: a signal the
+writer has reached disk with survives a process the OS kills without warning. The write happens on
+the writer's own queue, off the call that recorded it, so `flush()` waits for the writer to catch
+up on the way out — which is why the host calls it from its own deactivation path. Delivery is
+coalesced: nothing waits once a batch is full,
 `transmitInterval` otherwise. A retryable failure keeps the batch queued and backs off
 exponentially to `maxBackoffInterval`; a permanent rejection drops it rather than retrying against
 an endpoint that will keep refusing. Past `queueLimit` the oldest signals are dropped, because the

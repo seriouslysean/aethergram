@@ -13,23 +13,36 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
   policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`.
 - `ConsentState` and its `permitsCollection` verdict.
 - The host seams: `SignalQueueStorage`, `RetentionStore`, and `SignalTransport`, along with
-  `SignalBatch`, `TransportOutcome`, `RetentionRecord`, and `PurchaseDetails`. A type conforming
-  to one of these today keeps compiling across a minor release.
+  `SignalBatch`, `TransportOutcome`, `RetentionRecord`, and `PurchaseDetails`, including
+  `PurchaseDetails.init(transaction:)` where StoreKit is available. A type conforming to one of
+  these today keeps compiling across a minor release.
+- `Signal`, its stored properties and its initializer: a custom `SignalQueueStorage` constructs
+  one on `load()`, and a custom `SignalTransport` reads one out of every `SignalBatch`.
 - `FileSignalQueueStorage` as a supplied conformance, including its default filename.
 - `PayloadKey`'s constants and `PresetSignal`'s raw values, because a dashboard is built on those
   strings and renaming one is a data outage.
-- `EnvironmentSnapshot.current()` and the parameters it produces.
-- `TelemetryDeckConfiguration`, `TelemetryDeckTransport`, and
-  `TelemetryDeckConfiguration.testPartition(for:)`.
+- `EnvironmentSnapshot`: its initializer, its stored properties, `current()` and the parameters it
+  produces, and `calendarParameters(at:calendar:)`.
+- `RunContextChannel`'s cases and raw values, which `EnvironmentSnapshot.channel` carries.
+- `TelemetryDeckConfiguration`, including `defaultBaseURL` and `ingestURL`, `TelemetryDeckTransport`,
+  and `TelemetryDeckConfiguration.testPartition(for:)`.
 
 ## What is not
 
 - Anything `internal`, including the package's own identity constants and the wire-name table's
   storage. The names it maps to are a vendor's contract, not this package's.
 - Log messages, their categories, and their format. Do not parse them.
-- The on-disk shape of the queue file and the retention record. Both are written and read by this
-  package alone; a version that changes the shape reads an old file as unreadable, purges it, and
-  keeps recording, which is the documented behaviour rather than a migration.
+- The on-disk shape of the queue file. `FileSignalQueueStorage` is written and read by this
+  package alone; an old file that fails to decode against the current `Signal` shape is purged and
+  the process keeps recording, which is the documented behaviour rather than a migration. A shape
+  change does not always trigger that — it depends on what moved — but a required field does:
+  0.3.0's `sessionID` is not optional, so a 0.2.x file throws against it and is purged.
+- The on-disk shape of the retention record beyond what `RetentionRecord`'s `Codable`
+  conformance promises. Decoding follows that conformance wherever the host's `RetentionStore`
+  persists the bytes — the protocol itself specifies no decoding, the storage is the host's.
+  `firstSessionDay` is required, every other key decodes to a default when absent, so a host
+  upgrading across a release keeps an install's acquisition date and day history. A record with no
+  `firstSessionDay` fails to decode and is treated as absent, not recovered.
 - The precise timing of a transmission. `deliveryDelay` and `backoffInterval` are the contract;
   when the task actually runs is the scheduler's business.
 - Which exact `TransportOutcome` a given HTTP status maps to, beyond the retryable-versus-permanent
@@ -62,17 +75,33 @@ what a patch promises, which is that nothing in the API list moved. This is the 
 against and missed — it removed four `PayloadKey` constants and changed a signature in the API
 list, and shipped in the patch position.
 
+0.3.0 moved a signature in the API list the same way: `Signal` gained a stored `sessionID`
+property and `SignalBatch` lost one. While the package is 0.x that earns the minor position, not
+the major one it would occupy past 1.0 — and it is exactly the exception the host-seams promise
+above trades away: a custom `SignalTransport` that read `batch.sessionID` does not keep compiling
+across this release and must move the read to `signal.sessionID`. A queue file written under
+0.2.x decodes against the old `Signal` shape and fails against the new one —
+`FileSignalQueueStorage.load()` reads it as unreadable, purges it, and the signals in it are lost.
+The field set `sdk.version` promises is unchanged: the session identifier travels as a top-level
+wire field either way, never a `PayloadKey`, so moving where it is stamped does not move the
+payload version.
+
 That distinction is what a range depends on. `from:` is `upToNextMajor`, so every 0.x release a
 host has not pinned exactly is one it will resolve into. A release that changes the API list
 cannot be reached that way without breaking a build, which is why the position it occupies is a
-promise rather than a label.
+promise rather than a label. The install snippets in README.md and ADOPTING.md pin `exact:` for
+the same reason: a 0.x minor may change the API list, and a host should take that on its own
+schedule rather than inherit it on the next resolve.
 
 Depend on a release tag. `main` is a moving target.
 
 ## Platforms and toolchain
 
 iOS 18 and macOS 15, Swift tools 6.3, language mode 6. Raising a platform floor or the tools
-version is a major release, because a host that cannot build it cannot use it.
+version is a major release, because a host that cannot build it cannot use it. macOS is a build
+and test host, not a shipping channel: `EnvironmentSnapshot` reports every macOS run as `dev`, so
+`TelemetryDeckConfiguration.testPartition(for:)` puts every macOS install in the test partition,
+and a macOS host that ships must supply `isTestMode` itself.
 
 ## Dependencies
 
