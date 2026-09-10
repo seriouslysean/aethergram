@@ -48,6 +48,16 @@ struct BackoffTests {
         #expect(configuration.backoffInterval(consecutiveFailures: 3) == 25)
     }
 
+    /// A cap below the steady interval means no growth, not a retry faster
+    /// than the interval it is meant to back off from — `batchSizeOneAlwaysSendsNow`
+    /// below is exactly this shape (a raised transmitInterval, the default cap)
+    /// and is a valid configuration, not one that should trap.
+    @Test("A maxBackoffInterval below transmitInterval floors at transmitInterval, not the cap")
+    func maxBackoffIntervalBelowTransmitIntervalFloorsAtTransmitInterval() {
+        let configuration = testConfiguration(transmitInterval: 10, maxBackoffInterval: 5)
+        #expect(configuration.backoffInterval(consecutiveFailures: 1) == 10)
+    }
+
     /// The defaults match the SDK this package replaces, so the swap does not
     /// silently change how often an install phones home.
     @Test("The shipped defaults are the ones the swap promised")

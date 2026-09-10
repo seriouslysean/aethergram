@@ -1,5 +1,6 @@
 @testable import AethergramCore
 import AethergramTestSupport
+import Foundation
 import Testing
 
 /// `batchSize`/`queueLimit` are caller configuration, not a runtime
@@ -8,7 +9,12 @@ import Testing
 /// queueLimit traps `enqueue`'s overflow eviction
 /// (`removeFirst(pending.count - queueLimit)` requests more elements than
 /// the array holds). Both fail at construction instead.
-@Suite("AethergramConfiguration")
+///
+/// Serialized: each trapping test re-execs the whole test binary, and ten of
+/// them racing the async suites elsewhere in the target crashes the runner
+/// before any test reports — a gate that cannot run looks exactly like one
+/// that passed.
+@Suite("AethergramConfiguration", .serialized)
 struct AethergramConfigurationTests {
     @Test("Positive batchSize and queueLimit construct without trapping")
     func validValuesConstruct() {
@@ -28,6 +34,68 @@ struct AethergramConfigurationTests {
     func negativeQueueLimitTraps() async {
         await #expect(processExitsWith: .failure) {
             _ = AethergramConfiguration(logSubsystem: "test", queueLimit: -1)
+        }
+    }
+
+    /// One invalid value for one interval property. `Codable & Sendable` so
+    /// the exit-test closure below can capture it across the re-exec into the
+    /// child process. `Value` carries the category rather than the `Double`
+    /// itself: the capture is serialized as JSON, which cannot represent NaN
+    /// or infinity, so the actual non-finite value is reconstructed in the
+    /// child process instead of transported into it.
+    private struct InvalidInterval: Codable, Sendable, CustomStringConvertible {
+        enum Property: String, Codable, Sendable {
+            case transmitInterval
+            case maxBackoffInterval
+        }
+
+        enum Value: String, Codable, Sendable {
+            case zero
+            case negative
+            case nan
+            case infinite
+
+            var interval: TimeInterval {
+                switch self {
+                case .zero: 0
+                case .negative: -1
+                case .nan: .nan
+                case .infinite: .infinity
+                }
+            }
+        }
+
+        let property: Property
+        let value: Value
+
+        var description: String { "\(property) = \(value)" }
+    }
+
+    /// A non-positive or NaN transmitInterval reaches the recorder as a retry
+    /// delay that is not greater than zero and hot-loops; an infinite one never
+    /// delivers. The same values on maxBackoffInterval are a contradiction of
+    /// the floor `backoffInterval` applies, or the loss of its cap.
+    @Test(
+        "A non-finite or non-positive interval traps at construction",
+        arguments: [
+            InvalidInterval(property: .transmitInterval, value: .zero),
+            InvalidInterval(property: .transmitInterval, value: .negative),
+            InvalidInterval(property: .transmitInterval, value: .nan),
+            InvalidInterval(property: .transmitInterval, value: .infinite),
+            InvalidInterval(property: .maxBackoffInterval, value: .zero),
+            InvalidInterval(property: .maxBackoffInterval, value: .negative),
+            InvalidInterval(property: .maxBackoffInterval, value: .nan),
+            InvalidInterval(property: .maxBackoffInterval, value: .infinite)
+        ]
+    )
+    private func invalidIntervalTraps(_ invalid: InvalidInterval) async {
+        await #expect(processExitsWith: .failure) { [invalid] in
+            switch invalid.property {
+            case .transmitInterval:
+                _ = AethergramConfiguration(logSubsystem: "test", transmitInterval: invalid.value.interval)
+            case .maxBackoffInterval:
+                _ = AethergramConfiguration(logSubsystem: "test", maxBackoffInterval: invalid.value.interval)
+            }
         }
     }
 }
