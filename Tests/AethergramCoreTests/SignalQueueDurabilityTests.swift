@@ -190,4 +190,42 @@ struct SignalQueueDurabilityTests {
 
         #expect(fixture.transport.sentSignalNames == ["alpha"])
     }
+
+    /// `removeItem` can fail while the file it targets is still writable — a
+    /// directory that refuses deletion but not writes to what it already
+    /// holds. `purge()` must still leave nothing to restore: a fresh store
+    /// over the same file, opened later under a new grant, must not find
+    /// signals recorded before the purge that was supposed to erase them.
+    @Test(
+        "A purge that cannot remove the file still reads back empty under a later grant",
+        .enabled(if: getuid() != 0, "root bypasses the permission that makes removal fail")
+    )
+    func purgeOverwritesWhenRemovalFailsSoDeclinedSignalsNeverReturn() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "declined.a", recordedAt: signalDate)])
+        #expect(!storage.load().isEmpty)
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        // The temp-directory trait removes this tree on teardown, which needs
+        // write access back on the directory itself.
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        storage.purge()
+
+        // Removal was refused, so the file is still there — proves the
+        // overwrite fallback ran rather than a deletion nobody blocked.
+        #expect(try Data(contentsOf: fileURL) == Data("[]".utf8))
+        let revived = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(revived.load().isEmpty)
+    }
 }
