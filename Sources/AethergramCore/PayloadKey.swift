@@ -8,9 +8,9 @@ import Foundation
 /// dashboard built against the old vendor's field names working after the
 /// transport swap.
 ///
-/// The list is deliberately short. Every field here survived the audit in
-/// `PLAN-AETHERGRAM-2026-08-30.md`: it names a decision it would change, it
-/// survives data minimisation, and its volume is proportionate. Fields the SDK
+/// The list is deliberately short. Every field here survived an audit against
+/// what a chart reads: it names a decision it would change, it survives data
+/// minimisation, and its volume is proportionate. Fields the SDK
 /// sent that no chart reads — architecture, time zone, target environment,
 /// extension identifier, colour scheme, layout direction, the six
 /// accessibility flags, and screen geometry — are not here and are not coming
