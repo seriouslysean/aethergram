@@ -163,6 +163,135 @@ struct DeliverySchedulingTests {
         #expect(transport.sentSignals.map(\.name) == ["first", "late"])
     }
 
+    /// A reset erases under the lock and leaves the drain slot for a cancel
+    /// that happens after it, so between the two a record can enqueue under
+    /// the new generation, find the slot still taken, schedule nothing, and
+    /// then have its carrier cancelled out from under it. Nothing further is
+    /// coming: the consumer's next record or flush is the only thing that
+    /// would schedule another, and an extension that resigns first never makes
+    /// one.
+    ///
+    /// The window is one lock handoff wide, so this races for it rather than
+    /// arranging it: the erase's own `clear` releases a spinning thread and
+    /// holds the lock 300ns longer, which is long enough for that thread to
+    /// be contending on the lock when the section ends and short enough that
+    /// it has not yet parked. Both halves matter — at 20µs it parks, the
+    /// erase's own thread takes the lock straight back, and the landing rate
+    /// falls from one in six to one in a hundred.
+    ///
+    /// Sixty attempts against that rate. On the unfixed code, five runs of
+    /// forty attempts landed it five times out of five, the thinnest of them
+    /// once. A run that never lands passes for the wrong reason, which is the
+    /// price of asserting a race at all; what it cannot do is fail for one.
+    @Test("A signal recorded during a reset is not left with nobody coming for it")
+    func signalRecordedDuringAResetIsStillDrained() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        for attempt in 0 ..< 60 {
+            let retention = SpyRetentionStore()
+            let fixture = makeFixture(
+                directory: directory.appendingPathComponent("attempt-\(attempt)"),
+                configuration: testConfiguration(transmitInterval: 0.05),
+                retention: retention,
+                now: steppingClock(from: start)
+            )
+            let recorder = fixture.recorder
+            let go = SpinFlag()
+            let raced = SpinFlag()
+            let recorded = Gate()
+            DispatchQueue.global().async {
+                // Nothing is recorded off a wait that timed out. That signal
+                // would land before the erase rather than after it, and the
+                // erase would take it — a correct recorder failing the
+                // assertion below for the one reason it is not about.
+                if go.waitUntilRaised(within: 5) {
+                    recorder.record("late")
+                    raced.raise()
+                }
+                recorded.open()
+            }
+            retention.duringClear = {
+                go.raise()
+                spin(nanoseconds: 300)
+            }
+
+            recorder.updateConsent(.granted)
+            // Takes the drain slot, so the record that lands mid-reset finds
+            // it occupied and schedules nothing of its own.
+            recorder.record("first")
+            recorder.reset()
+            await recorded.wait()
+            guard raced.isRaised else { continue }
+            // Delivery is the only correct outcome, not one of two. The erase
+            // is complete before the racer is released — clearing the
+            // counters is the last thing it does — so this signal is always
+            // recorded under the generation that replaced the erased one, and
+            // nothing may drop it. Asserted against the transport rather than
+            // against an empty queue file, because an erase leaves that too.
+            await waitUntil(within: 3) { fixture.transport.sentSignalNames.contains("late") }
+            withExtendedLifetime(recorder) {}
+
+            #expect(fixture.transport.sentSignalNames.contains("late"))
+        }
+    }
+
+    /// A backoff any flush can skip is not a backoff.
+    ///
+    /// `flush()` asks for a drain at zero delay, and so does a record that
+    /// fills the batch. Both happen on the consumer's own cadence — an app
+    /// extension flushes once per activation — so a zero-delay request that
+    /// preempts the wait after a failure retries a refusing endpoint as often
+    /// as the app is used, which is the thing the interval exists to stop.
+    ///
+    /// The window is the failing half of the decision the test below makes:
+    /// 300ms is far inside the two seconds the first failure buys, and far
+    /// outside the milliseconds a preempted drain takes to reach the transport.
+    @Test("A flush during a backoff does not hurry the retry")
+    func flushDuringABackoffDoesNotHurryTheRetry() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 1),
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("Game.started")
+        // The failure is what arms the backoff: one doubling out, the next
+        // attempt is owed two seconds from here.
+        await fixture.recorder.drain()
+        #expect(fixture.transport.sendCount == 1)
+
+        fixture.recorder.flush()
+        try await Task.sleep(for: .milliseconds(300))
+        // A scheduled drain holds the recorder weakly, so this local is what
+        // keeps one alive to have sent anything across the window.
+        withExtendedLifetime(fixture.recorder) {}
+
+        #expect(fixture.transport.sendCount == 1)
+    }
+
+    /// The other half of that decision, so the fix cannot be "hurry nothing":
+    /// with no retry owed, a flush still collapses the coalescing wait it
+    /// exists to collapse.
+    @Test("A flush with no retry owed still hurries the coalescing wait")
+    func flushWithNoRetryOwedStillHurriesTheWait() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        // An hour out, so nothing but the flush can deliver this.
+        fixture.recorder.record("Game.started")
+        fixture.recorder.flush()
+        await waitUntil { fixture.transport.sendCount == 1 }
+        withExtendedLifetime(fixture.recorder) {}
+
+        #expect(fixture.transport.sentSignalNames == ["Game.started"])
+    }
+
     /// A host that cannot resolve an identifier yet halts every drain before
     /// the claim, and the restart keys on a queue that is not empty — which
     /// stays true for as long as the identifier is missing. Counting the halt
@@ -324,4 +453,45 @@ private func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable
     while !condition(), Date() < deadline {
         try? await Task.sleep(for: .milliseconds(5))
     }
+}
+
+// MARK: - Racing one lock handoff
+
+/// A flag two threads spin on rather than park on.
+///
+/// Parking is what the reset race cannot afford: a thread the kernel has to
+/// wake reaches the lock long after the handoff it is aiming at. A spin costs
+/// a core for microseconds and puts the racer on the lock while the section it
+/// is racing is still running.
+private final class SpinFlag: @unchecked Sendable {
+    var isRaised: Bool {
+        lock.withLock { raised }
+    }
+
+    func raise() {
+        lock.withLock { raised = true }
+    }
+
+    /// Whether the flag was seen, rather than the deadline reached. The
+    /// difference decides whether an attempt raced anything at all: work done
+    /// after a wait that timed out lands wherever it lands, which for this
+    /// test is before the erase rather than after it.
+    func waitUntilRaised(within seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if lock.withLock({ raised }) { return true }
+        }
+        return lock.withLock { raised }
+    }
+
+    private let lock = NSLock()
+    private var raised = false
+}
+
+/// Burns the current thread for `nanoseconds` without yielding it. Used inside
+/// a lock section, where a sleep would park the racer waiting on that lock
+/// alongside this thread.
+private func spin(nanoseconds: UInt64) {
+    let deadline = DispatchTime.now().uptimeNanoseconds + nanoseconds
+    while DispatchTime.now().uptimeNanoseconds < deadline {}
 }

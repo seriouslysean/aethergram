@@ -59,20 +59,20 @@ public final class SignalRecorder: Sendable {
     /// batch — because a toggle that leaves yesterday's signals on disk to be
     /// sent later is not an off switch.
     public func updateConsent(_ state: ConsentState) {
-        let erase: Bool = lock.withLock { current in
+        let erased: (happened: Bool, drain: Task<Void, Never>?) = lock.withLock { current in
             current.consent = state
             guard !state.permitsCollection else {
                 Self.openSessionIfNeeded(&current)
-                return false
+                return (false, nil)
             }
             eraseCollected(&current)
-            return true
+            return (true, Self.detachOwnedDrain(&current))
         }
-        guard erase else {
+        guard erased.happened else {
             logger.info("consent granted")
             return
         }
-        cancelOwnedDrain()
+        erased.drain?.cancel()
         awaitErasure()
         logger.info("consent withheld state=\(state.rawValue, privacy: .public) queue purged")
     }
@@ -166,13 +166,14 @@ public final class SignalRecorder: Sendable {
     /// data-reset path: this is what makes the retention counters clearable,
     /// which the SDK this replaces offered no way to do.
     public func reset() {
-        lock.withLock { current in
+        let detached: Task<Void, Never>? = lock.withLock { current in
             eraseCollected(&current)
             // A reset leaves consent alone, so the gate stays open and the next
             // batch needs a session the erased one cannot be mistaken for.
             Self.openSessionIfNeeded(&current)
+            return Self.detachOwnedDrain(&current)
         }
-        cancelOwnedDrain()
+        detached?.cancel()
         awaitErasure()
         logger.info("reset ok")
     }
@@ -248,6 +249,16 @@ public final class SignalRecorder: Sendable {
         /// a task holds is never the one a later task was given.
         var lastDrainID = 0
         var consecutiveFailures = 0
+        /// When the next attempt is owed, after a failure. Tracked apart from
+        /// the coalescing delay because the two answer different questions: a
+        /// delay says how long a batch may wait for company, and this says how
+        /// long the endpoint gets before it is asked again. A zero-delay
+        /// request may collapse the first and never the second.
+        ///
+        /// Continuous rather than the injected clock: it is compared against
+        /// the sleep a drain actually serves, which is `Task.sleep`'s, and a
+        /// wall clock that jumps would move a deadline that did not.
+        var retryNotBefore: ContinuousClock.Instant?
         var sessionID = ""
         /// The start this instance stamped on the session it opened, so a
         /// repeat `beginSession()` in the same activation can be told apart
@@ -284,6 +295,7 @@ public final class SignalRecorder: Sendable {
             retentionLoaded = false
             queueRestored = true
             consecutiveFailures = 0
+            retryNotBefore = nil
             openedSessionAt = nil
             sessionID = ""
             environment = nil
@@ -422,7 +434,13 @@ public final class SignalRecorder: Sendable {
                 // Counted as a failure so the capped backoff damps the retry:
                 // a host that never resolves an identifier would otherwise be
                 // woken at the steady interval for the life of the process.
+                // Owed like any other failure, or a flush would ask the host
+                // for an identifier it has already said it does not have, as
+                // often as the consumer flushes.
                 current.consecutiveFailures += 1
+                Self.oweRetry(&current, after: configuration.backoffInterval(
+                    consecutiveFailures: current.consecutiveFailures
+                ))
                 logger.error("drain halt reason=no-client-user")
                 return nil
             }
@@ -458,10 +476,14 @@ public final class SignalRecorder: Sendable {
                 let evictedSinceClaim = current.evictedFromFront &- evicted
                 current.pending.removeFirst(max(0, sent.count - evictedSinceClaim))
                 current.consecutiveFailures = 0
+                current.retryNotBefore = nil
                 writer.persist(current.pending)
                 return !current.pending.isEmpty
             case .retryable:
                 current.consecutiveFailures += 1
+                Self.oweRetry(&current, after: configuration.backoffInterval(
+                    consecutiveFailures: current.consecutiveFailures
+                ))
                 return false
             }
         }
@@ -532,6 +554,11 @@ public final class SignalRecorder: Sendable {
     /// replaced. A running drain always stands, because delivery is already
     /// happening and a second task would duplicate the batch.
     ///
+    /// What a zero delay cannot do is skip a retry the last failure owes. A
+    /// flush and a full batch both ask for one, and both happen on the
+    /// consumer's cadence rather than the endpoint's, so a backoff any of them
+    /// could collapse would only damp a queue nobody was recording into.
+    ///
     /// Cancellation is deliberate and safe: a cancelled send throws through
     /// `URLSession` as a retryable failure, so the batch stays queued and on
     /// disk. That is the same guarantee the durable queue gives when the OS
@@ -542,21 +569,36 @@ public final class SignalRecorder: Sendable {
         // half-state and there is no late "still ours?" assignment to guard.
         let preempted: Task<Void, Never>? = lock.withLock { current in
             guard current.consent.permitsCollection else { return nil }
+            let due = max(delay, Self.secondsOwed(current.retryNotBefore))
             switch current.drain {
             case .running:
                 return nil
             case let .waiting(existing):
-                guard delay == 0 else { return nil }
+                guard due == 0 else { return nil }
                 let owned = makeOwnedDrain(&current, after: 0)
                 current.drain = .running(owned)
                 return existing.task
             case .idle:
-                let owned = makeOwnedDrain(&current, after: delay)
-                current.drain = delay > 0 ? .waiting(owned) : .running(owned)
+                let owned = makeOwnedDrain(&current, after: due)
+                current.drain = due > 0 ? .waiting(owned) : .running(owned)
                 return nil
             }
         }
         preempted?.cancel()
+    }
+
+    /// Records what the next attempt owes the endpoint. Call from inside the
+    /// lock.
+    private static func oweRetry(_ state: inout State, after interval: TimeInterval) {
+        state.retryNotBefore = ContinuousClock.now.advanced(by: .seconds(interval))
+    }
+
+    /// Seconds still owed, and zero once the deadline is served or was never
+    /// set — so the caller can take the later of it and its own delay.
+    private static func secondsOwed(_ deadline: ContinuousClock.Instant?) -> TimeInterval {
+        guard let deadline else { return 0 }
+        let remaining = ContinuousClock.now.duration(to: deadline).components
+        return max(0, Double(remaining.seconds) + Double(remaining.attoseconds) * 1e-18)
     }
 
     /// Mints the identifier and the task together, so a task always knows the
@@ -622,12 +664,20 @@ public final class SignalRecorder: Sendable {
         }
     }
 
-    private func cancelOwnedDrain() {
-        let task: Task<Void, Never>? = lock.withLock { current in
-            let owned = current.drain.owned
-            current.drain = .idle
-            return owned?.task
-        }
-        task?.cancel()
+    /// Gives the slot up and hands the task back to be cancelled outside the
+    /// lock. Call from inside the erase that supersedes it.
+    ///
+    /// Both halves of that matter. Releasing the slot in the same section as
+    /// the erase is what lets a record landing immediately after schedule a
+    /// drain of its own: a slot still held across that seam takes the record's
+    /// schedule — `startDrain` stands down for a drain already owned — and the
+    /// cancel that follows then takes the drain it stood down for, leaving a
+    /// signal queued with nothing coming for it. And the cancel stays outside,
+    /// because cancelling under the lock would run a cancellation handler on
+    /// this thread with the lock held.
+    private static func detachOwnedDrain(_ state: inout State) -> Task<Void, Never>? {
+        let owned = state.drain.owned
+        state.drain = .idle
+        return owned?.task
     }
 }

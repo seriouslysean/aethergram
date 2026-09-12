@@ -339,6 +339,16 @@ final class SpyRetentionStore: RetentionStore, @unchecked Sendable {
 
     // MARK: Internal
 
+    /// Run once, inside the `clear` an erase performs — which the recorder
+    /// performs inside its own lock. That makes this the only seam a test has
+    /// into an erase already in progress, and the work here must not call back
+    /// into the recorder: the lock is not recursive, so this thread would
+    /// deadlock rather than race. Release another thread instead.
+    var duringClear: (@Sendable () -> Void)? {
+        get { lock.withLock { clearWork } }
+        set { lock.withLock { clearWork = newValue } }
+    }
+
     var record: RetentionRecord? {
         lock.withLock { stored }
     }
@@ -370,10 +380,14 @@ final class SpyRetentionStore: RetentionStore, @unchecked Sendable {
     }
 
     func clear() {
-        lock.withLock {
+        let pending: (@Sendable () -> Void)? = lock.withLock {
             stored = nil
             clearCalls += 1
+            let next = clearWork
+            clearWork = nil
+            return next
         }
+        pending?()
     }
 
     // MARK: Private
@@ -383,6 +397,7 @@ final class SpyRetentionStore: RetentionStore, @unchecked Sendable {
     private var saveCalls: [RetentionRecord] = []
     private var clearCalls = 0
     private var loadCalls = 0
+    private var clearWork: (@Sendable () -> Void)?
 }
 
 /// Queue storage whose `purge()` deliberately does nothing while `load()` keeps

@@ -32,11 +32,20 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
 - Anything `internal`, including the package's own identity constants and the wire-name table's
   storage. The names it maps to are a vendor's contract, not this package's.
 - Log messages, their categories, and their format. Do not parse them.
-- The on-disk shape of the queue file. `FileSignalQueueStorage` is written and read by this
-  package alone; an old file that fails to decode against the current `Signal` shape is purged and
-  the process keeps recording, which is the documented behaviour rather than a migration. A shape
-  change does not always trigger that — it depends on what moved — but a required field does:
-  0.3.0's `sessionID` is not optional, so a 0.2.x file throws against it and is purged.
+- The on-disk shape of the queue file, and anything else the store writes beside it.
+  `FileSignalQueueStorage` is written and read by this package alone; an old file that fails to
+  decode against the current `Signal` shape is purged and the process keeps recording, which is the
+  documented behaviour rather than a migration. A shape change does not always trigger that — it
+  depends on what moved — but a required field does: 0.3.0's `sessionID` is not optional, so a
+  0.2.x file throws against it and is purged.
+
+  A file that cannot be *read* is the opposite answer, because a read fails for reasons the queue
+  is not responsible for — a protected file while the device is locked, a container briefly out of
+  reach. It is left where it is, and writes over it stop until an erase or a process that can read
+  it settles what it holds: the queue keeps transmitting from memory in the meantime, and loses
+  only its durability against a kill. A purge that can neither delete nor overwrite the file leaves
+  an empty marker file beside it, which every later read takes as "restore nothing" until the
+  delete lands. Both the marker's name and its existence are implementation detail.
 - The on-disk shape of the retention record beyond what `RetentionRecord`'s `Codable`
   conformance promises. Decoding follows that conformance wherever the host's `RetentionStore`
   persists the bytes — the protocol itself specifies no decoding, the storage is the host's.
@@ -81,10 +90,16 @@ the major one it would occupy past 1.0 — and it is exactly the exception the h
 above trades away: a custom `SignalTransport` that read `batch.sessionID` does not keep compiling
 across this release and must move the read to `signal.sessionID`. A queue file written under
 0.2.x decodes against the old `Signal` shape and fails against the new one —
-`FileSignalQueueStorage.load()` reads it as unreadable, purges it, and the signals in it are lost.
-The field set `sdk.version` promises is unchanged: the session identifier travels as a top-level
-wire field either way, never a `PayloadKey`, so moving where it is stamped does not move the
-payload version.
+`FileSignalQueueStorage.load()` reads the bytes and cannot decode them, purges the file, and the
+signals in it are lost. The field set `sdk.version` promises is unchanged: the session identifier
+travels as a top-level wire field either way, never a `PayloadKey`, so moving where it is stamped
+does not move the payload version.
+
+0.3.1 is the patch that rule describes: nothing in the API list moved and no field changed, so the
+payload version stands still too. What moved is behaviour the contract already leaves open — a
+zero-delay request no longer skips the interval a failure earns, which is `backoffInterval` being
+honoured rather than redefined, and a queue file that cannot be decoded is told apart from one
+that merely cannot be read.
 
 That distinction is what a range depends on. `from:` is `upToNextMajor`, so every 0.x release a
 host has not pinned exactly is one it will resolve into. A release that changes the API list
