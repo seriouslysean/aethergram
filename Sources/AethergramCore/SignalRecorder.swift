@@ -59,20 +59,20 @@ public final class SignalRecorder: Sendable {
     /// batch — because a toggle that leaves yesterday's signals on disk to be
     /// sent later is not an off switch.
     public func updateConsent(_ state: ConsentState) {
-        let erase: Bool = lock.withLock { current in
+        let erased: (happened: Bool, drain: Task<Void, Never>?) = lock.withLock { current in
             current.consent = state
             guard !state.permitsCollection else {
                 Self.openSessionIfNeeded(&current)
-                return false
+                return (false, nil)
             }
             eraseCollected(&current)
-            return true
+            return (true, Self.detachOwnedDrain(&current))
         }
-        guard erase else {
+        guard erased.happened else {
             logger.info("consent granted")
             return
         }
-        cancelOwnedDrain()
+        erased.drain?.cancel()
         awaitErasure()
         logger.info("consent withheld state=\(state.rawValue, privacy: .public) queue purged")
     }
@@ -166,13 +166,14 @@ public final class SignalRecorder: Sendable {
     /// data-reset path: this is what makes the retention counters clearable,
     /// which the SDK this replaces offered no way to do.
     public func reset() {
-        lock.withLock { current in
+        let detached: Task<Void, Never>? = lock.withLock { current in
             eraseCollected(&current)
             // A reset leaves consent alone, so the gate stays open and the next
             // batch needs a session the erased one cannot be mistaken for.
             Self.openSessionIfNeeded(&current)
+            return Self.detachOwnedDrain(&current)
         }
-        cancelOwnedDrain()
+        detached?.cancel()
         awaitErasure()
         logger.info("reset ok")
     }
@@ -663,12 +664,20 @@ public final class SignalRecorder: Sendable {
         }
     }
 
-    private func cancelOwnedDrain() {
-        let task: Task<Void, Never>? = lock.withLock { current in
-            let owned = current.drain.owned
-            current.drain = .idle
-            return owned?.task
-        }
-        task?.cancel()
+    /// Gives the slot up and hands the task back to be cancelled outside the
+    /// lock. Call from inside the erase that supersedes it.
+    ///
+    /// Both halves of that matter. Releasing the slot in the same section as
+    /// the erase is what lets a record landing immediately after schedule a
+    /// drain of its own: a slot still held across that seam takes the record's
+    /// schedule — `startDrain` stands down for a drain already owned — and the
+    /// cancel that follows then takes the drain it stood down for, leaving a
+    /// signal queued with nothing coming for it. And the cancel stays outside,
+    /// because cancelling under the lock would run a cancellation handler on
+    /// this thread with the lock held.
+    private static func detachOwnedDrain(_ state: inout State) -> Task<Void, Never>? {
+        let owned = state.drain.owned
+        state.drain = .idle
+        return owned?.task
     }
 }
