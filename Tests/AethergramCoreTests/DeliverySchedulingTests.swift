@@ -214,13 +214,16 @@ struct DeliverySchedulingTests {
             recorder.record("first")
             recorder.reset()
             await recorded.wait()
-            // Delivered, or erased by the reset it raced. Left on disk is the
-            // third outcome, and the only wrong one: a signal the recorder
-            // still holds with no drain scheduled for it.
-            await waitUntil(within: 3) { fixture.storage.signalsOnDisk.isEmpty }
+            // Delivery is the only correct outcome, not one of two. The erase
+            // is complete before the racer is released — clearing the
+            // counters is the last thing it does — so this signal is always
+            // recorded under the generation that replaced the erased one, and
+            // nothing may drop it. Asserted against the transport rather than
+            // against an empty queue file, because an erase leaves that too.
+            await waitUntil(within: 3) { fixture.transport.sentSignalNames.contains("late") }
             withExtendedLifetime(recorder) {}
 
-            #expect(fixture.storage.signalsOnDisk.isEmpty)
+            #expect(fixture.transport.sentSignalNames.contains("late"))
         }
     }
 
