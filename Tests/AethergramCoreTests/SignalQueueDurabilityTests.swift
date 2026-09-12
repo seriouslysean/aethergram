@@ -412,4 +412,65 @@ struct SignalQueueDurabilityTests {
         let revived = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
         #expect(revived.load().isEmpty)
     }
+
+    /// A read that failed is not a queue that is wrong, and the two arrive at
+    /// the same `catch`. A file that cannot be decoded will never decode, so
+    /// dropping it is the only way forward; a file that cannot be read *now* —
+    /// a protected file while the device is locked, a container the process
+    /// cannot reach for a moment — is a queue that is still good, and purging
+    /// it destroys signals nothing was ever wrong with.
+    ///
+    /// The write that follows is the other half. The queue this instance
+    /// handed back does not hold what it could not read, so persisting it over
+    /// the file would finish what the purge was stopped from doing.
+    @Test(
+        "A queue file that cannot be read survives the load and the write after it",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func unreadableQueueFileIsPreservedRatherThanPurged() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+        #expect(!storage.load().isEmpty)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        #expect(storage.load().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(readable.load().map(\.name) == ["pending.a"])
+    }
+
+    /// An erase outranks the read failure that suspended the writes: a decline
+    /// has to reach the file whether or not this instance could read it, and
+    /// the writes have to resume for whatever the next grant records.
+    @Test(
+        "An erase after an unreadable read still purges, and writing resumes",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func purgeAfterAnUnreadableReadClearsTheBlock() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        #expect(storage.load().isEmpty)
+
+        storage.purge()
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+        #expect(storage.load().map(\.name) == ["later.b"])
+    }
 }
