@@ -106,18 +106,35 @@ Three things about the order around it, because none of them are the package's t
 alone, so the gate is open on either side of it and a signal recorded a microsecond later is a
 legitimate signal. If the reset also rotates your analytics identifier, that signal can leave under
 the identifier you are rotating away from, which is the linkage the rotation exists to break. Shut
-the gate, do both halves, then put the answer back:
+the gate, do both halves, then read the answer again and restore it:
 
 ```swift
-let answer = myStoredConsentAnswer          // .granted, .declined, or .neverAsked
-recorder.updateConsent(.declined)           // shuts the gate and erases, in one call
-rotateMyAnalyticsIdentifier()               // nothing can transmit under either identifier here
-recorder.updateConsent(answer)
+myConsentLock.withLock {                    // the same lock your consent writes take
+    recorder.updateConsent(.declined)       // shuts the gate and erases, in one call
+    rotateMyAnalyticsIdentifier()           // nothing recorded from here can carry the old one
+    recorder.updateConsent(myStoredConsentAnswer)
+}
 ```
 
 `updateConsent(.declined)` erases exactly what `reset()` erases, so that sequence replaces the
 `reset()` call rather than joining it. A signal recorded inside the window is dropped rather than
 misattributed, which is what a reset should do with it.
+
+Read the answer back at the end rather than capturing it at the start, and take the whole sequence
+under the lock the last of these three points describes. A decline arriving mid-reset — the user's
+own, or one adopted from another device — is otherwise overwritten by the grant the reset captured
+before it, which turns collection back on for someone who has just turned it off.
+
+That lock is yours and the recorder knows nothing about it, so keep it out of the closures you
+hand over: `clientUserProvider`, `environmentProvider`, and every `RetentionStore` and
+`SignalQueueStorage` call run inside the recorder's own lock, and one of them taking a lock that a
+caller holds while calling in is the two orders that deadlock.
+
+What shutting the gate cannot do is recall a request already handed to the transport. That request
+carries the batch it claimed before the erase, under the identifier resolved for it, which is the
+correct attribution for signals recorded before the reset; nothing recorded after it can join that
+batch. If your reset has to complete with no request outstanding at all, that is a property of your
+own network stack rather than something the package promises.
 
 **Reopen the counted session.** The erase takes the retention record with it and the package opens
 no session on its own, so until the next `beginSession()` every signal goes out with no acquisition
