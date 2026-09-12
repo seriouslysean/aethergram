@@ -536,4 +536,108 @@ struct SignalQueueDurabilityTests {
         storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
         #expect(storage.load().map(\.name) == ["later.b"])
     }
+
+    /// The mark is best effort too — the same refusal that stops the delete and
+    /// the overwrite stops a sibling file from being created — so it cannot be
+    /// the whole answer. The store that was told to erase has to refuse the
+    /// restore itself for as long as it lives, which is the half that needs no
+    /// filesystem.
+    @Test(
+        "A purge that cannot even leave a mark still restores nothing through the store that tried",
+        .enabled(if: getuid() != 0, "root writes where the permissions refuse everyone")
+    )
+    func purgeThatCannotEvenMarkRestoresNothingThroughTheSameStore() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "declined.a", sessionID: "declined-session", recordedAt: signalDate)])
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        // Read-only file inside a read-only directory: the delete is refused by
+        // the directory, the overwrite by the file, and a new sibling by the
+        // directory again.
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: fileURL.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        storage.purge()
+
+        // The fixture is the failure it claims: the queue is still on disk and
+        // nothing was written beside it.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            == ["aethergram-signal-queue.json"])
+        #expect(try !JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).isEmpty)
+
+        #expect(storage.load().isEmpty)
+    }
+
+    /// A directory the process cannot reach answers the question "is there a
+    /// queue file" with a no, which is the same answer as an empty container
+    /// and means the opposite thing. Asking the read instead is what tells
+    /// them apart, because only one of them comes back as a refusal.
+    @Test(
+        "A queue behind a directory that cannot be reached is not read as absent",
+        .enabled(if: getuid() != 0, "root reaches a directory whose permissions refuse everyone")
+    )
+    func queueBehindAnUnreachableDirectoryIsNotReadAsAbsent() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        #expect(storage.load().isEmpty)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: originalPermissions],
+            ofItemAtPath: directory.path
+        )
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+
+        let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(readable.load().map(\.name) == ["pending.a"])
+    }
+
+    /// Suspending the writes is a state, not a verdict. A store that reads the
+    /// file successfully afterwards knows what is there, so the reason to hold
+    /// the writes off it is gone — and left standing it would cost the process
+    /// every write it had left.
+    @Test(
+        "A read that succeeds later lifts the suspension the failed one left",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func successfulReadLiftsTheSuspension() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        #expect(storage.load().isEmpty)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        #expect(storage.load().map(\.name) == ["pending.a"])
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+        let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(readable.load().map(\.name) == ["later.b"])
+    }
 }
