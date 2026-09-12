@@ -51,6 +51,15 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     // MARK: Public
 
     public func load() -> [Signal] {
+        // A purge that reached neither the delete nor the overwrite leaves
+        // this behind, and it outlives the process that wrote it. Until the
+        // delete lands, what is in the file was collected under an answer
+        // that has since been withdrawn, and restoring it is the one thing
+        // this store must never do.
+        guard !FileManager.default.fileExists(atPath: erasureURL.path) else {
+            purge()
+            return []
+        }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
         let data: Data
         do {
@@ -100,6 +109,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             )
             let data = try JSONEncoder().encode(signals)
             try data.write(to: fileURL, options: [.atomic])
+            // Whatever an earlier purge could not reach is gone: this write
+            // replaced it. The mark goes with it, or the next load would
+            // purge a queue that is ours.
+            settleErasure()
             logger.debug("queue persist ok count=\(signals.count)")
         } catch {
             logger.error("queue persist fail \(error.localizedDescription, privacy: .public)")
@@ -111,11 +124,39 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // whether or not its contents were ever known, and the writes resume
         // for whatever is recorded next.
         defer { unread.clear() }
+        guard emptyTheQueueFile() else {
+            // Nothing this store can do reaches those bytes. What it can do is
+            // leave the fact beside them, durably: this process refusing to
+            // re-read the file ends when the process does, and the next one
+            // would restore a declined-era queue under a later grant.
+            requireErasure()
+            return
+        }
+        settleErasure()
+    }
+
+    // MARK: Private
+
+    private let fileURL: URL
+    private let logger: Logger
+    private let unread = UnreadQueueFile()
+
+    /// Sibling of the queue file, because what failed is every write to the
+    /// queue file itself. Its presence is the whole message; it has no
+    /// contents.
+    private var erasureURL: URL {
+        fileURL.appendingPathExtension("erase-required")
+    }
+
+    /// Whether the queue file holds nothing by the time this returns.
+    private func emptyTheQueueFile() -> Bool {
         do {
             try FileManager.default.removeItem(at: fileURL)
             logger.info("queue purge ok")
+            return true
         } catch let error as NSError where error.code == NSFileNoSuchFileError {
             // Nothing persisted yet. Purging is still the right postcondition.
+            return true
         } catch {
             // Removal can fail on a directory that refuses it while the file
             // itself still accepts writes. Overwriting in place reaches the
@@ -125,17 +166,36 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             do {
                 try Data("[]".utf8).write(to: fileURL)
                 logger.info("queue purge ok via overwrite")
+                return true
             } catch {
                 logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+                return false
             }
         }
     }
 
-    // MARK: Private
+    private func requireErasure() {
+        do {
+            try Data().write(to: erasureURL)
+            logger.error("queue purge unreachable, erasure marked")
+        } catch {
+            logger.error("queue erasure mark fail \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
-    private let fileURL: URL
-    private let logger: Logger
-    private let unread = UnreadQueueFile()
+    /// Takes the mark off. A debt rather than a tombstone: left standing it
+    /// would end restoration for this directory permanently.
+    private func settleErasure() {
+        // Asked before it is done, because the ordinary case is that nothing
+        // was ever marked and this runs on every write: a stat costs less than
+        // an error to throw away.
+        guard FileManager.default.fileExists(atPath: erasureURL.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: erasureURL)
+        } catch {
+            logger.error("queue erasure mark clear fail \(error.localizedDescription, privacy: .public)")
+        }
+    }
 }
 
 /// Whether this store left a queue on disk it could not read.
