@@ -197,10 +197,17 @@ struct DeliverySchedulingTests {
             )
             let recorder = fixture.recorder
             let go = SpinFlag()
+            let raced = SpinFlag()
             let recorded = Gate()
             DispatchQueue.global().async {
-                go.waitUntilRaised(within: 5)
-                recorder.record("late")
+                // Nothing is recorded off a wait that timed out. That signal
+                // would land before the erase rather than after it, and the
+                // erase would take it — a correct recorder failing the
+                // assertion below for the one reason it is not about.
+                if go.waitUntilRaised(within: 5) {
+                    recorder.record("late")
+                    raced.raise()
+                }
                 recorded.open()
             }
             retention.duringClear = {
@@ -214,6 +221,7 @@ struct DeliverySchedulingTests {
             recorder.record("first")
             recorder.reset()
             await recorded.wait()
+            guard raced.isRaised else { continue }
             // Delivery is the only correct outcome, not one of two. The erase
             // is complete before the racer is released — clearing the
             // counters is the last thing it does — so this signal is always
@@ -456,13 +464,24 @@ private func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable
 /// a core for microseconds and puts the racer on the lock while the section it
 /// is racing is still running.
 private final class SpinFlag: @unchecked Sendable {
+    var isRaised: Bool {
+        lock.withLock { raised }
+    }
+
     func raise() {
         lock.withLock { raised = true }
     }
 
-    func waitUntilRaised(within seconds: TimeInterval) {
+    /// Whether the flag was seen, rather than the deadline reached. The
+    /// difference decides whether an attempt raced anything at all: work done
+    /// after a wait that timed out lands wherever it lands, which for this
+    /// test is before the erase rather than after it.
+    func waitUntilRaised(within seconds: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
-        while !lock.withLock({ raised }), Date() < deadline {}
+        while Date() < deadline {
+            if lock.withLock({ raised }) { return true }
+        }
+        return lock.withLock { raised }
     }
 
     private let lock = NSLock()

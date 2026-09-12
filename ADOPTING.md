@@ -95,10 +95,17 @@ join with anything.
 
 ## Phase 5: wire the data reset
 
-`reset()` erases everything the package persists: the pending queue, the file behind it, and the
+`reset()` erases what the package persists: the pending queue, the file behind it, and the
 retention counters. Wire it into whatever your app calls a data reset — that is the point of the
 `RetentionStore` seam, since counters kept somewhere a reset cannot reach mean a user who erased
 their data kept a retention history.
+
+Erasing the file is best effort against a filesystem that can refuse it, and SECURITY.md says what
+that leaves. In short: a store that could not delete its file refuses to read it again for as long
+as it lives, and a mark beside the file carries that refusal into later processes — but where the
+delete, the overwrite and the mark are all refused, the bytes are still there and the refusal ends
+with the process. Do not describe your reset to a user as physical deletion of the queue; what it
+reliably ends is the collection, the counters, and anything that would have been sent.
 
 Three things about the order around it, because none of them are the package's to do for you.
 
