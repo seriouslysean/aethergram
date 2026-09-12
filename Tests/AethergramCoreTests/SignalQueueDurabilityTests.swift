@@ -450,6 +450,69 @@ struct SignalQueueDurabilityTests {
         #expect(readable.load().map(\.name) == ["pending.a"])
     }
 
+    /// The one purge failure the overwrite fallback cannot reach: a file the
+    /// filesystem refuses to delete *and* to write over. The bytes stay, and
+    /// the recorder's refusal to re-read them lasts exactly as long as its own
+    /// process — so the next one, under a later grant, restores signals a
+    /// decline was supposed to have ended. SECURITY.md names that outcome in
+    /// scope, so what the store cannot delete it has to leave marked.
+    @Test(
+        "A purge that can neither delete nor overwrite still restores nothing later",
+        .enabled(if: getuid() != 0, "root writes a file the immutable flag refuses")
+    )
+    func purgeThatCannotTouchTheFileStillRestoresNothing() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "declined.a", sessionID: "declined-session", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: fileURL.path)
+        }
+
+        storage.purge()
+
+        // The fixture has to be the failure it claims. Both halves were
+        // refused, so the declined signals are still in the file — otherwise
+        // this passes for the ordinary reason and proves nothing.
+        #expect(try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).count == 1)
+
+        // A fresh store is the next process, opened under a later grant.
+        let reborn = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(reborn.load().isEmpty)
+    }
+
+    /// The mark is a debt, not a tombstone: it has to come off the moment the
+    /// delete it stands in for lands, or the first unremovable file a store
+    /// ever meets would end restoration for that directory forever.
+    @Test(
+        "A mark left by a failed purge is settled by the delete that follows",
+        .enabled(if: getuid() != 0, "root writes a file the immutable flag refuses")
+    )
+    func markLeftByAFailedPurgeIsSettledByTheNextDelete() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "declined.a", sessionID: "declined-session", recordedAt: signalDate)])
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: fileURL.path)
+        storage.purge()
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: fileURL.path)
+
+        let reborn = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(reborn.load().isEmpty)
+        // Nothing at all left behind, named without naming a file the store
+        // does not promise: the declined queue and the mark both went.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+
+        // And the directory is usable again rather than poisoned.
+        reborn.persist([Signal(name: "granted.b", sessionID: "granted-session", recordedAt: signalDate)])
+        let next = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(next.load().map(\.name) == ["granted.b"])
+    }
+
     /// An erase outranks the read failure that suspended the writes: a decline
     /// has to reach the file whether or not this instance could read it, and
     /// the writes have to resume for whatever the next grant records.
