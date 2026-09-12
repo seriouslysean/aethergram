@@ -163,6 +163,63 @@ struct DeliverySchedulingTests {
         #expect(transport.sentSignals.map(\.name) == ["first", "late"])
     }
 
+    /// A backoff any flush can skip is not a backoff.
+    ///
+    /// `flush()` asks for a drain at zero delay, and so does a record that
+    /// fills the batch. Both happen on the consumer's own cadence — an app
+    /// extension flushes once per activation — so a zero-delay request that
+    /// preempts the wait after a failure retries a refusing endpoint as often
+    /// as the app is used, which is the thing the interval exists to stop.
+    ///
+    /// The window is the failing half of the decision the test below makes:
+    /// 300ms is far inside the two seconds the first failure buys, and far
+    /// outside the milliseconds a preempted drain takes to reach the transport.
+    @Test("A flush during a backoff does not hurry the retry")
+    func flushDuringABackoffDoesNotHurryTheRetry() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 1),
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("Game.started")
+        // The failure is what arms the backoff: one doubling out, the next
+        // attempt is owed two seconds from here.
+        await fixture.recorder.drain()
+        #expect(fixture.transport.sendCount == 1)
+
+        fixture.recorder.flush()
+        try await Task.sleep(for: .milliseconds(300))
+        // A scheduled drain holds the recorder weakly, so this local is what
+        // keeps one alive to have sent anything across the window.
+        withExtendedLifetime(fixture.recorder) {}
+
+        #expect(fixture.transport.sendCount == 1)
+    }
+
+    /// The other half of that decision, so the fix cannot be "hurry nothing":
+    /// with no retry owed, a flush still collapses the coalescing wait it
+    /// exists to collapse.
+    @Test("A flush with no retry owed still hurries the coalescing wait")
+    func flushWithNoRetryOwedStillHurriesTheWait() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        // An hour out, so nothing but the flush can deliver this.
+        fixture.recorder.record("Game.started")
+        fixture.recorder.flush()
+        await waitUntil { fixture.transport.sendCount == 1 }
+        withExtendedLifetime(fixture.recorder) {}
+
+        #expect(fixture.transport.sentSignalNames == ["Game.started"])
+    }
+
     /// A host that cannot resolve an identifier yet halts every drain before
     /// the claim, and the restart keys on a queue that is not empty — which
     /// stays true for as long as the identifier is missing. Counting the halt
