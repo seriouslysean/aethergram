@@ -129,6 +129,22 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     }
 
     private func persistLocked(_ signals: [Signal]) {
+        // An unfinished erase is a prerequisite rather than a state to write
+        // alongside. Finishing it first is what stops a queue of ours from
+        // sitting under a mark that the next load would purge it for.
+        //
+        // Ahead of the unread guard because an erase outranks an unread queue
+        // everywhere else here too — `purgeLocked` drops the suspension, and
+        // `loadLocked` asks this question first. Nothing currently reaches
+        // this line with both true, and ordering it this way is what keeps
+        // that from being a fact the next change has to know.
+        if isErasureOutstanding {
+            purgeLocked()
+            guard !isErasureOutstanding else {
+                logger.error("queue persist skip reason=erasure-outstanding")
+                return
+            }
+        }
         // Ahead of the empty case on purpose: an empty queue reaches here as a
         // purge, and a purge is exactly what an unread file must not get. What
         // this costs is durability for as long as the read keeps failing — the
@@ -138,16 +154,6 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         guard !file.isUnread else {
             logger.error("queue persist skip reason=unread-queue-on-disk")
             return
-        }
-        // An unfinished erase is a prerequisite rather than a state to write
-        // alongside. Finishing it first is what stops a queue of ours from
-        // sitting under a mark that the next load would purge it for.
-        if isErasureOutstanding {
-            purgeLocked()
-            guard !isErasureOutstanding else {
-                logger.error("queue persist skip reason=erasure-outstanding")
-                return
-            }
         }
         guard !signals.isEmpty else {
             purgeLocked()
