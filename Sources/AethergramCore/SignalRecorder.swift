@@ -248,6 +248,16 @@ public final class SignalRecorder: Sendable {
         /// a task holds is never the one a later task was given.
         var lastDrainID = 0
         var consecutiveFailures = 0
+        /// When the next attempt is owed, after a failure. Tracked apart from
+        /// the coalescing delay because the two answer different questions: a
+        /// delay says how long a batch may wait for company, and this says how
+        /// long the endpoint gets before it is asked again. A zero-delay
+        /// request may collapse the first and never the second.
+        ///
+        /// Continuous rather than the injected clock: it is compared against
+        /// the sleep a drain actually serves, which is `Task.sleep`'s, and a
+        /// wall clock that jumps would move a deadline that did not.
+        var retryNotBefore: ContinuousClock.Instant?
         var sessionID = ""
         /// The start this instance stamped on the session it opened, so a
         /// repeat `beginSession()` in the same activation can be told apart
@@ -284,6 +294,7 @@ public final class SignalRecorder: Sendable {
             retentionLoaded = false
             queueRestored = true
             consecutiveFailures = 0
+            retryNotBefore = nil
             openedSessionAt = nil
             sessionID = ""
             environment = nil
@@ -422,7 +433,13 @@ public final class SignalRecorder: Sendable {
                 // Counted as a failure so the capped backoff damps the retry:
                 // a host that never resolves an identifier would otherwise be
                 // woken at the steady interval for the life of the process.
+                // Owed like any other failure, or a flush would ask the host
+                // for an identifier it has already said it does not have, as
+                // often as the consumer flushes.
                 current.consecutiveFailures += 1
+                Self.oweRetry(&current, after: configuration.backoffInterval(
+                    consecutiveFailures: current.consecutiveFailures
+                ))
                 logger.error("drain halt reason=no-client-user")
                 return nil
             }
@@ -458,10 +475,14 @@ public final class SignalRecorder: Sendable {
                 let evictedSinceClaim = current.evictedFromFront &- evicted
                 current.pending.removeFirst(max(0, sent.count - evictedSinceClaim))
                 current.consecutiveFailures = 0
+                current.retryNotBefore = nil
                 writer.persist(current.pending)
                 return !current.pending.isEmpty
             case .retryable:
                 current.consecutiveFailures += 1
+                Self.oweRetry(&current, after: configuration.backoffInterval(
+                    consecutiveFailures: current.consecutiveFailures
+                ))
                 return false
             }
         }
@@ -532,6 +553,11 @@ public final class SignalRecorder: Sendable {
     /// replaced. A running drain always stands, because delivery is already
     /// happening and a second task would duplicate the batch.
     ///
+    /// What a zero delay cannot do is skip a retry the last failure owes. A
+    /// flush and a full batch both ask for one, and both happen on the
+    /// consumer's cadence rather than the endpoint's, so a backoff any of them
+    /// could collapse would only damp a queue nobody was recording into.
+    ///
     /// Cancellation is deliberate and safe: a cancelled send throws through
     /// `URLSession` as a retryable failure, so the batch stays queued and on
     /// disk. That is the same guarantee the durable queue gives when the OS
@@ -542,21 +568,36 @@ public final class SignalRecorder: Sendable {
         // half-state and there is no late "still ours?" assignment to guard.
         let preempted: Task<Void, Never>? = lock.withLock { current in
             guard current.consent.permitsCollection else { return nil }
+            let due = max(delay, Self.secondsOwed(current.retryNotBefore))
             switch current.drain {
             case .running:
                 return nil
             case let .waiting(existing):
-                guard delay == 0 else { return nil }
+                guard due == 0 else { return nil }
                 let owned = makeOwnedDrain(&current, after: 0)
                 current.drain = .running(owned)
                 return existing.task
             case .idle:
-                let owned = makeOwnedDrain(&current, after: delay)
-                current.drain = delay > 0 ? .waiting(owned) : .running(owned)
+                let owned = makeOwnedDrain(&current, after: due)
+                current.drain = due > 0 ? .waiting(owned) : .running(owned)
                 return nil
             }
         }
         preempted?.cancel()
+    }
+
+    /// Records what the next attempt owes the endpoint. Call from inside the
+    /// lock.
+    private static func oweRetry(_ state: inout State, after interval: TimeInterval) {
+        state.retryNotBefore = ContinuousClock.now.advanced(by: .seconds(interval))
+    }
+
+    /// Seconds still owed, and zero once the deadline is served or was never
+    /// set — so the caller can take the later of it and its own delay.
+    private static func secondsOwed(_ deadline: ContinuousClock.Instant?) -> TimeInterval {
+        guard let deadline else { return 0 }
+        let remaining = ContinuousClock.now.duration(to: deadline).components
+        return max(0, Double(remaining.seconds) + Double(remaining.attoseconds) * 1e-18)
     }
 
     /// Mints the identifier and the task together, so a task always knows the
