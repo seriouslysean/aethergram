@@ -93,7 +93,45 @@ Use `recordPurchaseCompleted` and `recordError` where they fit rather than hand-
 — an adapter maps them onto the vendor's own events, and a hand-rolled purchase signal will not
 join with anything.
 
-## Phase 5: delete the SDK
+## Phase 5: wire the data reset
+
+`reset()` erases everything the package persists: the pending queue, the file behind it, and the
+retention counters. Wire it into whatever your app calls a data reset — that is the point of the
+`RetentionStore` seam, since counters kept somewhere a reset cannot reach mean a user who erased
+their data kept a retention history.
+
+Three things about the order around it, because none of them are the package's to do for you.
+
+**Keep the gate shut across the whole reset, not only during the erase.** A reset leaves consent
+alone, so the gate is open on either side of it and a signal recorded a microsecond later is a
+legitimate signal. If the reset also rotates your analytics identifier, that signal can leave under
+the identifier you are rotating away from, which is the linkage the rotation exists to break. Shut
+the gate, do both halves, then put the answer back:
+
+```swift
+let answer = myStoredConsentAnswer          // .granted, .declined, or .neverAsked
+recorder.updateConsent(.declined)           // shuts the gate and erases, in one call
+rotateMyAnalyticsIdentifier()               // nothing can transmit under either identifier here
+recorder.updateConsent(answer)
+```
+
+`updateConsent(.declined)` erases exactly what `reset()` erases, so that sequence replaces the
+`reset()` call rather than joining it. A signal recorded inside the window is dropped rather than
+misattributed, which is what a reset should do with it.
+
+**Reopen the counted session.** The erase takes the retention record with it and the package opens
+no session on its own, so until the next `beginSession()` every signal goes out with no acquisition
+or retention fields at all. Call it at the end of a reset that left collection enabled — the same
+call your activation path makes.
+
+**Serialize your own consent check with your own identifier read.** If an emit path checks the
+stored answer and then resolves an identifier that mints on first read, a decline landing between
+those two lines leaves an identifier minted under an answer that is now "no". The package's gate
+cannot undo that: the identifier is yours, and it was minted by your code before anything reached
+the recorder. Hold one lock across the check and the resolve, and take the same lock where the
+answer changes.
+
+## Phase 6: delete the SDK
 
 Remove the vendor SDK dependency, its initialization, and every remaining call into it. Two
 transports live at once is the drift this replaces, so do not leave it in place "for now".
