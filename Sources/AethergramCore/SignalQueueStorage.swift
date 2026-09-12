@@ -52,19 +52,43 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
 
     public func load() -> [Signal] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        let data: Data
         do {
-            let data = try Data(contentsOf: fileURL)
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            // Reading and decoding fail for opposite reasons. A file this
+            // process cannot read right now — protected while the device is
+            // locked, a container momentarily out of reach — holds a queue
+            // that is still good, and purging it would destroy signals
+            // nothing was wrong with. It stays, and the writes stay off it
+            // until an erase or another process settles what it holds.
+            unread.mark()
+            logger.error("queue read fail \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+        do {
             return try JSONDecoder().decode([Signal].self, from: data)
         } catch {
-            // A queue we cannot decode is a queue we cannot send. Dropping it
-            // beats retrying a corrupt file on every launch forever.
-            logger.error("queue load fail \(error.localizedDescription, privacy: .public)")
+            // A queue we cannot decode is a queue we cannot send, and it will
+            // not decode later either. Dropping it beats retrying a corrupt
+            // file on every launch forever.
+            logger.error("queue decode fail \(error.localizedDescription, privacy: .public)")
             purge()
             return []
         }
     }
 
     public func persist(_ signals: [Signal]) {
+        // Ahead of the empty case on purpose: an empty queue reaches here as
+        // a purge, and a purge is exactly what an unread file must not get.
+        // What this costs is durability for as long as the read keeps
+        // failing — the signals in memory still transmit, they just have
+        // nothing on disk to survive a kill — which is the cheaper half of
+        // the trade against deleting a queue that was only unreadable.
+        guard !unread.isOutstanding else {
+            logger.error("queue persist skip reason=unread-queue-on-disk")
+            return
+        }
         guard !signals.isEmpty else {
             purge()
             return
@@ -83,6 +107,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     }
 
     public func purge() {
+        // An erase outranks a read this instance could not make: the file goes
+        // whether or not its contents were ever known, and the writes resume
+        // for whatever is recorded next.
+        defer { unread.clear() }
         do {
             try FileManager.default.removeItem(at: fileURL)
             logger.info("queue purge ok")
@@ -107,4 +135,27 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
 
     private let fileURL: URL
     private let logger: Logger
+    private let unread = UnreadQueueFile()
+}
+
+/// Whether this store left a queue on disk it could not read.
+///
+/// A reference rather than a `var`, because the store is a value a caller may
+/// copy and the fact is about the file: two copies over one path describe the
+/// same queue. It is deliberately not durable — a read that failed here says
+/// nothing about the next process, which retries it.
+private final class UnreadQueueFile: Sendable {
+    var isOutstanding: Bool {
+        outstanding.withLock { $0 }
+    }
+
+    func mark() {
+        outstanding.withLock { $0 = true }
+    }
+
+    func clear() {
+        outstanding.withLock { $0 = false }
+    }
+
+    private let outstanding = OSAllocatedUnfairLock(initialState: false)
 }
