@@ -10,6 +10,11 @@ import os
 /// `load()` is called under the recorder's non-recursive lock, and `persist`
 /// and `purge` run on the writer queue that an erase and `flush()` wait on, so
 /// a conformance must not call back into the recorder: doing so deadlocks.
+///
+/// One store backs one recorder, and it owns what it is backed by. Two live
+/// stores over one file — in one process or two — is not a configuration this
+/// supports: whatever a conformance holds back is its own, and the second
+/// store cannot see it.
 public protocol SignalQueueStorage: Sendable {
     /// Everything persisted and not yet delivered. Empty on first read and
     /// after `purge()`.
@@ -30,6 +35,14 @@ public protocol SignalQueueStorage: Sendable {
 /// which is what survives the SIGKILL the OS hands a suspended extension
 /// without warning. A buffered write would lose the queue at exactly the
 /// moment the queue exists to survive.
+///
+/// It owns its file, in the sense the protocol describes. Two of the refusals
+/// it can be carrying are the instance's own — a queue it could not read, and
+/// an erase that reached neither the bytes nor a mark — so a second live store
+/// over the same path has neither and would write over what the first is
+/// protecting. A copy of one store is the same store and shares both; a store
+/// constructed separately is not. Give a second consumer in one process a
+/// `filename` of its own, and give a second process a container of its own.
 public struct FileSignalQueueStorage: SignalQueueStorage {
     // MARK: Lifecycle
 
@@ -76,11 +89,27 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     }
 
     /// Whether an erase this store was told to make has still not reached the
-    /// bytes. Durable where the mark could be written, in memory where even
-    /// that was refused — the same refusal stops a delete, an overwrite, and a
-    /// new sibling file alike, so the mark cannot be the whole answer.
-    private var isErasureOutstanding: Bool {
-        file.erasureOutstanding || FileManager.default.fileExists(atPath: erasureURL.path)
+    /// bytes, asked through a call that can fail rather than through
+    /// `fileExists`, which answers "no" both for a mark that is not there and
+    /// for a directory it could not look inside.
+    ///
+    /// Three answers rather than two, because "cannot tell" is not "owed" —
+    /// reading it as one would make a container that goes briefly out of reach
+    /// a decline, and delete the queue on the strength of a question nobody
+    /// could answer. It is not permission to restore either. It is the same
+    /// position as a queue that cannot be read: hand nothing back, take
+    /// nothing away.
+    private func erasureMark() -> ErasureMark {
+        guard !file.erasureOutstanding else { return .standing }
+        do {
+            _ = try FileManager.default.attributesOfItem(atPath: erasureURL.path)
+            return .standing
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return .absent
+        } catch {
+            logger.error("queue erasure mark check fail \(error.localizedDescription, privacy: .public)")
+            return .unknown
+        }
     }
 
     private func loadLocked() -> [Signal] {
@@ -88,9 +117,15 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // signals were collected under an answer that has since been
         // withdrawn, and restoring them is the one thing this store must never
         // do. Retried here because the refusal that stopped it may be over.
-        guard !isErasureOutstanding else {
+        switch erasureMark() {
+        case .standing:
             purgeLocked()
             return []
+        case .unknown:
+            file.isUnread = true
+            return []
+        case .absent:
+            break
         }
         let data: Data
         do {
@@ -138,12 +173,18 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // `loadLocked` asks this question first. Nothing currently reaches
         // this line with both true, and ordering it this way is what keeps
         // that from being a fact the next change has to know.
-        if isErasureOutstanding {
+        switch erasureMark() {
+        case .standing:
             purgeLocked()
-            guard !isErasureOutstanding else {
+            guard case .absent = erasureMark() else {
                 logger.error("queue persist skip reason=erasure-outstanding")
                 return
             }
+        case .unknown:
+            logger.error("queue persist skip reason=erasure-unknown")
+            return
+        case .absent:
+            break
         }
         // Ahead of the empty case on purpose: an empty queue reaches here as a
         // purge, and a purge is exactly what an unread file must not get. What
@@ -227,18 +268,31 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     /// Whether no mark is left standing. A debt rather than a tombstone: one
     /// left in place would end restoration for this directory permanently.
     private func clearErasureMark() -> Bool {
-        // Asked before it is done, because the ordinary case is that nothing
-        // was ever marked and this runs on every erase: a stat costs less than
-        // an error to throw away.
-        guard FileManager.default.fileExists(atPath: erasureURL.path) else { return true }
+        // Attempted rather than asked about first, for the reason above: a
+        // removal that fails because there was nothing there is the only
+        // failure that settles the debt, and an existence check cannot tell
+        // that one from a directory it could not look inside.
         do {
             try FileManager.default.removeItem(at: erasureURL)
+            return true
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
             return true
         } catch {
             logger.error("queue erasure mark clear fail \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
+}
+
+/// What a look for the mark a failed erase leaves can come back with.
+private enum ErasureMark {
+    /// Nothing is owed: no mark, confirmed.
+    case absent
+    /// An erase reached neither the bytes nor, where it matters, a mark that
+    /// outlives this store.
+    case standing
+    /// The question could not be answered — the directory refused the look.
+    case unknown
 }
 
 /// The file, as the one thing two copies of the store share.

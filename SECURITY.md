@@ -21,11 +21,15 @@ file, the retention record, and the pending batch.
 
 Erasing is best effort against a filesystem that can refuse it, and that is the one place the
 promise is narrower than it sounds. If the queue file can be neither deleted nor overwritten, the
-bytes stay where they are; what the package still guarantees is that nothing restores or transmits
-them. The store that was told to erase refuses to read that file for as long as it lives, and a
-mark written beside it carries the same refusal into the processes that store cannot reach. A
-report that the bytes outlived a delete the filesystem refused is that; a report that they were
-later restored or sent is a vulnerability.
+bytes stay where they are, and what is still guaranteed depends on how far the refusal went. The
+store that was told to erase refuses to read that file for as long as it lives, so nothing goes
+out through it. A mark written beside the file carries that refusal into later processes. Where
+even the mark is refused — one set of permissions can stop all three — the refusal ends with the
+process that made it, and a later one can read a file it was never told about.
+
+So: bytes outliving a delete the filesystem refused is that failure and not this one. Those bytes
+restored or sent while the store that erased them is alive, or while a mark it managed to write is
+standing, is a vulnerability.
 
 In scope is anything that gets data past that gate: a path that enqueues before the check, a
 provider closure invoked while the answer is withheld, a queue file that survives a decline, a
