@@ -19,6 +19,14 @@ Consent is the trust boundary and it is checked before anything happens. Until t
 identifier, advances no counter, and reaches no transport. Withdrawing consent erases the queue
 file, the retention record, and the pending batch.
 
+Erasing is best effort against a filesystem that can refuse it, and that is the one place the
+promise is narrower than it sounds. If the queue file can be neither deleted nor overwritten, the
+bytes stay where they are; what the package still guarantees is that nothing restores or transmits
+them. The store that was told to erase refuses to read that file for as long as it lives, and a
+mark written beside it carries the same refusal into the processes that store cannot reach. A
+report that the bytes outlived a delete the filesystem refused is that; a report that they were
+later restored or sent is a vulnerability.
+
 In scope is anything that gets data past that gate: a path that enqueues before the check, a
 provider closure invoked while the answer is withheld, a queue file that survives a decline, a
 counter that a host's data reset cannot reach, or a grant that resurrects signals recorded under
