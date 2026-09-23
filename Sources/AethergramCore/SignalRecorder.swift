@@ -21,9 +21,10 @@ import os
 public final class SignalRecorder: Sendable {
     // MARK: Lifecycle
 
-    /// Every host seam but the transport is called with the recorder's lock
-    /// held. That lock is not recursive: a seam that calls back into the
-    /// recorder terminates the process at the entry point it called.
+    /// Every host seam but the transport and the queue's writes is called
+    /// with the recorder's lock held. That lock is not recursive: a seam that
+    /// calls back into the recorder terminates the process at the entry point
+    /// it called.
     ///
     /// - Parameters:
     ///   - configuration: Batching, delivery, and logging policy, read for the
