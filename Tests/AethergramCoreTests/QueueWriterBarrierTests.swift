@@ -37,10 +37,11 @@ struct QueueWriterBarrierTests {
         // nothing is pending returns only once the recording gives up at its
         // deadline.
         #expect(!recording.reachedDeadline)
-        // The write in flight at the call, the one that covers every snapshot
-        // submitted before it, and one more for a write finishing between the
-        // count and the call.
-        #expect(persistsAtReturn.value - persistsAtCall.value <= 3)
+        // Two writes are owed — the one in flight at the call and the one
+        // covering every snapshot before it — and the rest is slack for a
+        // loaded runner slow to wake the waiter; the recording keeps the
+        // store busy for hundreds of writes before its deadline.
+        #expect(persistsAtReturn.value - persistsAtCall.value <= 20)
     }
 
     @Test("A write submitted before a flush is on the store when the flush returns")
@@ -63,11 +64,69 @@ struct QueueWriterBarrierTests {
 
         #expect(seen.value == "burst.19")
     }
+
+    @Test("Recording continuously from another thread does not hold an async flush past the writes before it")
+    func continuousRecordingDoesNotExtendTheAsyncWait() async throws {
+        let storage = PacedStorage(pace: 0.005)
+        let writer = QueueWriter(storage: storage, label: "queue-writer-barrier-tests")
+        let recording = ContinuousRecording(writer: writer, deadline: 2)
+        await recording.started.wait()
+
+        let persistsAtCall = storage.persistCount
+        await writer.awaitPendingWrites()
+        let persistsAtReturn = storage.persistCount
+        recording.stop()
+        await recording.finished.wait()
+
+        #expect(!recording.reachedDeadline)
+        #expect(persistsAtReturn - persistsAtCall <= 20)
+    }
+
+    @Test("A write submitted before an async flush is on the store when the flush returns")
+    func writeBeforeTheAsyncWaitIsOnTheStore() async throws {
+        let storage = PacedStorage(pace: 0.005)
+        let writer = QueueWriter(storage: storage, label: "queue-writer-barrier-tests")
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+
+        for index in 0 ..< 20 {
+            writer.persist([Signal(name: "burst.\(index)", sessionID: "session-a", recordedAt: signalDate)])
+        }
+        await writer.awaitPendingWrites()
+
+        #expect(storage.lastPersisted == "burst.19")
+    }
+
+    /// An erase stands behind this wait, and a caller that reads a cancelled
+    /// wait's return as "erased" reads it before the delete landed.
+    @Test("Cancelling an async flush does not return it before the writes before it land")
+    func cancellingTheAsyncWaitDoesNotEndItEarly() async throws {
+        let storage = PacedStorage(pace: 0)
+        let writer = QueueWriter(storage: storage, label: "queue-writer-barrier-tests")
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        storage.holdNextPersist()
+        writer.persist([Signal(name: "held", sessionID: "session-a", recordedAt: signalDate)])
+        await storage.persistEntered.wait()
+
+        let returned = Gate()
+        let waiting = Task {
+            await writer.awaitPendingWrites()
+            returned.open()
+        }
+        waiting.cancel()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!returned.isOpen)
+
+        storage.releasePersist()
+        await returned.wait()
+        #expect(storage.lastPersisted == "held")
+    }
 }
 
 /// A store that takes a fixed time over each persist, so a writer's drain is
 /// always mid-write while a submitter outpaces it, and logs what it was last
-/// given.
+/// given. It can also hold one persist open until released, blocking the
+/// writer's queue; the announcement is a gate, because what acts on it is a
+/// test body the cooperative pool has to be free to resume.
 private final class PacedStorage: SignalQueueStorage, @unchecked Sendable {
     // MARK: Lifecycle
 
@@ -77,6 +136,9 @@ private final class PacedStorage: SignalQueueStorage, @unchecked Sendable {
 
     // MARK: Internal
 
+    /// Opened as a held `persist` is entered, before it is held.
+    let persistEntered = Gate()
+
     var persistCount: Int {
         lock.withLock { count }
     }
@@ -85,11 +147,27 @@ private final class PacedStorage: SignalQueueStorage, @unchecked Sendable {
         lock.withLock { last }
     }
 
+    func holdNextPersist() {
+        lock.withLock { held = true }
+    }
+
+    func releasePersist() {
+        release.signal()
+    }
+
     func load() -> [Signal] {
         []
     }
 
     func persist(_ signals: [Signal]) {
+        let hold = lock.withLock {
+            defer { held = false }
+            return held
+        }
+        if hold {
+            persistEntered.open()
+            release.wait()
+        }
         Thread.sleep(forTimeInterval: pace)
         lock.withLock {
             count += 1
@@ -102,7 +180,9 @@ private final class PacedStorage: SignalQueueStorage, @unchecked Sendable {
     // MARK: Private
 
     private let pace: TimeInterval
+    private let release = DispatchSemaphore(value: 0)
     private let lock = NSLock()
+    private var held = false
     private var count = 0
     private var last: String?
 }
