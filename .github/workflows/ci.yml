@@ -25,7 +25,9 @@ jobs:
     # toolchain change arriving that way is a red build nobody asked for.
     runs-on: macos-26
     # A wedged suite hangs rather than fails, so cap the job: the default is six hours of nothing.
-    timeout-minutes: 15
+    # The api-break gate builds four release tags and the working tree on top of the iOS, watchOS,
+    # and test builds, so the cap leaves room for all of them cold on three cores.
+    timeout-minutes: 30
     strategy:
       # One leg, deliberately. The matrix is here for the name it composes -- `test (macos)` -- so
       # the context a required status check names is platform-qualified before a second leg exists
@@ -40,7 +42,8 @@ jobs:
     steps:
       # Full history: the leak scan's history tier runs with --all, and a shallow (depth-1)
       # checkout would leave it scanning the one fetched commit -- a gate that never fires
-      # looks exactly like one that passes.
+      # looks exactly like one that passes. The api-break gate needs the release tags it
+      # compares against, which a full-history checkout also fetches.
       # A tag can be moved to other code after review; a commit SHA cannot.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
