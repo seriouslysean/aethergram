@@ -335,6 +335,35 @@ else
     pass
 fi
 
+# watchOS is declared but nothing else compiles it. arm64_32 is the arm every supported watch runs,
+# and the triple's version is the manifest's floor, so an API newer than the floor fails here.
+WATCH_SDK="$(xcrun --sdk watchos --show-sdk-path)" || WATCH_SDK=""
+watch_gate() {
+    [ -n "$WATCH_SDK" ] || { printf 'xcrun found no watchos SDK\n'; return 1; }
+    swift build --package-path "$1" --scratch-path "$2" \
+        -c release --triple arm64_32-apple-watchos11.0 --sdk "$WATCH_SDK" -Xswiftc -application-extension \
+        --explicit-target-dependency-import-check error --target Aethergram
+}
+
+it "the package builds for watchOS release at its floor"
+if OUT="$(watch_gate "$ROOT" "$TMP/watchos" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the package did not build for watchOS 11 release"
+fi
+
+it "the watchOS arm is compiled"
+BAD="$TMP/unbuilt-watch-arm"
+copy_package "$BAD"
+printf '#if os(watchOS)\nlet watchArmProbe: Int = watchArmMarker\n#endif\n' > "$BAD/Sources/AethergramCore/WatchArm.swift"
+OUT="$(watch_gate "$BAD" "$BAD.build" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ] || ! printf '%s\n' "$OUT" | grep -q 'watchArmMarker'; then
+    fail "the watchOS gate exited $GATE_RC and never reached the watchOS arm"
+else
+    pass
+fi
+
 printf '\napi-break gate\n'
 
 # Proved on the package's own history before it is trusted: 0.3.0 removed `SignalBatch.sessionID`
