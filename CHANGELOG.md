@@ -79,8 +79,10 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 ### Scheduling and logging
 
 - The drain runs at utility priority rather than the priority of the call that scheduled it.
-- A queue overflow logs once when it begins and once when it ends, and a store skipping writes
-  logs when the skipping starts and when it stops, rather than on every record.
+- A queue overflow logs once when it begins and once when it ends, rather than on every record. It
+  ends when a delivery or a permanent rejection leaves the queue below the limit; an erase clears
+  it without the ending line. A store skipping writes logs when the skipping starts and when it
+  stops, rather than on every write.
 
 ### Tooling
 
