@@ -18,18 +18,15 @@ public struct TelemetryDeckTransport: SignalTransport {
     ///   which ingest partition a build is posting to.
     /// - Parameter session: Any session but a background one. Sends are async
     ///   data tasks, which a background session refuses by raising an
-    ///   exception that aborts the host.
-    /// - Precondition: `session` has no background identifier. Checked here so
-    ///   the trap lands at construction rather than at the first send.
+    ///   exception that aborts the host. A send over one fails a precondition
+    ///   first, at the same moment, with a message that names the session.
+    ///   Construction does not check it, so a host that never sends keeps
+    ///   running.
     public init(
         configuration: TelemetryDeckConfiguration,
         logSubsystem: String,
         session: URLSession = .shared
     ) {
-        precondition(
-            session.configuration.identifier == nil,
-            "TelemetryDeckTransport cannot send over a background URLSession"
-        )
         self.configuration = configuration
         self.session = session
         logger = Logger(subsystem: logSubsystem, category: "aethergram-telemetrydeck")
@@ -50,7 +47,14 @@ public struct TelemetryDeckTransport: SignalTransport {
     ///
     /// Cancellation reaches the request through `URLSession`, so an erase
     /// that cancels the drain stops a send still in flight.
+    ///
+    /// - Precondition: `session` has no background identifier.
     public func send(_ batch: SignalBatch) async -> TransportOutcome {
+        // The data task below would abort the host anyway; this names why.
+        precondition(
+            session.configuration.identifier == nil,
+            "TelemetryDeckTransport cannot send over a background URLSession"
+        )
         let request: URLRequest
         do {
             request = try makeRequest(for: batch)

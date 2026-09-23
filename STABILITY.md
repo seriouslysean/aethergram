@@ -32,8 +32,8 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
   produces, and `calendarParameters(at:calendar:)`.
 - `RunContextChannel`'s cases and raw values, which `EnvironmentSnapshot.channel` carries.
 - `TelemetryDeckConfiguration`, including `defaultBaseURL` and `ingestURL`, `TelemetryDeckTransport`,
-  and `TelemetryDeckConfiguration.testPartition(for:)`. `TelemetryDeckTransport`'s initializer traps
-  on a background `URLSession`.
+  and `TelemetryDeckConfiguration.testPartition(for:)`. `TelemetryDeckTransport` traps at the first
+  send over a background `URLSession`.
 
 A new case in a public enum — `PresetSignal`, `RunContextChannel`, `TransportOutcome`,
 `ConsentState` — is a minor addition. A host that switches over one of them must carry a `default`
