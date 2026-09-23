@@ -17,17 +17,17 @@ import Testing
 @Suite("AethergramConfiguration", .serialized, .tags(.lifecycle))
 struct AethergramConfigurationTests {
     /// The ceilings are inclusive: a host that sets exactly one year or
-    /// exactly 100,000 keeps its value rather than trapping at the boundary.
-    @Test("An interval of exactly one year and a queueLimit of exactly 100,000 construct and keep their values")
+    /// exactly 1,250 keeps its value rather than trapping at the boundary.
+    @Test("An interval of exactly one year and a queueLimit of exactly 1,250 construct and keep their values")
     func valuesAtTheCeilingConstruct() {
         let oneYear: TimeInterval = 365 * 24 * 60 * 60
         let configuration = AethergramConfiguration(
             logSubsystem: "test",
-            queueLimit: 100_000,
+            queueLimit: 1250,
             transmitInterval: oneYear,
             maxBackoffInterval: oneYear
         )
-        #expect(configuration.queueLimit == 100_000)
+        #expect(configuration.queueLimit == 1250)
         #expect(configuration.transmitInterval == oneYear)
         #expect(configuration.maxBackoffInterval == oneYear)
     }
@@ -56,13 +56,14 @@ struct AethergramConfigurationTests {
         #expect(now.advanced(by: .seconds(backoff)) > now)
     }
 
-    /// A queue past 100,000 signals is a file no extension should be carrying
-    /// and a batch loop no launch should be paying for; 0.3.x accepted any
-    /// positive value and let the host find that out on a device.
-    @Test("A queueLimit past 100,000 traps at construction")
+    /// Restore decodes the whole queue file at consent grant on the caller's
+    /// thread, so a queue past 1,250 signals is a grant that blocks past the
+    /// budget; 0.3.x accepted any positive value and let the host find that
+    /// out on a device.
+    @Test("A queueLimit past 1,250 traps at construction")
     func queueLimitPastTheCeilingTraps() async {
         await #expect(processExitsWith: .failure) {
-            _ = AethergramConfiguration(logSubsystem: "test", queueLimit: 100_001)
+            _ = AethergramConfiguration(logSubsystem: "test", queueLimit: 1251)
         }
     }
 
