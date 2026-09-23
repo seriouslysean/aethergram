@@ -22,7 +22,7 @@ public struct TelemetryDeckConfiguration: Sendable {
     ///   - isTestMode: No default. A silent DEBUG-only default is exactly the
     ///     defect this replaced (Release simulator and TestFlight builds posted
     ///     to the live partition); every caller derives this explicitly, from
-    ///     `testPartition(for:)`.
+    ///     `isTestPartition(for:)`.
     ///
     /// - Precondition: `baseURL`'s scheme is `https`, in any case. Anything
     ///   else traps here, at construction: an `http` base would post every
@@ -112,8 +112,14 @@ public struct TelemetryDeckConfiguration: Sendable {
     /// burn quota. `.store` is the one case `EnvironmentSnapshot.channel`
     /// reaches only after ruling out debug, simulator, macOS, and TestFlight,
     /// so anything else already covers every one of those cases.
-    public static func testPartition(for snapshot: EnvironmentSnapshot) -> Bool {
+    public static func isTestPartition(for snapshot: EnvironmentSnapshot) -> Bool {
         snapshot.channel != .store
+    }
+
+    /// The 0.3.x name for `isTestPartition(for:)`, which it forwards to.
+    @available(*, deprecated, renamed: "isTestPartition(for:)")
+    public static func testPartition(for snapshot: EnvironmentSnapshot) -> Bool {
+        isTestPartition(for: snapshot)
     }
 
     // MARK: Private
