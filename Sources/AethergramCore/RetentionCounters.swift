@@ -6,7 +6,8 @@ import Foundation
 /// that placement is the whole point: the SDK this package replaces kept its
 /// counters somewhere a data reset could not reach, so a user who erased their
 /// data kept a retention history. `RetentionStore.clear()` is the fix, and
-/// `reset()` on the recorder is what calls it.
+/// the recorder calls it on `reset()` and on every non-granted
+/// `updateConsent`.
 public struct RetentionRecord: Codable, Equatable, Sendable {
     // MARK: Lifecycle
 
@@ -61,10 +62,14 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
     /// truth at one session — because the in-flight one contributes a count
     /// but no seconds.
     public var completedSessionsCount: Int
-    /// Gregorian `yyyy-MM-dd` entries, most recent last, capped at
-    /// `RetentionCounters.distinctDayLimit`.
+    /// Gregorian `yyyy-MM-dd` entries, most recent last, capped at the 400
+    /// most recent.
     public var distinctDaysUsed: [String]
+    /// Seconds summed over completed sessions. A session whose measured
+    /// duration is not positive, not finite, or over a day adds nothing and
+    /// is not counted as completed.
     public var totalSessionSeconds: Double
+    /// The duration of the last completed session, or nil before the first.
     public var previousSessionSeconds: Double?
     /// Start of the session currently open, persisted so the next activation
     /// can close it. An app extension is killed without a callback often
@@ -90,11 +95,20 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
 /// Where the retention record lives. The consumer backs this with storage its
 /// own data reset already clears.
 ///
-/// Every call here is made under the recorder's non-recursive lock, so a
-/// conformance must not call back into the recorder: doing so deadlocks.
+/// Every call here is made under the recorder's non-recursive lock, on the
+/// thread of the call that needed it, so a conformance must not call back
+/// into the recorder: doing so fails a precondition and terminates the
+/// process.
 public protocol RetentionStore: Sendable {
+    /// The record last saved, or nil when there is none. Read at most once
+    /// per recorder between erases.
     func load() -> RetentionRecord?
+
+    /// Replaces the stored record wholesale.
     func save(_ record: RetentionRecord)
+
+    /// Removes the stored record. Called on `reset()` and on every
+    /// non-granted `updateConsent`; after it returns, `load()` returns nil.
     func clear()
 }
 

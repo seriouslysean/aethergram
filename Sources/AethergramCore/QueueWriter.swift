@@ -14,8 +14,11 @@ import Foundation
 ///
 /// The fix for both is to make the storage single-threaded and to take it off
 /// the caller. Intent is captured under the recorder's own lock, so the order
-/// of writes is the order of the mutations that produced them; the work happens
-/// on one serial queue.
+/// of writes is the order of the mutations that produced them; the encode and
+/// the write, the O(queue) work, happen on one serial queue. What stays on the
+/// caller is a copy: a snapshot shares the pending array's storage, so the
+/// next append or eviction while the writer still holds it copies the whole
+/// queue under the lock.
 ///
 /// **Coalescing is the point, not an optimization.** Only the newest snapshot
 /// is ever written: a burst of ten records produces one file write, because

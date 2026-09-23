@@ -7,9 +7,11 @@ import os
 /// host-specific: an app extension writes to its own Application Support
 /// directory, a host app may want somewhere else, and tests want memory.
 ///
-/// `load()` is called under the recorder's non-recursive lock, and `persist`
-/// and `purge` run on the writer queue that an erase and `flush()` wait on, so
-/// a conformance must not call back into the recorder: doing so deadlocks.
+/// A conformance must not call back into the recorder. `load()` is called
+/// under the recorder's non-recursive lock, where a call back in fails a
+/// precondition and terminates the process. `persist` and `purge` run on the
+/// writer queue that `flush()`, `reset()` and a decline wait on, where a call
+/// back into one of those waits on the queue it is running on.
 ///
 /// One store backs one recorder, and it owns what it is backed by. Two live
 /// stores over one file — in one process or two — is not a configuration this
@@ -18,14 +20,19 @@ import os
 public protocol SignalQueueStorage: Sendable {
     /// Everything persisted and not yet delivered. Empty on first read and
     /// after `purge()`.
+    ///
+    /// `Signal`'s `Codable` form is not API: a conformance that stores it
+    /// encoded must treat a decode failure as an empty queue rather than
+    /// trap, as `FileSignalQueueStorage` does.
     func load() -> [Signal]
 
     /// Replaces the persisted queue wholesale. Callers pass the full pending
     /// set, so a partial write can never leave the queue half-updated.
     func persist(_ signals: [Signal])
 
-    /// Deletes the persisted queue. Called on a decline and on a data reset;
-    /// after this the store must read back empty, not stale.
+    /// Deletes the persisted queue. Called on every non-granted
+    /// `updateConsent`, including one made before anything was granted, and
+    /// on a data reset; after this the store must read back empty, not stale.
     func purge()
 }
 

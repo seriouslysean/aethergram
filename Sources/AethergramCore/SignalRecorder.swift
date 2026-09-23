@@ -48,7 +48,8 @@ public final class SignalRecorder: Sendable {
     ///     main thread is making — and must not call back into the recorder.
     ///   - environmentProvider: The authored default payload. Called at most
     ///     once per grant, on the first permitted record, for the same reason.
-    ///     It cannot drop the package's identity: `enqueue` stamps that itself.
+    ///     It cannot drop the package's identity: the recorder stamps
+    ///     `sdk.name`, `sdk.version`, and `sdk.nameAndVersion` itself.
     ///     Called under the lock on whichever thread made that record, with
     ///     the same constraints as `clientUserProvider`.
     ///   - calendar: The calendar day-keyed counters and the hour-of-day field
@@ -85,6 +86,10 @@ public final class SignalRecorder: Sendable {
     /// under it — the queue file, the retention counters, and the pending
     /// batch — because a toggle that leaves yesterday's signals on disk to be
     /// sent later is not an off switch.
+    ///
+    /// A non-granted answer blocks the caller until the erase reaches the
+    /// queue store. A send already handed to the transport is cancelled, not
+    /// recalled: a transport that honours cancellation stops it.
     public func updateConsent(_ state: ConsentState) {
         requireNoReentry()
         let erased: (happened: Bool, drain: Task<Void, Never>?) = lock.withLock { current in
@@ -126,7 +131,7 @@ public final class SignalRecorder: Sendable {
     /// only carries it.
     ///
     /// `id` is assigned last, so it wins a collision with `parameters`. That is
-    /// not the caller-wins rule `enqueue` applies to package defaults: this key
+    /// not the caller-wins rule the recorder applies to package defaults: this key
     /// carries the signal's identity and arrives through its own argument, so a
     /// stray dictionary entry under the same name is a mistake rather than a
     /// more specific value.
@@ -191,11 +196,15 @@ public final class SignalRecorder: Sendable {
     /// Best-effort send now. Called on the consumer's deactivation hook, where
     /// the process may not survive long enough to finish — which is why the
     /// queue is durable rather than why this call blocks.
+    ///
+    /// Blocks the caller until pending queue writes reach the store, and not
+    /// until the send: that runs on the drain, after this returns.
     public func flush() {
         requireNoReentry()
         // The consumer calls this on its way out of an active cycle, which is
         // the one moment a not-yet-written queue would be lost rather than
-        // merely late. Bounded by a single encode and write.
+        // merely late. Bounded by the write in flight plus one purge and one
+        // persist; the send itself is not waited for.
         writer.waitForPendingWrites()
         startDrain(after: 0)
     }
@@ -203,6 +212,9 @@ public final class SignalRecorder: Sendable {
     /// Erases everything the package persists. Wire it into the host's
     /// data-reset path: this is what makes the retention counters clearable,
     /// which the SDK this replaces offered no way to do.
+    ///
+    /// Blocks the caller until the erase reaches the queue store, and leaves
+    /// consent as it was.
     public func reset() {
         requireNoReentry()
         let detached: Task<Void, Never>? = lock.withLock { current in
@@ -618,8 +630,10 @@ public final class SignalRecorder: Sendable {
     /// The durable half cannot be left until after the release. A `record`
     /// landing in between — a reset keeps consent granted, so nothing stops one
     /// — persists its queue and saves its counters under the new generation,
-    /// and this older purge and clear then delete them: the writer keeps only
-    /// the newest intent, and the store only the newest write.
+    /// and this older purge and clear then delete them. Submitting the purge
+    /// here orders it first: the writer keeps it pending under any snapshot
+    /// submitted after it and runs it before the newest snapshot, and the
+    /// store keeps only the newest write.
     private func eraseCollected(_ state: inout State) {
         state.eraseCollected()
         writer.purge()
@@ -629,14 +643,17 @@ public final class SignalRecorder: Sendable {
     /// The one part of an erase that cannot happen under the lock. The delete
     /// has to land before the caller returns: a recorder torn down in the same
     /// breath as a decline would otherwise leave the file behind. Bounded by
-    /// the write already in flight and the delete.
+    /// the write already in flight, the delete, and at most one snapshot
+    /// submitted after it.
     private func awaitErasure() {
         writer.waitForPendingWrites()
     }
 
-    /// Reads the durable queue back exactly once per grant. Signals persisted
-    /// by a process the OS killed rejoin the front of the pending set,
-    /// ahead of anything this process has recorded, so order survives the kill.
+    /// Reads the durable queue back at most once per recorder: an erase leaves
+    /// it read, so a regrant cannot restore what the erase was told to drop.
+    /// Signals persisted by a process the OS killed rejoin the front of the
+    /// pending set, ahead of anything this process has recorded, so order
+    /// survives the kill.
     private func restoreQueueIfNeeded(_ state: inout State) {
         guard !state.queueRestored else { return }
         state.queueRestored = true
