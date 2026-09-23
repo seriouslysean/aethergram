@@ -470,3 +470,64 @@ final class SettableClock: @unchecked Sendable {
     private let lock = NSLock()
     private var current: Date
 }
+
+/// Holds its first send open until the test releases it, deaf to cancellation;
+/// every later send answers at once.
+///
+/// Deafness is the point. A cancelled send that unwinds instantly never shows
+/// the window a real one does — `URLSession` has to notice the cancel and the
+/// verdict still has to come back — and a hold that resumed on cancel would
+/// turn a test of that window into a race it could pass by losing.
+///
+/// Suspends rather than blocks, so a held drain costs the pool no thread.
+final class HeldFirstSendTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Internal
+
+    /// Opened once the first send is holding.
+    let firstSendHeld = Gate()
+
+    var sentSignalNames: [String] {
+        lock.withLock { received.flatMap { $0.signals.map(\.name) } }
+    }
+
+    var sendCount: Int {
+        lock.withLock { received.count }
+    }
+
+    /// Idempotent, and safe before the send arrives: a send that finds the
+    /// hold already released does not wait.
+    func release() {
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            released = true
+            let next = held
+            held = nil
+            return next
+        }
+        waiting?.resume()
+    }
+
+    func send(_ batch: SignalBatch) async -> TransportOutcome {
+        let isFirst: Bool = lock.withLock {
+            received.append(batch)
+            return received.count == 1
+        }
+        guard isFirst else { return .delivered }
+        await withCheckedContinuation { continuation in
+            let resumeNow: Bool = lock.withLock {
+                guard !released else { return true }
+                held = continuation
+                return false
+            }
+            firstSendHeld.open()
+            if resumeNow { continuation.resume() }
+        }
+        return .delivered
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private var received: [SignalBatch] = []
+    private var held: CheckedContinuation<Void, Never>?
+    private var released = false
+}

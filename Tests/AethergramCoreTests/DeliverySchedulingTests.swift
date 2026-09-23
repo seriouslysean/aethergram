@@ -235,6 +235,55 @@ struct DeliverySchedulingTests {
         }
     }
 
+    /// An erase cancels the drain it supersedes, but a cancelled send does not
+    /// return the instant it is cancelled, and until it does that drain still
+    /// holds the claim. A flush after the erase finds the claim taken, sends
+    /// nothing, and hands its slot to a restart a whole interval out — an hour
+    /// here — so the first signal of the new grant waits on a request whose
+    /// verdict the erase has already discarded.
+    ///
+    /// The other half is that the erased drain never sends again once it
+    /// unwinds: freeing the claim early must not buy a second sender.
+    @Test(
+        "A flush after an erase is not held behind the send the erase cancelled",
+        arguments: ConsentEnforcementTests.Erasure.allCases
+    )
+    func flushAfterAnEraseIsNotHeldBehindTheCancelledSend(erasure: ConsentEnforcementTests.Erasure) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let transport = HeldFirstSendTransport()
+        defer { transport.release() }
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(transmitInterval: 3600),
+            transport: transport,
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: steppingClock(from: start)
+        )
+
+        recorder.updateConsent(.granted)
+        recorder.record("first")
+        recorder.flush()
+        await transport.firstSendHeld.wait()
+
+        erasure.apply(to: recorder)
+        recorder.record("second")
+        recorder.flush()
+        await waitUntil(within: 3) { transport.sentSignalNames.contains("second") }
+        #expect(transport.sentSignalNames == ["first", "second"])
+
+        // The erased drain unwinds now, onto a verdict it may not apply and a
+        // queue it may not claim from.
+        transport.release()
+        try await Task.sleep(for: .milliseconds(200))
+        withExtendedLifetime(recorder) {}
+
+        #expect(transport.sentSignalNames == ["first", "second"])
+    }
+
     /// A backoff any flush can skip is not a backoff.
     ///
     /// `flush()` asks for a drain at zero delay, and so does a record that
