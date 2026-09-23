@@ -649,10 +649,11 @@ public final class SignalRecorder: Sendable {
     /// The one part of an erase that cannot happen under the lock. The delete
     /// has to land before the caller returns: a recorder torn down in the same
     /// breath as a decline would otherwise leave the file behind. Waits until
-    /// no write is pending, including one submitted while it waits. After a
-    /// decline a record submits nothing until another thread grants again;
-    /// after a reset the gate stays open, so recording continuously from
-    /// another thread extends the wait.
+    /// the writer's current drain goes idle, which covers the purge and any
+    /// write submitted while that drain runs. After a decline a record
+    /// submits nothing until another thread grants again; after a reset the
+    /// gate stays open, so recording continuously from another thread extends
+    /// the wait.
     private func awaitErasure() {
         writer.waitForPendingWrites()
     }
