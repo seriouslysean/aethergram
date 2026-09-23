@@ -243,7 +243,7 @@ struct QueueFileFaultTests {
         let bytes = try Data(contentsOf: directory.appendingPathComponent(queueFilename))
         let rewritten = shape.count > 3
         #expect((bytes.first == UInt8(ascii: "[")) == (shape.isArray && !rewritten))
-        #expect(operations.writes.contains(.replace) == rewritten)
+        #expect(operations.writes == (rewritten ? [.createDirectory, .replace] : []))
     }
 
     /// A late read — a read that failed at load and succeeded at a later
@@ -260,7 +260,9 @@ struct QueueFileFaultTests {
         operations.script(.read, .refuse(CocoaError(.fileReadNoPermission)))
 
         #expect(storage.load().isEmpty)
+        operations.clear()
         storage.persist([signal("new")])
+        #expect(operations.writes == [.createDirectory, .replace])
 
         #expect(freshLoad(directory).map(\.name) == names.suffix(3) + ["new"])
         let bytes = try Data(contentsOf: directory.appendingPathComponent(queueFilename))
