@@ -298,6 +298,31 @@ else
     fail "the package did not build for iOS release with -application-extension"
 fi
 
+# Apple reads the manifest out of the SDK's bundle, so it is checked where the build put it rather
+# than only where it is committed. `plutil -lint` is first watched refusing a malformed one.
+MANIFEST="Sources/AethergramCore/PrivacyInfo.xcprivacy"
+
+it "a malformed privacy manifest is refused"
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict><key>NSPrivacyTracking</key></dict>\n' > "$TMP/bad.xcprivacy"
+if plutil -lint "$TMP/bad.xcprivacy" >/dev/null 2>&1; then
+    fail "plutil accepted a manifest with no closing plist element and a key with no value"
+else
+    pass
+fi
+
+it "the privacy manifest is a valid property list and ships in the core's iOS bundle"
+BUNDLED="$(find "$TMP/ios" -path '*AethergramCore.bundle/PrivacyInfo.xcprivacy' 2>/dev/null | head -n 1)"
+if ! OUT="$(plutil -lint "$ROOT/$MANIFEST" 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "$MANIFEST is not a valid property list"
+elif [ -z "$BUNDLED" ]; then
+    fail "the iOS build produced no AethergramCore bundle carrying PrivacyInfo.xcprivacy"
+elif ! cmp -s "$ROOT/$MANIFEST" "$BUNDLED"; then
+    fail "the bundled manifest differs from $MANIFEST"
+else
+    pass
+fi
+
 # A copy of the package to break on purpose, so a gate is watched refusing before it is trusted.
 copy_package() { mkdir -p "$1" && cp -R "$ROOT/Package.swift" "$ROOT/Sources" "$ROOT/Tests" "$1/"; }
 
