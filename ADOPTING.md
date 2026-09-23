@@ -111,12 +111,13 @@ clientUserProvider: { analyticsIdentifier.withLock { $0 } }
 ```
 
 **What blocks the caller.** A record does not wait for the queue write: the encode and the write
-happen on the writer queue. Three calls do wait on it, until no write is pending — including one
-submitted while they wait:
+happen on the writer queue. Three calls do wait on it, until the writer goes idle. That covers
+every write submitted before the call and any submitted while the writer is still busy; a write
+submitted after it goes idle may still be pending when the call returns.
 
 | Call | Returns once | Extended by recording from another thread |
 |---|---|---|
-| `flush()` | No queue write is pending. It does not wait for the send. | Yes, for as long as it continues |
+| `flush()` | Every queue write submitted before it has landed. It does not wait for the send. | Yes, while it keeps the writer busy |
 | `updateConsent` with anything but `.granted` | The erase has reached the queue store and the retention store. | No, unless another thread grants again while it waits: a record after a decline writes nothing |
 | `reset()` | The same. | Yes, while consent is granted: a reset leaves it as it was |
 

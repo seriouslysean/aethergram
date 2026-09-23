@@ -63,14 +63,15 @@ final class QueueWriter: @unchecked Sendable {
         }
     }
 
-    /// Waits until nothing is pending: every write submitted before the call
-    /// and every one submitted while it waits, because the drain it waits
-    /// behind keeps writing until nothing is left. A caller recording
-    /// continuously from another thread extends the wait for as long as it
-    /// keeps submitting. Two callers need it: the consumer's deactivation
-    /// path, where the process is about to stop being allowed to run, and an
-    /// erase, which promises the file is gone rather than that a delete was
-    /// asked for.
+    /// Waits until the writer's current drain goes idle: every write
+    /// submitted before the call, and every one submitted while that drain
+    /// runs, because it keeps writing until nothing is left, so a caller
+    /// recording continuously from another thread extends the wait. A write
+    /// submitted after that drain goes idle can be scheduled behind this wait
+    /// and still be pending when it returns. Two callers need it: the
+    /// consumer's deactivation path, where the process is about to stop being
+    /// allowed to run, and an erase, which promises the file is gone rather
+    /// than that a delete was asked for.
     func waitForPendingWrites() {
         queue.sync {}
     }

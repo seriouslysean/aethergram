@@ -200,9 +200,11 @@ public final class SignalRecorder: Sendable {
     /// the process may not survive long enough to finish — which is why the
     /// queue is durable rather than why this call blocks.
     ///
-    /// Blocks the caller until no queue write is pending, including one
-    /// submitted while it waits, so recording continuously from another
-    /// thread extends the wait. It does not wait for the send.
+    /// Blocks the caller until the queue writer's current drain goes idle:
+    /// every write submitted before the call, and any submitted while that
+    /// drain runs, so recording continuously from another thread extends the
+    /// wait. A write submitted after the drain goes idle may still be pending
+    /// when it returns. It does not wait for the send.
     public func flush() {
         requireNoReentry()
         // The consumer calls this on its way out of an active cycle, which is
