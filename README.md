@@ -68,7 +68,7 @@ let recorder = SignalRecorder(
     clientUserProvider: { myAnalyticsIdentifier }
 )
 
-recorder.updateConsent(storedAnswer)   // on every launch, before anything records
+recorder.updateConsent(storedAnswer)   // on every activation, before anything records
 recorder.beginSession()                // a session boundary is host-specific
 recorder.record("Session.started", parameters: ["surface": "home"])
 ```

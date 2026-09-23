@@ -89,15 +89,22 @@ So each of them:
   process; from `persist` or `purge`, a `flush()`, `reset()`, or decline waits on the queue it is
   running on.
 
-`UIDevice` is main-actor isolated, so an identifier read from it is read once on the main actor —
-at launch, say — and stored where the provider can reach it from any thread:
+`UIDevice` is main-actor isolated, so an identifier read from it is read on the main actor and
+stored where the provider can reach it from any thread. Read it in the activation step, after the
+answer is adopted and only when it permits collection. The OS supplies `identifierForVendor`, so
+reading it mints and persists nothing; it can be nil, so read it again at every activation rather
+than once per process:
 
 ```swift
 let analyticsIdentifier = Mutex<String?>(nil)   // import Synchronization
 
-// On the main actor, before the recorder is constructed:
-let identifier = UIDevice.current.identifierForVendor?.uuidString
-analyticsIdentifier.withLock { $0 = identifier }
+// On the main actor, in the activation step:
+recorder.updateConsent(answer)
+if answer.permitsCollection {
+    let identifier = UIDevice.current.identifierForVendor?.uuidString
+    analyticsIdentifier.withLock { $0 = identifier }
+    recorder.beginSession()
+}
 
 // The provider reads the stored copy:
 clientUserProvider: { analyticsIdentifier.withLock { $0 } }
@@ -149,8 +156,8 @@ closes it and erases what was collected under it.
 1. Construct one recorder per process, owned process-wide — a static or an app-level object, not a
    view controller that can be created twice. Give each `FileSignalQueueStorage` a file of its
    own; two live stores over one file are unsupported.
-2. On every launch, and before anything records, adopt the stored answer with
-   `recorder.updateConsent(storedAnswer)`. A recorder starts at `.neverAsked` in every process
+2. On every activation, launch included, and before anything records, adopt the stored answer
+   with `recorder.updateConsent(storedAnswer)`. A recorder starts at `.neverAsked` in every process
    and reads no answer on its own. A non-granted answer adopted here erases, by design: that is
    how a decline made while this process was not running reaches what it collected.
 3. Call `beginSession()` on activation.
@@ -302,9 +309,9 @@ Then confirm, on a real run:
 - The consent UI and where the answer is stored. The package reads a verdict; it does not ask.
 - The analytics identifier and its disclosure.
 - The privacy manifest and the App Store privacy answers. The package ships no
-  `PrivacyInfo.xcprivacy` and calls none of the required-reason APIs directly, so the declarations
-  go in the manifest of the bundle that embeds it — for an extension, the extension's own. What it
-  sends, by the categories those declarations use:
+  `PrivacyInfo.xcprivacy` and calls none of the required-reason APIs directly, so declare what it
+  sends in the embedding app's manifest and privacy answers. By the data types Apple's App Privacy
+  Details use:
 
   | Data type | What in the payload |
   |---|---|
