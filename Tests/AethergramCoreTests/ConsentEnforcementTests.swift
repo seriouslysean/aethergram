@@ -78,6 +78,10 @@ struct ConsentEnforcementTests {
         #expect(fixture.storage.signalsOnDisk.isEmpty)
         #expect(!fixture.clientUserCalls.wasCalled)
         #expect(!fixture.environmentCalls.wasCalled)
+        // The counters are host storage too: a read before the answer is a
+        // read the answer did not permit, whether or not anything was saved.
+        #expect(fixture.retention.loadCallCount == 0)
+        #expect(fixture.retention.saved.isEmpty)
     }
 
     /// Session boundaries are the other write path. A counter that advanced
