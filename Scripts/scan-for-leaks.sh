@@ -45,13 +45,12 @@ ISSUE_URL_RE='github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(issues|pull)/[0-9]+'
 # itself.
 MESSAGE_RE="/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|$ISSUE_URL_RE|^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):"
 
-# GitHub writes two subjects itself, on a web merge that runs no hook: `Merge pull request #N from
-# <owner>/<branch>` and a squash subject ending ` (#N)`. The first number past 99 would otherwise
-# fail every later history scan, and history cannot be rewritten. Only that number, in that place on
-# a subject, is removed before the scan; the rest of the subject is still read. A line may carry the
-# `%H ` prefix the history tier adds.
-MERGE_SUBJECT_SED='s/^\([0-9a-f]\{40,64\} \)\{0,1\}Merge pull request #[0-9][0-9]* \(from seriouslysean\/[^ ][^ ]*\)$/\1Merge pull request \2/'
-SQUASH_SUBJECT_SED='s/ (#[0-9][0-9]*)$//'
+# GitHub writes one subject itself, on a web merge that runs no hook: `Merge pull request #N from
+# <owner>/<branch>`. Its number past 99 would otherwise fail every later history scan, and history
+# cannot be rewritten. Only that number, in that place, on the subject of a commit with two parents,
+# is removed before the scan; the rest of the subject is still read. Lines carry the `%H ` prefix
+# the history tier adds.
+MERGE_SUBJECT_SED='s/^\([0-9a-f]\{40,64\} \)Merge pull request #[0-9][0-9]* \(from seriouslysean\/[^ ][^ ]*\)$/\1Merge pull request \2/'
 
 # The runner's fixtures and this file's own entries below carry the shapes on purpose. Each is
 # allowed as its exact `path:line`, not by file, so any other line staged into either is still
@@ -119,9 +118,9 @@ if [ -n "$MSG" ]; then
     # `commit -v` appends the staged diff below a scissors line, which is never part of the
     # published message, so that gets cut first. Nothing after is comment-stripped: whether git
     # itself drops a `#` line depends on commit.cleanup (default "strip" for an editor commit,
-    # "whitespace" for `-m`), and a line `-m` keeps must still be caught here.
-    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG" \
-        | sed -e "1$MERGE_SUBJECT_SED" -e "1$SQUASH_SUBJECT_SED")" || FOUND=1
+    # "whitespace" for `-m`), and a line `-m` keeps must still be caught here. No subject is
+    # forgiven either: a hook never sees one GitHub wrote, and a local merge writes `Merge branch`.
+    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG")" || FOUND=1
     if [ "$FOUND" -eq 0 ]; then
         printf 'clean\n'
         exit 0
@@ -144,11 +143,13 @@ scan "issue or pull request URL" "$ISSUE_URL_RE" || FOUND=1
 
 if [ "${1:-}" = "--all" ]; then
     printf 'scanning commit messages\n'
-    # Subjects and bodies are read apart, so GitHub's shapes are forgiven on a subject and nowhere else.
-    _subjects="$(git log --all --format='%H %s')" || die "git log failed"
+    # Subjects and bodies are read apart, and merge commits apart from the rest, so GitHub's merge
+    # subject is forgiven where GitHub writes it and nowhere else.
+    _merges="$(git log --all --merges --format='%H %s')" || die "git log failed"
+    _subjects="$(git log --all --no-merges --format='%H %s')" || die "git log failed"
     _bodies="$(git log --all --format='%H%n%b')" || die "git log failed"
-    scan_messages "$(printf '%s\n' "$_subjects" \
-        | sed -e "$MERGE_SUBJECT_SED" -e "$SQUASH_SUBJECT_SED")" || FOUND=1
+    scan_messages "$(printf '%s\n' "$_merges" | sed "$MERGE_SUBJECT_SED")" || FOUND=1
+    scan_messages "$_subjects" || FOUND=1
     scan_messages "$_bodies" || FOUND=1
 fi
 
