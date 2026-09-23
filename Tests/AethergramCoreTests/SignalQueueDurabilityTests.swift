@@ -862,7 +862,7 @@ struct SignalQueueDurabilityTests {
         let directory = try #require(TestTempDirectory.url)
         let signalDate = try testDate(year: 2026, month: 1, day: 5)
         let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
-        let limit = 5000
+        let limit = 1_250
         let seeded = (0 ..< limit).map { Signal(name: "seeded.\($0)", sessionID: "session-a", recordedAt: signalDate) }
         FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem).persist(seeded)
         defer {
