@@ -812,6 +812,41 @@ struct SignalQueueDurabilityTests {
         let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
         #expect(readable.load().map(\.name) == ["later.b"])
     }
+
+    /// A process whose load fails and whose later read succeeds writes what
+    /// the file held ahead of its own snapshot, so a run of such processes
+    /// adds a snapshot to the file each time and nothing trims it. What is
+    /// carried is bounded at the default queue limit, oldest dropped first.
+    @Test(
+        "A run of processes whose loads keep failing does not grow the queue file without bound",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func carriedSignalsStayBoundedAcrossFailedLoads() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let bound = AethergramConfiguration(logSubsystem: testLogSubsystem).queueLimit
+        let seeded = (0 ..< bound).map { Signal(name: "seeded.\($0)", sessionID: "session-a", recordedAt: signalDate) }
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem).persist(seeded)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        var largest = 0
+        for lifetime in 0 ..< 25 {
+            let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+            #expect(storage.load().isEmpty)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+            storage.persist([Signal(name: "lifetime.\(lifetime)", sessionID: "session-b", recordedAt: signalDate)])
+            largest = try max(largest, JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).count)
+        }
+
+        let onDisk = try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL))
+        #expect(largest <= bound + 1)
+        #expect(onDisk.last?.name == "lifetime.24")
+        #expect(!onDisk.contains { $0.name == "seeded.0" })
+    }
 }
 
 /// What a closure on another thread saw, read back by the test body after it.
