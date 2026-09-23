@@ -1025,11 +1025,17 @@ public final class SignalRecorder: Sendable {
 
     /// Mints the identifier and the task together, so a task always knows the
     /// name the slot holds it under. Call from inside the lock, and install
-    /// the task as `.waiting` exactly when `waiting` is true.
-    private func makeOwnedDrain(_ state: inout State, after delay: TimeInterval, waiting: Bool) -> OwnedDrain {
+    /// the task as `.waiting` exactly when `waiting` is true. A task minted
+    /// by a finishing drain names that drain as `previous`.
+    private func makeOwnedDrain(
+        _ state: inout State,
+        after delay: TimeInterval,
+        waiting: Bool,
+        previous: Task<Void, Never>? = nil
+    ) -> OwnedDrain {
         state.lastDrainID &+= 1
         let id = state.lastDrainID
-        return OwnedDrain(id: id, task: makeDrainTask(id: id, after: delay, promoting: waiting))
+        return OwnedDrain(id: id, task: makeDrainTask(id: id, after: delay, promoting: waiting, previous: previous))
     }
 
     /// Utility, matching the writer queue, rather than inherited: most records
@@ -1040,10 +1046,20 @@ public final class SignalRecorder: Sendable {
     /// recorder is not kept alive by a drain that has not started; `deinit`
     /// cancels that drain. From the promotion on it holds the recorder
     /// strongly, through its whole pass: a recorder released mid-send still
-    /// sends the rest of what that pass finds queued, and nothing after,
-    /// because the drain its release schedules starts out waiting.
-    private func makeDrainTask(id: Int, after delay: TimeInterval, promoting: Bool) -> Task<Void, Never> {
+    /// sends the rest of what that pass finds queued, and nothing after.
+    ///
+    /// The drain a finishing pass schedules waits for that pass to end
+    /// first, whatever its delay. Until then the pass still holds the
+    /// recorder, and a promotion inside that window would take it after the
+    /// host let go.
+    private func makeDrainTask(
+        id: Int,
+        after delay: TimeInterval,
+        promoting: Bool,
+        previous: Task<Void, Never>?
+    ) -> Task<Void, Never> {
         Task(priority: .utility) { [weak self, sleep] in
+            await previous?.value
             if delay > 0 {
                 do {
                     try await sleep(delay)
@@ -1084,7 +1100,7 @@ public final class SignalRecorder: Sendable {
     /// evict the drain that replaced it.
     private func releaseDrainSlot(id: Int) {
         lock.withLock { current in
-            guard current.drain.owned?.id == id else { return }
+            guard let finishing = current.drain.owned, finishing.id == id else { return }
             current.drain = .idle
             guard current.gateOpen, !current.pending.isEmpty else { return }
             // The steady interval when nothing failed, and what the failure
@@ -1100,7 +1116,9 @@ public final class SignalRecorder: Sendable {
             // Waiting even at zero delay, so the task promotes through a
             // weak reference that a released recorder's `deinit` has
             // cancelled first.
-            current.drain = .waiting(makeOwnedDrain(&current, after: delay, waiting: true))
+            current.drain = .waiting(
+                makeOwnedDrain(&current, after: delay, waiting: true, previous: finishing.task)
+            )
         }
     }
 
