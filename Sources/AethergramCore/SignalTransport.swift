@@ -68,5 +68,10 @@ public enum TransportOutcome: Equatable, Sendable {
 public protocol SignalTransport: Sendable {
     /// Sends one batch and reports what the recorder should do with it.
     /// Called from the recorder's drain task, never under its lock.
-    func send(_ batch: SignalBatch) async -> TransportOutcome
+    ///
+    /// Spelled `nonisolated(nonsending)` (SE-0461) rather than left to the
+    /// module's upcoming-feature flag, so the requirement means the same thing
+    /// whatever flags this module is built with. A witness may still be
+    /// plain, `@concurrent`, or actor-isolated.
+    nonisolated(nonsending) func send(_ batch: SignalBatch) async -> TransportOutcome
 }
