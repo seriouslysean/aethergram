@@ -440,6 +440,83 @@ struct DeliverySchedulingTests {
         #expect(after.completedSessionsCount == 1)
         #expect(after.totalSessionsCount == 2)
     }
+
+    /// A record in the next process lands before its `beginSession()` often
+    /// enough — a launch emit, a restored queue — and it must not move the
+    /// dead session's checkpoint. Moved to now, the inference closes that
+    /// session across the whole gap it spent dead, and a gap past a day
+    /// discards it outright, losing the time it really ran.
+    @Test(
+        "A record before the next activation does not stretch a dead process's session",
+        arguments: [3.0, 25.0]
+    )
+    func recordBeforeActivationLeavesInheritedSessionAlone(hoursDead: Double) throws {
+        let directory = try #require(TestTempDirectory.url)
+        let retention = SpyRetentionStore()
+        let opened = try testDate(year: 2026, month: 3, day: 4, hour: 10)
+        let clock = SettableClock(opened)
+        try deadSession(directory: directory, retention: retention, clock: clock, opened: opened)
+
+        clock.set(opened.addingTimeInterval(hoursDead * 3600))
+        let reborn = makeFixture(directory: directory, retention: retention, now: clock.read)
+        reborn.recorder.updateConsent(.granted)
+        reborn.recorder.record("beta")
+        reborn.recorder.beginSession()
+
+        let after = try #require(retention.record)
+        #expect(after.completedSessionsCount == 1)
+        #expect(after.previousSessionSeconds == 300)
+        #expect(after.totalSessionSeconds == 300)
+    }
+
+    /// `endSession()` closes the session this instance opened. One it
+    /// inherited is left to the next `beginSession()`, which closes it
+    /// against its own checkpoint: the store may be shared with a process
+    /// that is still running it, and closing someone else's session against
+    /// this instance's clock is the error the inference exists to avoid.
+    @Test("An end call without a begin does not close a dead process's session against now")
+    func endWithoutBeginLeavesInheritedSessionToTheInference() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let retention = SpyRetentionStore()
+        let opened = try testDate(year: 2026, month: 3, day: 4, hour: 10)
+        let clock = SettableClock(opened)
+        try deadSession(directory: directory, retention: retention, clock: clock, opened: opened)
+
+        clock.set(opened.addingTimeInterval(3 * 3600))
+        let reborn = makeFixture(directory: directory, retention: retention, now: clock.read)
+        reborn.recorder.updateConsent(.granted)
+        // Loads the inherited record, so the end call has one to act on.
+        reborn.recorder.record("beta")
+        reborn.recorder.endSession()
+
+        let ended = try #require(retention.record)
+        #expect(ended.completedSessionsCount == 0)
+        #expect(ended.openSessionStartedAt == opened)
+
+        reborn.recorder.beginSession()
+        let after = try #require(retention.record)
+        #expect(after.completedSessionsCount == 1)
+        #expect(after.previousSessionSeconds == 300)
+    }
+
+    /// A process that opens a session at `opened`, records five minutes into
+    /// it, and dies without an end call.
+    private func deadSession(
+        directory: URL,
+        retention: SpyRetentionStore,
+        clock: SettableClock,
+        opened: Date
+    ) throws {
+        let dead = makeFixture(directory: directory, retention: retention, now: clock.read)
+        dead.recorder.updateConsent(.granted)
+        dead.recorder.beginSession()
+        clock.set(opened.addingTimeInterval(300))
+        dead.recorder.record("alpha")
+        dead.recorder.writer.waitForPendingWrites()
+        let afterKill = try #require(retention.record)
+        #expect(afterKill.openSessionStartedAt == opened)
+        #expect(afterKill.lastActivityAt == opened.addingTimeInterval(300))
+    }
 }
 
 // MARK: - Waiting on scheduled work

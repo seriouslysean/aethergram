@@ -441,3 +441,32 @@ final class PurgeResistantQueueStorage: SignalQueueStorage, @unchecked Sendable 
     private var stored: [Signal] = []
     private var purgeCalls = 0
 }
+
+/// A clock the test sets rather than one that advances per read.
+///
+/// The session arithmetic turns on which instant each call saw, and a stepping
+/// clock ties that to how many reads happened before it — a count the recorder
+/// is free to change.
+final class SettableClock: @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init(_ start: Date) {
+        current = start
+    }
+
+    // MARK: Internal
+
+    /// The closure the recorder's `now:` parameter takes.
+    var read: @Sendable () -> Date {
+        { self.lock.withLock { self.current } }
+    }
+
+    func set(_ date: Date) {
+        lock.withLock { current = date }
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private var current: Date
+}
