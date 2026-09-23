@@ -156,6 +156,13 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         return (isTestFlight, !isTestFlight)
     }
 
+    /// Where the receipt for the bundle at `bundleURL` lives, asking
+    /// `receiptURL` for a bundle's own answer. Pure over URLs so the
+    /// resolution is testable on a host that never reads a receipt.
+    static func receiptURL(forBundleAt bundleURL: URL, receiptURL: (URL) -> URL?) -> URL? {
+        receiptURL(bundleURL)
+    }
+
     // MARK: Private
 
     private static var isDebugBuild: Bool {
@@ -199,7 +206,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         #if os(macOS)
             nil
         #else
-            bundle.appStoreReceiptURL?.path
+            receiptURL(forBundleAt: bundle.bundleURL) { url in
+                url == bundle.bundleURL ? bundle.appStoreReceiptURL : Bundle(url: url)?.appStoreReceiptURL
+            }?.path
         #endif
     }
 
