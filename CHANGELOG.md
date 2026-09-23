@@ -65,7 +65,7 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 - `endSession()` closes only a session this recorder opened, and a `record` advances only that
   session's checkpoint. A session left open by another process is closed by the next
   `beginSession()` against its own last activity, rather than stretched to now.
-- For an app extension on any platform but macOS, which reads no receipt,
+- For an app extension on iOS or Mac Catalyst (macOS reads no receipt),
   `EnvironmentSnapshot.current()` resolves the receipt that `runContext.channel` is read from
   against the containing app's bundle rather than the extension's own, falling back to the
   extension's when the app's bundle gives no receipt location. The `.appex` has to sit two
@@ -82,7 +82,7 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 - A queue overflow logs once when it begins and once when it ends, rather than on every record. It
   ends when a delivery or a permanent rejection leaves the queue below the limit; an erase clears
   it without the ending line. A store skipping writes logs when the skipping starts and when it
-  stops, rather than on every write.
+  stops or its reason changes, rather than on every write.
 
 ### Tooling
 
