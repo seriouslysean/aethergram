@@ -1,5 +1,5 @@
 #!/bin/sh
-# Aethergram repo checks. Six gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. The gates run in the order a failure is cheapest to read.
 #
 #   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
@@ -14,8 +14,9 @@
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
 # cannot reach, the api-break gate holds the public API to what the release being prepared may
-# change, the documentation gate builds what Swift Package Index publishes, and `swift test` is the
-# correctness gate.
+# change, the release heading gate is proved on the refusals a tag push would make, the
+# documentation gate builds what Swift Package Index publishes, and `swift test` is the correctness
+# gate.
 
 set -u
 
@@ -524,6 +525,51 @@ if OUT="$(release_gate "$RELEASE_OVERRIDE" --print-additions 2>&1)"; then
 else
     printf '%s\n' "$OUT"
     fail "Scripts/check-api-breaks.sh refused the working tree against the last release"
+fi
+
+printf '\nrelease heading gate\n'
+
+# CI runs the check on a tag push only, so every refusal it can make is proved here, on each run.
+heading_gate() { "$ROOT/Scripts/check-release-heading.sh" "$1" --changelog "$2"; }
+EM="$(printf '\342\200\224')"
+heading_fixture() { printf '# Changelog\n\nIntro.\n\n%s\n\nBody.\n\n## 0.3.2 %s 2026-09-23\n' "$1" "$EM" > "$2"; }
+
+it "the tag v0.3.2 was cut from matches its own CHANGELOG's heading"
+git -C "$ROOT" show v0.3.2:CHANGELOG.md > "$TMP/changelog-v0.3.2" 2>/dev/null
+if OUT="$(heading_gate v0.3.2 "$TMP/changelog-v0.3.2" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the heading gate refused the CHANGELOG v0.3.2 shipped with"
+fi
+
+it "a heading naming another release, one with no date, or a hyphen for the dash is refused"
+MISSING=""
+for CASE in "## 0.3.2 $EM 2026-09-23|the top heading is" "## 0.4.0|is not" "## 0.4.0 - 2026-09-23|is not" \
+    "## Unreleased|the top heading is" "## 0.4.0 $EM soon|is not"; do
+    HEADING="${CASE%|*}"; REASON="${CASE##*|}"
+    heading_fixture "$HEADING" "$TMP/changelog-bad"
+    OUT="$(heading_gate v0.4.0 "$TMP/changelog-bad" 2>&1)"; GATE_RC=$?
+    { [ "$GATE_RC" -eq 1 ] && printf '%s\n' "$OUT" | grep -qF "$REASON"; } \
+        || MISSING="$MISSING [$HEADING: exit $GATE_RC, $OUT]"
+done
+heading_fixture "## 0.4.0 $EM 2026-10-01" "$TMP/changelog-good"
+if [ -n "$MISSING" ]; then
+    fail "not refused as expected:$MISSING"
+elif ! OUT="$(heading_gate v0.4.0 "$TMP/changelog-good" 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "the same fixture with a dated 0.4.0 heading was refused, so the refusals are not about the heading"
+else
+    pass
+fi
+
+it "a tag that is not vX.Y.Z cannot run the heading gate"
+OUT="$(heading_gate 0.4.0 "$TMP/changelog-good" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 2 ]; then
+    printf '%s\n' "$OUT"
+    fail "a tag with no v exited $GATE_RC rather than 2"
+else
+    pass
 fi
 
 printf '\ndocumentation gate\n'
