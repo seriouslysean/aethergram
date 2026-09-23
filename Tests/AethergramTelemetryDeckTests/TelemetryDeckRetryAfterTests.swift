@@ -274,6 +274,20 @@ struct TelemetryDeckRetryAfterTests {
         #expect(delay.isFinite)
     }
 
+    /// A count past `Double`'s range is still `1*DIGIT`: the backend asked for
+    /// a wait longer than any the core serves. Refusing it would retry on the
+    /// core's own schedule, sooner than asked; saturating hands the core the
+    /// longest finite wait, which it bounds at its interval ceiling. RFC 9111
+    /// §1.2.2 saturates an overflowing cache delta-seconds the same way; it
+    /// does not govern Retry-After, and is the analogy only.
+    @Test(
+        "A delay-seconds past Double's range saturates to the largest finite delay",
+        arguments: [String(repeating: "9", count: 309), String(repeating: "9", count: 400), "1" + String(repeating: "0", count: 5000)]
+    )
+    func delaySecondsPastDoubleSaturates(value: String) {
+        #expect(TelemetryDeckTransport.retryAfter(value, now: Self.rfcNow) == .greatestFiniteMagnitude)
+    }
+
     /// `DIGIT` is `%x30-39` (RFC 5234 Appendix B.1). A digit from another
     /// script is not one, in a count or in a date.
     @Test(
@@ -293,8 +307,7 @@ struct TelemetryDeckRetryAfterTests {
     }
 
     /// Anything outside the grammar is refused rather than guessed at: a
-    /// sign, a fraction, a unit, a zone other than GMT, or a count too large
-    /// for a `Double` to hold.
+    /// sign, a fraction, a unit, or a zone other than GMT.
     @Test(
         "A Retry-After outside the grammar is refused",
         arguments: [
@@ -311,8 +324,7 @@ struct TelemetryDeckRetryAfterTests {
             "Sun, 06 Nov 1994 08:51:37 UTC",
             "Sun, 06 Nov 1994 08:51:37 +0000",
             "Foo, 06 Nov 1994 08:51:37 GMT",
-            "Sun, 06 Foo 1994 08:51:37 GMT",
-            String(repeating: "9", count: 400)
+            "Sun, 06 Foo 1994 08:51:37 GMT"
         ]
     )
     func malformedRetryAfterIsRefused(value: String) {

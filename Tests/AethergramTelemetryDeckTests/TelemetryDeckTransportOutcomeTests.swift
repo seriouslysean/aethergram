@@ -70,14 +70,16 @@ struct TelemetryDeckTransportOutcomeTests {
     }
 
     /// What the core is handed at either extreme: a date already past is a
-    /// zero delay, and the latest date or a count past `UInt64.max` is its
-    /// finite size. None traps; bounding is the core's.
+    /// zero delay, the latest date or a count past `UInt64.max` is its finite
+    /// size, and a count past `Double`'s range is the largest finite one. None
+    /// traps; bounding is the core's.
     @Test(
         "A 429 with a past or far-future Retry-After hands the core a zero or finite delay",
         arguments: [
             ("Sun, 06 Nov 1994 08:00:00 GMT", 0.0),
             ("Fri, 31 Dec 9999 23:59:59 GMT", 252_618_189_022.0),
-            ("18446744073709551616", 18_446_744_073_709_551_616.0)
+            ("18446744073709551616", 18_446_744_073_709_551_616.0),
+            (String(repeating: "9", count: 400), .greatestFiniteMagnitude)
         ]
     )
     func extremeRetryAfterReachesTheCoreFinite(value: String, delay: TimeInterval) throws {
