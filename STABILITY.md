@@ -69,7 +69,9 @@ branch; an exhaustive switch without one stops compiling when a case arrives.
   persists the bytes — the protocol itself specifies no decoding, the storage is the host's.
   `firstSessionDay` is required, every other key decodes to a default when absent, so a host
   upgrading across a release keeps an install's acquisition date and day history. A record with no
-  `firstSessionDay` fails to decode and is treated as absent, not recovered.
+  `firstSessionDay` fails to decode. The decoding is the host's `RetentionStore`'s, whose `load()`
+  cannot throw: the package never sees the failure, so the store must return nil for it, and the
+  recorder then starts a new record rather than recovering the old one.
 - The precise timing of a transmission. `deliveryDelay` and `backoffInterval` are the contract;
   when the task actually runs is the scheduler's business.
 - Which exact `TransportOutcome` a given HTTP status maps to, beyond the retryable-versus-permanent
