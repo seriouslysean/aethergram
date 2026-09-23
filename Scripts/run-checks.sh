@@ -476,17 +476,26 @@ fixture_ran_all() {
     [ "$1" -eq 0 ] && [ "$(tests_run "$2")" = "$FIXTURE_TESTS" ]
 }
 
+# No debug info, so no dsymutil: it was seen listing TMPDIR itself, which on a machine with a large
+# one held the run for over ten minutes.
+fixture_test() {
+    swift test --package-path "$FIXTURE" --scratch-path "$TMP/fixture-test" -debug-info-format none "$@"
+}
+
+# The filtered run exits 0 having run nothing, which is the case the count exists to refuse.
 it "a fixture run that executes no test is refused"
-OUT="$(swift test --package-path "$FIXTURE" --scratch-path "$TMP/fixture-test" --filter NoSuchTestProbe 2>&1)"; GATE_RC=$?
-if fixture_ran_all "$GATE_RC" "$OUT"; then
+OUT="$(fixture_test --filter NoSuchTestProbe 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || [ "$(tests_run "$OUT")" != 0 ]; then
     printf '%s\n' "$OUT"
-    fail "a filtered run of $(tests_run "$OUT") tests passed as the full suite"
+    fail "the filtered run exited $GATE_RC or did not report 0 tests, so it proves nothing about the count"
+elif fixture_ran_all "$GATE_RC" "$OUT"; then
+    fail "a run of 0 tests passed as the full suite"
 else
     pass
 fi
 
 it "the fixture's $FIXTURE_TESTS tests run on macOS and pass"
-OUT="$(swift test --package-path "$FIXTURE" --scratch-path "$TMP/fixture-test" 2>&1)"; GATE_RC=$?
+OUT="$(fixture_test 2>&1)"; GATE_RC=$?
 if fixture_ran_all "$GATE_RC" "$OUT"; then
     pass
 else
