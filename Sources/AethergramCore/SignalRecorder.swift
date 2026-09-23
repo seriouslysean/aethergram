@@ -341,6 +341,13 @@ public final class SignalRecorder: Sendable {
         logger.info("reset ok")
     }
 
+    public func resetClosingCollection<R, E: Error>(during body: () throws(E) -> R) throws(E) -> R {
+        reset()
+        let result = try body()
+        beginSession()
+        return result
+    }
+
     // MARK: Internal
 
     /// Every mutation of the durable queue goes through here, never through
