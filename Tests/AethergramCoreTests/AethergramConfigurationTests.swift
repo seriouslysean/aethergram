@@ -35,11 +35,12 @@ struct AethergramConfigurationTests {
     /// A sleep that runs traps on a duration past `Int64.max` seconds, about
     /// 9.2e18, and `Duration.seconds` itself past about 1.7e20, so under 0.3.1
     /// an interval that large constructed and then crashed its host at the
-    /// first sleep that ran on it. The `#require` is the guard for the running
-    /// sleep: a ceiling raised past `Int64.max` fails there rather than
-    /// trapping the runner. The cancelled sleep and the retry deadline below
-    /// are built from the clamped values, which covers only the conversion to
-    /// a `Duration`.
+    /// first sleep that ran on it. The `#require` is the only guard for the
+    /// running sleep: the rest of the test would pass a ceiling past
+    /// `Int64.max` silently, because the cancelled sleep never runs, and would
+    /// trap the runner only past about 1.7e20. The cancelled sleep and the
+    /// retry deadline below are built from the clamped values, which covers
+    /// only the conversion to a `Duration`.
     @Test("An interval too large for a Duration is clamped rather than trapping the first record's sleep")
     func intervalTooLargeForADurationIsClamped() async throws {
         try #require(AethergramConfiguration.maximumInterval < Double(Int64.max))
