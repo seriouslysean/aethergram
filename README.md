@@ -23,7 +23,7 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.1")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.2")
 ```
 
 ```swift
@@ -63,11 +63,13 @@ let recorder = SignalRecorder(
     retentionStore: MyRetentionStore(),
     // Called only on a transmit consent already permits, so an implementation
     // that mints on first read cannot plant an identifier before the answer.
+    // Runs on the drain's thread under the recorder's lock: read thread-safe
+    // storage, never hop to the main actor, never call back into the recorder.
     clientUserProvider: { myAnalyticsIdentifier }
 )
 
-recorder.updateConsent(.granted)   // or .declined / .neverAsked
-recorder.beginSession()            // a session boundary is host-specific
+recorder.updateConsent(storedAnswer)   // on every launch, before anything records
+recorder.beginSession()                // a session boundary is host-specific
 recorder.record("Session.started", parameters: ["surface": "home"])
 ```
 
@@ -99,7 +101,8 @@ are in [AGENTS.md](AGENTS.md).
 
 ## Stability
 
-What a version number promises is in [STABILITY.md](STABILITY.md).
+What a version number promises is in [STABILITY.md](STABILITY.md), and what each release changed
+is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
