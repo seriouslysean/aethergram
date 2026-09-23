@@ -3,9 +3,9 @@ import Foundation
 /// RFC 9110 §5.6.7's `HTTP-date`, read to the letter of its grammar.
 ///
 /// Written out rather than handed to `DateFormatter`, which reads names in any
-/// case, digits from any script, and collapsed or missing spaces, and whose
-/// two-digit start date is inclusive at the wrong end of the 50-year window
-/// and taken on the process's calendar. What this admits:
+/// case and digits from any script, does not hold fields to their widths, and
+/// whose two-digit start date is inclusive at the wrong end of the 50-year
+/// window. What this admits:
 ///
 /// - The three forms, each whole: IMF-fixdate, rfc850-date, asctime-date.
 /// - Names and `GMT` case-sensitively, and only the day-name spelling the form

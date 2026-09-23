@@ -50,7 +50,8 @@ struct TelemetryDeckRetryAfterTests {
     }
 
     /// A value followed by anything is not a value the grammar produces. "120,
-    /// 60" is how two Retry-After fields arrive joined by `HTTPURLResponse`.
+    /// 60" is two Retry-After field lines combined with a comma, as RFC 9110
+    /// §5.3 lets a recipient on the path do.
     @Test(
         "A Retry-After with trailing input is refused",
         arguments: [
