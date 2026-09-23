@@ -443,6 +443,110 @@ struct DeliverySchedulingTests {
         #expect(transport.sendCount == 0)
     }
 
+    /// A backend that says when to come back knows its own recovery better
+    /// than a schedule that doubles from ten seconds: retrying at the backoff
+    /// instead sends every throttled install back while it is still refusing.
+    ///
+    /// The first ceiling here is a tenth of a second and the backend asks for
+    /// two, so the window between them is where only the honoured delay stays
+    /// quiet. Asserted against the owned drain, because the restart after a
+    /// failure is scheduled by the drain releasing its slot, which a drain the
+    /// test drives itself never does.
+    @Test("A retry the backend delayed is not attempted at the backoff instead")
+    func retryAfterFromTheBackendOutlastsTheBackoff() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let transport = SpyTransport(outcomes: [.retryableAfter(reason: "throttled", delay: 2)])
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(batchSize: 1, transmitInterval: 0.05),
+            transport: transport,
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        // A full batch, so the first attempt goes at once.
+        fixture.recorder.record("Game.started")
+        await waitUntil { transport.sendCount == 1 }
+        try await Task.sleep(for: .milliseconds(800))
+        let sentInsideTheDelay = transport.sendCount
+        await waitUntil { transport.sendCount == 2 }
+        withExtendedLifetime(fixture.recorder) {}
+
+        #expect(sentInsideTheDelay == 1)
+        // Late, not never: the delay defers the retry rather than dropping it.
+        #expect(transport.sentSignalNames == ["Game.started", "Game.started"])
+    }
+
+    /// A delay is the backend's number and the sleep that serves it traps
+    /// past about 9.2e18 seconds, so one header a proxy mangled would take the
+    /// host down. What the recorder owes is bounded at the interval ceiling.
+    ///
+    /// A delay that is no number at all, or one in the past, is not a request
+    /// to wait, so it owes what the backoff owes and no more.
+    @Test(
+        "A delay no sleep can serve owes at most the interval ceiling",
+        arguments: [
+            (TimeInterval.infinity, AethergramConfiguration.maximumInterval - 60),
+            (1e300, AethergramConfiguration.maximumInterval - 60),
+            (.nan, 0),
+            (-5, 0)
+        ]
+    )
+    func unservableRetryDelayIsBounded(delay: TimeInterval, atLeast floor: TimeInterval) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let transport = SpyTransport(outcomes: [.retryableAfter(reason: "throttled", delay: delay)])
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(batchSize: 1, transmitInterval: 0.05),
+            transport: transport,
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("Game.started")
+        // The owned drain is the one that sleeps on what is owed, and the
+        // restart after the failure is what hands it the delay.
+        await waitUntil { transport.sendCount == 1 && fixture.recorder.drainsScheduled >= 2 }
+        withExtendedLifetime(fixture.recorder) {}
+
+        let owed = fixture.recorder.secondsUntilRetry
+        #expect(owed >= floor)
+        #expect(owed <= (floor > 0 ? AethergramConfiguration.maximumInterval : 0.1))
+    }
+
+    /// Installs that failed together must not come back together. The draw is
+    /// replayed here from the seed the recorder was handed, so a recorder that
+    /// owes the fixed ceiling rather than the draw reads as the wrong number,
+    /// on both paths that owe a retry: a refused send and a missing identifier.
+    @Test("A retry after a failure is owed at the jittered draw, not the fixed ceiling", arguments: [true, false])
+    func retryAfterAFailureIsJittered(identifierResolves: Bool) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let configuration = testConfiguration(transmitInterval: 100, maxBackoffInterval: 7200)
+        let seed: UInt64 = 7
+        let recorder = try SignalRecorder(
+            configuration: configuration,
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { identifierResolves ? "client-user" : nil },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
+            retryDelay: { failures in
+                var generator = ReplayableGenerator(state: seed)
+                return configuration.backoffInterval(consecutiveFailures: failures, using: &generator)
+            }
+        )
+        recorder.updateConsent(.granted)
+        recorder.record("Game.started")
+        await recorder.drain()
+
+        var replay = ReplayableGenerator(state: seed)
+        let drawn = configuration.backoffInterval(consecutiveFailures: 1, using: &replay)
+        // The seed has to land clear of the ceiling, or the two readings agree.
+        #expect(drawn >= 100 && drawn < 190)
+        let owed = recorder.secondsUntilRetry
+        #expect(owed > drawn - 5 && owed <= drawn)
+    }
+
     /// The invariant through the recorder rather than the pure
     /// functions: a process that dies without calling `endSession()` still
     /// contributes a duration, because the next activation closes its session

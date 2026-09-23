@@ -58,7 +58,7 @@ public final class SignalRecorder: Sendable {
     ///   - now: The clock stamped on every signal and session boundary. A
     ///     retry deadline does not read it: that is measured on a monotonic
     ///     clock, so a wall-clock change cannot move it.
-    public init(
+    public convenience init(
         configuration: AethergramConfiguration,
         transport: any SignalTransport,
         queueStorage: any SignalQueueStorage,
@@ -68,6 +68,36 @@ public final class SignalRecorder: Sendable {
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.init(
+            configuration: configuration,
+            transport: transport,
+            queueStorage: queueStorage,
+            retentionStore: retentionStore,
+            clientUserProvider: clientUserProvider,
+            environmentProvider: environmentProvider,
+            calendar: calendar,
+            now: now,
+            retryDelay: { failures in
+                var generator = SystemRandomNumberGenerator()
+                return configuration.backoffInterval(consecutiveFailures: failures, using: &generator)
+            }
+        )
+    }
+
+    /// The public initializer with the retry draw exposed, so a test can fix
+    /// what a production recorder leaves to the system generator.
+    init(
+        configuration: AethergramConfiguration,
+        transport: any SignalTransport,
+        queueStorage: any SignalQueueStorage,
+        retentionStore: any RetentionStore,
+        clientUserProvider: @escaping @Sendable () -> String?,
+        environmentProvider: @escaping @Sendable () -> [String: String],
+        calendar: Calendar,
+        now: @escaping @Sendable () -> Date,
+        retryDelay: @escaping @Sendable (_ consecutiveFailures: Int) -> TimeInterval
+    ) {
+        self.retryDelay = retryDelay
         self.configuration = configuration
         self.transport = transport
         self.queueStorage = queueStorage
@@ -253,6 +283,11 @@ public final class SignalRecorder: Sendable {
         lock.withLock { $0.lastDrainID }
     }
 
+    /// Seconds until the retry the last failure owes, and zero when none is.
+    var secondsUntilRetry: TimeInterval {
+        lock.withLock { Self.secondsOwed($0.retryNotBefore) }
+    }
+
     /// Sends queued signals until the queue empties or a send fails. Internal
     /// rather than public so tests can await a transmission the consumer only
     /// ever kicks off; `flush()` is the consumer's door.
@@ -404,6 +439,8 @@ public final class SignalRecorder: Sendable {
     private let environmentProvider: @Sendable () -> [String: String]
     private let calendar: Calendar
     private let now: @Sendable () -> Date
+    /// How long the endpoint gets after the given run of failures.
+    private let retryDelay: @Sendable (_ consecutiveFailures: Int) -> TimeInterval
     private let logger: Logger
     private let lock = OSAllocatedUnfairLock(initialState: State())
 
