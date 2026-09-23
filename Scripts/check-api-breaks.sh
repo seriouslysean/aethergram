@@ -124,9 +124,11 @@ dump_package() {
     fi
     for _m in $MODULES; do
         # Without -abort-on-module-fail a module that fails to load dumps as an empty root and
-        # exits 0, which would diagnose as an API with nothing in it to break.
+        # exits 0, which would diagnose as an API with nothing in it to break. The module cache
+        # defaults to one outside the scratch directory; the build's own is inside it, and warm.
         xcrun swift-api-digester -dump-sdk -abort-on-module-fail -module "$_m" \
             -I "$_bin/Modules" -I "$_bin" -sdk "$SDK" -target "$DUMP_TARGET" \
+            -module-cache-path "$_bin/ModuleCache" \
             -o "$_out/$_m.json" >&2 || return 1
         grep -q '"kind": "TypeDecl"' "$_out/$_m.json" || {
             printf 'api gate: the dump of %s declares no type\n' "$_m" >&2
