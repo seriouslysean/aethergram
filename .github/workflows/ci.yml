@@ -33,7 +33,8 @@ jobs:
       # Full history: the leak scan's history tier runs with --all, and a shallow (depth-1)
       # checkout would leave it scanning the one fetched commit -- a gate that never fires
       # looks exactly like one that passes.
-      - uses: actions/checkout@v4
+      # A tag can be moved to other code after review; a commit SHA cannot.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
