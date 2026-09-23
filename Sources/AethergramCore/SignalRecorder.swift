@@ -130,6 +130,8 @@ public final class SignalRecorder: Sendable {
         let erased: (happened: Bool, drain: Task<Void, Never>?, queued: Int) = lock.withLock { current in
             current.consent = state
             guard !state.permitsCollection else {
+                // A grant during a closing reset takes effect at its reopen.
+                guard current.gateOpen else { return (false, nil, 0) }
                 Self.openSessionIfNeeded(&current)
                 restoreQueueIfNeeded(&current)
                 return (false, nil, current.pending.count)
@@ -190,29 +192,8 @@ public final class SignalRecorder: Sendable {
     public func beginSession() {
         requireNoReentry()
         lock.withLock { current in
-            guard current.consent.permitsCollection else { return }
-            let started = now()
-            loadRetentionIfNeeded(&current, at: started)
-            // A session this instance already opened stays open. Two calls land
-            // in one activation whenever consent is adopted from another device
-            // — the host grants on that arrival, before the cycle's own session
-            // emit — and without this the second call would close the first at
-            // a near-zero duration and count the cycle twice.
-            //
-            // The comparison is against our own stamp, not merely against a
-            // non-nil `openSessionStartedAt`: a session left open by a process
-            // that died is also open, and closing that one is the entire point
-            // of the inference path.
-            if current.ownsOpenSession { return }
-            current.openedSessionAt = started
-            current.sessionID = UUID().uuidString
-            let record = RetentionCounters.recordingSessionStart(
-                in: current.retention,
-                at: started,
-                calendar: calendar
-            )
-            current.retention = record
-            retentionStore.save(record)
+            guard current.gateOpen else { return }
+            openCountedSession(&current)
         }
     }
 
@@ -226,7 +207,7 @@ public final class SignalRecorder: Sendable {
     public func endSession() {
         requireNoReentry()
         lock.withLock { current in
-            guard current.consent.permitsCollection, current.ownsOpenSession,
+            guard current.gateOpen, current.ownsOpenSession,
                   let existing = current.retention else { return }
             current.openedSessionAt = nil
             let record = RetentionCounters.recordingSessionEnd(in: existing, at: now())
@@ -341,11 +322,53 @@ public final class SignalRecorder: Sendable {
         logger.info("reset ok")
     }
 
+    /// `reset()` with collection closed for the length of `body`, for a host
+    /// whose data reset also replaces what `clientUserProvider` returns.
+    ///
+    /// Erases what `reset()` erases and waits for the erase to reach the
+    /// queue store, then runs `body` on the calling thread, outside the
+    /// recorder's lock, with the gate shut. Until it returns, `record`,
+    /// `beginSession()`, and `endSession()` are dropped, no identifier is
+    /// resolved, and nothing is sent, as before a grant. A send already
+    /// handed to the transport is cancelled and its verdict discarded, as
+    /// for `reset()`.
+    ///
+    /// Collection reopens when `body` returns or throws; an error it throws
+    /// reaches the caller after the reopen. Calls nest, and may overlap from
+    /// several threads: collection reopens only when the last of them
+    /// returns, in whatever order they finish. If consent permits then, the
+    /// reopen opens a counted session, as `beginSession()` does, where
+    /// `reset()` only mints an uncounted session identifier.
+    ///
+    /// During `body`:
+    /// - a decline erases as usual, and stands after the reopen;
+    /// - a grant takes effect at the reopen, not before;
+    /// - `flush()` still waits for the queue writes and starts no drain;
+    /// - `flushAndWait()` returns at once;
+    /// - `reset()` erases and leaves collection closed.
     public func resetClosingCollection<R, E: Error>(during body: () throws(E) -> R) throws(E) -> R {
-        reset()
-        let result = try body()
-        beginSession()
-        return result
+        requireNoReentry()
+        let detached: Task<Void, Never>? = lock.withLock { current in
+            current.closedForReset += 1
+            eraseCollected(&current)
+            return Self.detachOwnedDrain(&current)
+        }
+        waiters.resumeSettled(writer: writer)
+        detached?.cancel()
+        awaitErasure()
+        logger.info("reset ok collection=closed")
+        defer {
+            let reopened: Bool = lock.withLock { current in
+                current.closedForReset -= 1
+                // In the same section as the last decrement, so no record
+                // lands between the reopen and its session.
+                guard current.gateOpen else { return false }
+                openCountedSession(&current)
+                return true
+            }
+            if reopened { logger.info("collection reopened") }
+        }
+        return try body()
     }
 
     // MARK: Internal
@@ -465,7 +488,7 @@ public final class SignalRecorder: Sendable {
 
         /// Whether anything may be collected, queued, or sent now.
         var gateOpen: Bool {
-            consent.permitsCollection
+            consent.permitsCollection && closedForReset == 0
         }
 
         /// Whether the open session is the one this instance stamped, rather
@@ -478,6 +501,9 @@ public final class SignalRecorder: Sendable {
         /// value it was claimed under, so work in flight across an erase can be
         /// told from work that belongs to the queue that exists now.
         var eraseGeneration = 0
+        /// How many `resetClosingCollection(during:)` callbacks are running.
+        /// The gate is shut while any is, whatever consent says.
+        var closedForReset = 0
         /// How many signals have ever been dropped from the front of the queue.
         /// A batch carries the value it was claimed under, which is the only
         /// way to know how much of what it sent the queue still holds: two
@@ -558,15 +584,42 @@ public final class SignalRecorder: Sendable {
     /// Whether a batch claimed at `generation` may still be acted on. Consent
     /// alone is not the question: `reset()` erases without moving the answer.
     private func permitsCollection(at generation: Int) -> Bool {
-        lock.withLock { $0.consent.permitsCollection && $0.eraseGeneration == generation }
+        lock.withLock { $0.gateOpen && $0.eraseGeneration == generation }
     }
 
     /// Mints a session identifier where consent permits and none is open. It
     /// only ever fills an empty slot: a session an erase dropped must not come
     /// back, and one already open must not be replaced under its own signals.
     private static func openSessionIfNeeded(_ state: inout State) {
-        guard state.consent.permitsCollection, state.sessionID.isEmpty else { return }
+        guard state.gateOpen, state.sessionID.isEmpty else { return }
         state.sessionID = UUID().uuidString
+    }
+
+    /// Opens and counts a session, unless this instance's own is open. Call
+    /// from inside the lock, with the gate open.
+    private func openCountedSession(_ current: inout State) {
+        let started = now()
+        loadRetentionIfNeeded(&current, at: started)
+        // A session this instance already opened stays open. Two calls land
+        // in one activation whenever consent is adopted from another device
+        // — the host grants on that arrival, before the cycle's own session
+        // emit — and without this the second call would close the first at
+        // a near-zero duration and count the cycle twice.
+        //
+        // The comparison is against our own stamp, not merely against a
+        // non-nil `openSessionStartedAt`: a session left open by a process
+        // that died is also open, and closing that one is the entire point
+        // of the inference path.
+        if current.ownsOpenSession { return }
+        current.openedSessionAt = started
+        current.sessionID = UUID().uuidString
+        let record = RetentionCounters.recordingSessionStart(
+            in: current.retention,
+            at: started,
+            calendar: calendar
+        )
+        current.retention = record
+        retentionStore.save(record)
     }
 
     /// The one place a signal becomes queued state. Everything the invariant
@@ -574,7 +627,7 @@ public final class SignalRecorder: Sendable {
     /// write — sits behind the guard on the first line.
     private func enqueue(name: String, parameters: [String: String], floatValue: Double?) {
         let enqueued: (queued: Int, overflowBegan: Bool)? = lock.withLock { current in
-            guard current.consent.permitsCollection else { return nil }
+            guard current.gateOpen else { return nil }
             restoreQueueIfNeeded(&current)
             let recordedAt = now()
             loadRetentionIfNeeded(&current, at: recordedAt)
@@ -693,7 +746,7 @@ public final class SignalRecorder: Sendable {
     /// the same batch would go out twice.
     private func nextBatch(claim: Int) -> (batch: SignalBatch, generation: Int, evicted: Int)? {
         lock.withLock { current -> (batch: SignalBatch, generation: Int, evicted: Int)? in
-            guard current.consent.permitsCollection, current.drainClaim == claim else { return nil }
+            guard current.gateOpen, current.drainClaim == claim else { return nil }
             restoreQueueIfNeeded(&current)
             guard !current.pending.isEmpty else { return nil }
             guard let clientUser = clientUserProvider() else {
@@ -731,7 +784,7 @@ public final class SignalRecorder: Sendable {
             // A verdict on a batch an erase has since dropped applies to
             // nothing: the queue it indexed no longer exists, and its removal
             // would take the front off one recorded under a later grant.
-            guard current.consent.permitsCollection, current.eraseGeneration == generation else { return nil }
+            guard current.gateOpen, current.eraseGeneration == generation else { return nil }
             switch outcome {
             case .delivered, .permanent:
                 // An overflow eviction during the send already dropped part of
@@ -1008,7 +1061,7 @@ public final class SignalRecorder: Sendable {
         lock.withLock { current in
             guard current.drain.owned?.id == id else { return }
             current.drain = .idle
-            guard current.consent.permitsCollection, !current.pending.isEmpty else { return }
+            guard current.gateOpen, !current.pending.isEmpty else { return }
             // The steady interval when nothing failed, and what the failure
             // owes when something did: the jittered draw, or the backend's
             // own delay where that is later. Recomputing a backoff here would
