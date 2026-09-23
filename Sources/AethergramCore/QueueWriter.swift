@@ -34,6 +34,24 @@ import Synchronization
 /// than that — a file it could not read, one it could not reach — and only
 /// the erase says to drop it. The drain runs the purge, then the snapshot.
 ///
+/// **The barrier.** Every submit takes a ticket, in submit order, and a wait
+/// names one: the newest at the call for `waitForPendingWrites()` and
+/// `awaitPendingWrites()`, or the one a submit returned for
+/// `awaitWrites(through:)`. A waiter returns once a write has landed that
+/// covers every submission up to its ticket: the drain step that took that
+/// ticket has ended. Nothing submitted after the ticket is promised by the
+/// return, even when it happens to be on the store by then.
+///
+/// A later submission can still lengthen the wait, within that one step and
+/// never by another. A step takes everything pending when it starts,
+/// submissions made after the waiter included, and makes at most two store
+/// calls: the purge, then the newest snapshot. A snapshot that supersedes a
+/// pending one costs the wait nothing, since it replaces that write. One
+/// that lands on the other side of a purge — a snapshot coalesced behind a
+/// pending purge, or a purge submitted over a pending snapshot — adds one
+/// store call. A submission made once the step has started goes to the next
+/// step, which the waiter does not wait for.
+///
 /// **What this costs.** The write no longer completes before `record` returns,
 /// so a kill in the microseconds between them loses that signal where the
 /// synchronous version would not have. `flush()` closes that window at the one
@@ -52,13 +70,15 @@ final class QueueWriter: Sendable {
     /// Records the intent to persist `signals`, replacing any unwritten
     /// snapshot but never an unwritten purge. Call from inside the lock that
     /// produced the snapshot: that is what makes write order match commit order.
+    /// Returns the ticket `awaitWrites(through:)` takes to wait for this write.
     @discardableResult
     func persist(_ signals: [Signal]) -> Ticket {
         submit { $0.contents = signals }
     }
 
     /// Records the intent to erase the queue. Drops any unwritten snapshot, so
-    /// a decline cannot be undone by a write already in flight.
+    /// a decline cannot be undone by a write already in flight. Returns the
+    /// ticket `awaitWrites(through:)` takes to wait for the erase.
     @discardableResult
     func purge() -> Ticket {
         submit {
@@ -68,16 +88,17 @@ final class QueueWriter: Sendable {
     }
 
     /// Blocks until every write submitted before the call has reached the
-    /// store, and no longer: a write submitted after it, from any thread,
-    /// neither extends the wait nor is promised by it. Two callers need it:
-    /// the consumer's deactivation path, where the process is about to stop
-    /// being allowed to run, and an erase, which promises the file is gone
-    /// rather than that a delete was asked for.
+    /// store. A write submitted after it, from any thread, is not promised by
+    /// it, and lengthens it by at most one store call, as the type's barrier
+    /// describes. Two callers need it: the consumer's deactivation path,
+    /// where the process is about to stop being allowed to run, and an erase,
+    /// which promises the file is gone rather than that a delete was asked
+    /// for.
     ///
     /// Called from the writer's own queue, it waits on itself.
     func waitForPendingWrites() {
         let released = DispatchSemaphore(value: 0)
-        guard enqueueWaiter({ released.signal() }) else { return }
+        guard enqueueWaiter(through: nil, { released.signal() }) else { return }
         released.wait()
     }
 
@@ -93,22 +114,33 @@ final class QueueWriter: Sendable {
     /// name wins in every async context, which would turn each existing
     /// unawaited call there into a compile error.
     func awaitPendingWrites() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if !enqueueWaiter({ continuation.resume() }) {
-                continuation.resume()
-            }
-        }
+        await suspend(through: nil)
     }
 
-    struct Ticket: Sendable {
-        fileprivate let value: UInt64
+    /// Suspends until a write covering the submission that returned `ticket`
+    /// has reached the store: that write itself, or the later snapshot it was
+    /// folded into. A write submitted after the ticket is not promised, and
+    /// lengthens the wait by at most one store call, as the type's barrier
+    /// describes. Returns at once when that write has already landed.
+    ///
+    /// For a caller that must know one particular write landed — a removal's
+    /// checkpoint — without also waiting out whatever was recorded since.
+    /// Cancellation does not end it early, for the reason
+    /// `awaitPendingWrites()` gives.
+    func awaitWrites(through ticket: Ticket) async {
+        await suspend(through: ticket.value)
     }
 
+    /// How many callers are waiting on the barrier, so a test can order a
+    /// submit after a registration.
     var waiterCount: Int {
         state.withLock { $0.waiters.count }
     }
 
-    func awaitWrites(through _: Ticket) async {}
+    /// A submission's place in submit order, minted only by the writer.
+    struct Ticket: Sendable {
+        fileprivate let value: UInt64
+    }
 
     // MARK: Private
 
@@ -168,13 +200,26 @@ final class QueueWriter: Sendable {
         }
     }
 
-    /// Whether the caller has something to wait for. Asked and registered in
-    /// one critical section, so a drain cannot complete the ticket between
-    /// the question and the registration and leave the waiter unreleased.
-    private func enqueueWaiter(_ release: @escaping @Sendable () -> Void) -> Bool {
+    private func suspend(through ticket: UInt64?) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if !enqueueWaiter(through: ticket, { continuation.resume() }) {
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Whether the caller has something to wait for, up to `ticket`, or up to
+    /// the newest submission when `nil`. Asked and registered in one critical
+    /// section, so a drain cannot complete the ticket between the question
+    /// and the registration and leave the waiter unreleased.
+    private func enqueueWaiter(through ticket: UInt64?, _ release: @escaping @Sendable () -> Void) -> Bool {
         state.withLock { state in
-            guard state.completed < state.submitted else { return false }
-            state.waiters.append(Waiter(ticket: state.submitted, release: release))
+            let ticket = ticket ?? state.submitted
+            guard state.completed < ticket else { return false }
+            // In ticket order, because a drain releases a prefix: a ticket
+            // wait can carry an older ticket than a waiter already queued.
+            let position = state.waiters.firstIndex { $0.ticket > ticket } ?? state.waiters.endIndex
+            state.waiters.insert(Waiter(ticket: ticket, release: release), at: position)
             return true
         }
     }
