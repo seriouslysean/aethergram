@@ -10,10 +10,11 @@ public struct AethergramConfiguration: Sendable {
     /// silently change how often an install phones home: batch on a 10s
     /// interval, back off to at most 5 minutes.
     ///
-    /// - Precondition: `batchSize` is positive; `queueLimit` is positive and at
-    ///   most 100,000; `transmitInterval` and `maxBackoffInterval` are finite,
-    ///   positive, and at most one year. Anything else traps here, at
-    ///   construction, rather than at the first signal.
+    /// - Precondition: `batchSize` and `queueLimit` are positive;
+    ///   `transmitInterval` and `maxBackoffInterval` are finite and positive.
+    ///   Anything else traps here, at construction, rather than at the first
+    ///   signal. An interval too large to schedule a retry with is clamped to
+    ///   one that is.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,
@@ -32,29 +33,28 @@ public struct AethergramConfiguration: Sendable {
         // loop, and an infinite one never delivers. maxBackoffInterval is
         // floored at transmitInterval by `backoffInterval`, so a non-positive
         // value there is only a contradiction and an infinite one removes the
-        // cap. A finite interval past about 1.7e20 seconds traps
-        // `Duration.seconds` at the first retry, so the ceiling sits far below
-        // that. All of these are caller configuration errors, not a runtime
-        // condition to recover from.
+        // cap. All four are caller configuration errors, not a runtime
+        // condition to recover from; fail at construction, not at the first
+        // signal.
         precondition(batchSize > 0, "AethergramConfiguration.batchSize must be positive")
+        precondition(queueLimit > 0, "AethergramConfiguration.queueLimit must be positive")
         precondition(
-            queueLimit > 0 && queueLimit <= Self.maximumQueueLimit,
-            "AethergramConfiguration.queueLimit must be positive and at most \(Self.maximumQueueLimit)"
+            transmitInterval.isFinite && transmitInterval > 0,
+            "AethergramConfiguration.transmitInterval must be finite and positive"
         )
         precondition(
-            transmitInterval.isFinite && transmitInterval > 0 && transmitInterval <= Self.maximumInterval,
-            "AethergramConfiguration.transmitInterval must be positive and at most one year"
-        )
-        precondition(
-            maxBackoffInterval.isFinite && maxBackoffInterval > 0 && maxBackoffInterval <= Self.maximumInterval,
-            "AethergramConfiguration.maxBackoffInterval must be positive and at most one year"
+            maxBackoffInterval.isFinite && maxBackoffInterval > 0,
+            "AethergramConfiguration.maxBackoffInterval must be finite and positive"
         )
         self.signalPrefix = signalPrefix
         self.logSubsystem = logSubsystem
         self.batchSize = batchSize
         self.queueLimit = queueLimit
-        self.transmitInterval = transmitInterval
-        self.maxBackoffInterval = maxBackoffInterval
+        // Clamped rather than trapped: every value that constructed before
+        // still constructs, and the ones that crashed at the first retry now
+        // run.
+        self.transmitInterval = min(transmitInterval, Self.maximumInterval)
+        self.maxBackoffInterval = min(maxBackoffInterval, Self.maximumInterval)
     }
 
     // MARK: Public
@@ -106,12 +106,9 @@ public struct AethergramConfiguration: Sendable {
 
     // MARK: Internal
 
-    /// Ceiling on both intervals. A year is far past any real delivery
-    /// schedule, so a larger value is a unit mistake rather than a policy.
-    static let maximumInterval: TimeInterval = 365 * 24 * 60 * 60
-
-    /// Ceiling on `queueLimit`: a hundred times the default. The queue is held
-    /// in memory and rewritten whole on every save, so its limit is also the
-    /// size of every write, and an extension's memory budget is small.
-    static let maximumQueueLimit = 100_000
+    /// What both intervals are clamped to. Not a policy ceiling: `Duration`
+    /// traps on seconds past about 1.7e20, which is where a retry deadline
+    /// built from a larger interval crashed, and this sits five orders of
+    /// magnitude below that and some thirty million years past any schedule.
+    static let maximumInterval: TimeInterval = 1e15
 }
