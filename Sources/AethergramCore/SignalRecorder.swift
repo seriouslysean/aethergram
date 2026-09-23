@@ -86,7 +86,8 @@ public final class SignalRecorder: Sendable {
     }
 
     /// The public initializer with the retry draw exposed, so a test can fix
-    /// what a production recorder leaves to the system generator.
+    /// what a production recorder leaves to the system generator, and the
+    /// drain's delay, so a test can see a sleeping drain cancelled.
     init(
         configuration: AethergramConfiguration,
         transport: any SignalTransport,
@@ -96,9 +97,13 @@ public final class SignalRecorder: Sendable {
         environmentProvider: @escaping @Sendable () -> [String: String],
         calendar: Calendar,
         now: @escaping @Sendable () -> Date,
-        retryDelay: @escaping @Sendable (_ consecutiveFailures: Int) -> TimeInterval
+        retryDelay: @escaping @Sendable (_ consecutiveFailures: Int) -> TimeInterval,
+        sleep: @escaping @Sendable (_ seconds: TimeInterval) async throws -> Void = {
+            try await Task.sleep(for: .seconds($0))
+        }
     ) {
         self.retryDelay = retryDelay
+        self.sleep = sleep
         self.configuration = configuration
         self.transport = transport
         self.queueStorage = queueStorage
@@ -569,6 +574,8 @@ public final class SignalRecorder: Sendable {
     private let now: @Sendable () -> Date
     /// How long the endpoint gets after the given run of failures.
     private let retryDelay: @Sendable (_ consecutiveFailures: Int) -> TimeInterval
+    /// Serves a drain's delay. Throws when the drain is cancelled.
+    private let sleep: @Sendable (_ seconds: TimeInterval) async throws -> Void
     private let logger: Logger
     private let lock = OSAllocatedUnfairLock(initialState: State())
     private let waiters = FlushWaiters()
@@ -1018,10 +1025,10 @@ public final class SignalRecorder: Sendable {
     /// come from the main actor, and a drain at its priority would put the
     /// encode and the request in contention with the host's UI.
     private func makeDrainTask(id: Int, after delay: TimeInterval) -> Task<Void, Never> {
-        Task(priority: .utility) { [weak self] in
+        Task(priority: .utility) { [weak self, sleep] in
             if delay > 0 {
                 do {
-                    try await Task.sleep(for: .seconds(delay))
+                    try await sleep(delay)
                 } catch {
                     // Pre-empted or torn down. The canceller already took the
                     // slot, so releasing it here would evict the live drain
