@@ -14,8 +14,8 @@ public struct AethergramConfiguration: Sendable {
     ///   `transmitInterval` and `maxBackoffInterval` are finite and positive.
     ///   Anything else traps here, at construction, rather than at the first
     ///   signal. Both intervals are clamped to a ceiling far past any real
-    ///   schedule and below the size that crashed the first record's
-    ///   coalescing sleep.
+    ///   schedule and below the size that crashed the first sleep or retry
+    ///   deadline built from it.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,
@@ -52,8 +52,8 @@ public struct AethergramConfiguration: Sendable {
         self.batchSize = batchSize
         self.queueLimit = queueLimit
         // Clamped rather than trapped: every value that constructed before
-        // still constructs, and the ones that crashed the first record's
-        // sleep now run.
+        // still constructs, and the ones that crashed the first sleep or retry
+        // deadline built from them now run.
         self.transmitInterval = min(transmitInterval, Self.maximumInterval)
         self.maxBackoffInterval = min(maxBackoffInterval, Self.maximumInterval)
     }
@@ -111,9 +111,10 @@ public struct AethergramConfiguration: Sendable {
 
     /// What both intervals are clamped to. Not a policy ceiling:
     /// `Duration.seconds` traps on a value past `Int64.max` seconds, about
-    /// 9.2e18, which is where the coalescing sleep the first record schedules
-    /// crashed under 0.3.1, and this sits nearly four orders of magnitude
-    /// below that and some thirty million years past any schedule.
+    /// 9.2e18, which is where the first sleep or retry deadline built from a
+    /// larger interval crashed under 0.3.1 — the first record's coalescing
+    /// sleep whenever `batchSize` is above 1. This sits nearly four orders of
+    /// magnitude below that and some thirty million years past any schedule.
     static let maximumInterval: TimeInterval = 1e15
 
     /// `queueLimit`'s default, and the bound on what a file store carries for
