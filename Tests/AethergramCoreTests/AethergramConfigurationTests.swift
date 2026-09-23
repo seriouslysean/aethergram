@@ -14,7 +14,7 @@ import Testing
 /// them racing the async suites elsewhere in the target crashes the runner
 /// before any test reports — a gate that cannot run looks exactly like one
 /// that passed.
-@Suite("AethergramConfiguration", .serialized)
+@Suite("AethergramConfiguration", .serialized, .tags(.lifecycle))
 struct AethergramConfigurationTests {
     /// Pinned as literals rather than read off the type: a ceiling that moved
     /// would change which host configurations launch, and that must fail here.

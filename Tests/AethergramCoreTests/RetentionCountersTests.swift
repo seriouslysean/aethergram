@@ -5,7 +5,7 @@ import Testing
 
 /// `RetentionCounters` reads no clock and touches no storage, so every counter
 /// is pinned to a fixed date here rather than to the machine's.
-@Suite("Retention counters")
+@Suite("Retention counters", .tags(.lifecycle))
 struct RetentionCountersTests {
     @Test("The first session sets the acquisition day and repeats do not double-count it")
     func sessionStartsCountDistinctDaysOnce() throws {

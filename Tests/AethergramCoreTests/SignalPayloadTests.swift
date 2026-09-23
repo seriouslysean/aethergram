@@ -6,7 +6,7 @@ import Testing
 /// What actually rides on a signal: the authored default payload, the
 /// clock-derived fields, the retention counters, and the consumer's own
 /// parameters on top of all three.
-@Suite("Signal payload", .tempDirectory)
+@Suite("Signal payload", .tempDirectory, .tags(.wireFormat))
 struct SignalPayloadTests {
     /// A named case rather than a tuple: four booleans-and-a-path in positional
     /// form is exactly the shape that gets silently transposed on edit.
