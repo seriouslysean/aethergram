@@ -101,8 +101,14 @@ enum TelemetryDeckWireNames {
     /// chart built on it reads that way; the package keeps the honest 0-23 hour
     /// and the adapter shifts it, which is exactly the seam's job. Sending the
     /// unshifted hour would move every historical bar by one column.
+    ///
+    /// Only a real hour is shifted. A caller's parameters win the merge, so
+    /// this key can carry any integer, and `Int.max + 1` would trap on a
+    /// signal already persisted — every relaunch re-sends it and crashes.
     private static func wireValue(forKey key: String, value: String) -> String {
-        guard key == PayloadKey.calendarHourOfDay, let hour = Int(value) else { return value }
+        guard key == PayloadKey.calendarHourOfDay, let hour = Int(value), (0 ... 23).contains(hour) else {
+            return value
+        }
         return "\(hour + 1)"
     }
 }
