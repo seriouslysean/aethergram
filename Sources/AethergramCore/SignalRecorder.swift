@@ -226,6 +226,13 @@ public final class SignalRecorder: Sendable {
     /// that exists only for tests.
     let writer: QueueWriter
 
+    /// How many drains this recorder has ever scheduled. A count rather than
+    /// the slot, because a slot read after the fact cannot tell a drain that
+    /// was never scheduled from one that ran, found nothing, and gave it back.
+    var drainsScheduled: Int {
+        lock.withLock { $0.lastDrainID }
+    }
+
     /// Sends queued signals until the queue empties or a send fails. Internal
     /// rather than public so tests can await a transmission the consumer only
     /// ever kicks off; `flush()` is the consumer's door.

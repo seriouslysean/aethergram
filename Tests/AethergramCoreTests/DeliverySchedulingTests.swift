@@ -58,6 +58,9 @@ struct DeliverySchedulingTests {
         // assertion: even handed the work, a withheld answer sends nothing.
         await fixture.recorder.drain()
 
+        // The transport and the providers cannot see a drain that was
+        // scheduled and then found the gate shut; this can.
+        #expect(fixture.recorder.drainsScheduled == 0)
         #expect(fixture.transport.sendCount == 0)
         #expect(!fixture.clientUserCalls.wasCalled)
         #expect(!fixture.environmentCalls.wasCalled)
