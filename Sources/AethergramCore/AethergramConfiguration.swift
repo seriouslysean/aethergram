@@ -9,6 +9,11 @@ public struct AethergramConfiguration: Sendable {
     /// Defaults match the SDK this package replaces, so the swap does not
     /// silently change how often an install phones home: batch on a 10s
     /// interval, back off to at most 5 minutes.
+    ///
+    /// - Precondition: `batchSize` is positive; `queueLimit` is positive and at
+    ///   most 100,000; `transmitInterval` and `maxBackoffInterval` are finite,
+    ///   positive, and at most one year. Anything else traps here, at
+    ///   construction, rather than at the first signal.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,
@@ -27,18 +32,22 @@ public struct AethergramConfiguration: Sendable {
         // loop, and an infinite one never delivers. maxBackoffInterval is
         // floored at transmitInterval by `backoffInterval`, so a non-positive
         // value there is only a contradiction and an infinite one removes the
-        // cap. All four are caller configuration errors, not a runtime
-        // condition to recover from; fail at construction, not at the first
-        // signal.
+        // cap. A finite interval past about 1.7e20 seconds traps
+        // `Duration.seconds` at the first retry, so the ceiling sits far below
+        // that. All of these are caller configuration errors, not a runtime
+        // condition to recover from.
         precondition(batchSize > 0, "AethergramConfiguration.batchSize must be positive")
-        precondition(queueLimit > 0, "AethergramConfiguration.queueLimit must be positive")
         precondition(
-            transmitInterval.isFinite && transmitInterval > 0,
-            "AethergramConfiguration.transmitInterval must be finite and positive"
+            queueLimit > 0 && queueLimit <= Self.maximumQueueLimit,
+            "AethergramConfiguration.queueLimit must be positive and at most \(Self.maximumQueueLimit)"
         )
         precondition(
-            maxBackoffInterval.isFinite && maxBackoffInterval > 0,
-            "AethergramConfiguration.maxBackoffInterval must be finite and positive"
+            transmitInterval.isFinite && transmitInterval > 0 && transmitInterval <= Self.maximumInterval,
+            "AethergramConfiguration.transmitInterval must be positive and at most one year"
+        )
+        precondition(
+            maxBackoffInterval.isFinite && maxBackoffInterval > 0 && maxBackoffInterval <= Self.maximumInterval,
+            "AethergramConfiguration.maxBackoffInterval must be positive and at most one year"
         )
         self.signalPrefix = signalPrefix
         self.logSubsystem = logSubsystem
@@ -94,4 +103,15 @@ public struct AethergramConfiguration: Sendable {
         let scaled = transmitInterval * pow(2, Double(consecutiveFailures))
         return min(scaled, max(maxBackoffInterval, transmitInterval))
     }
+
+    // MARK: Internal
+
+    /// Ceiling on both intervals. A year is far past any real delivery
+    /// schedule, so a larger value is a unit mistake rather than a policy.
+    static let maximumInterval: TimeInterval = 365 * 24 * 60 * 60
+
+    /// Ceiling on `queueLimit`: a hundred times the default. The queue is held
+    /// in memory and rewritten whole on every save, and at this size one
+    /// rewrite already runs to tens of megabytes.
+    static let maximumQueueLimit = 100_000
 }
