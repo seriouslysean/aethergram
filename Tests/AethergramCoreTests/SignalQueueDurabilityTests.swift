@@ -847,6 +847,49 @@ struct SignalQueueDurabilityTests {
         #expect(onDisk.last?.name == "lifetime.24")
         #expect(!onDisk.contains { $0.name == "seeded.0" })
     }
+
+    /// The bound on what a late read carries is the recorder's own limit, not
+    /// the default: a host that queues more than the default kept every
+    /// signal of a failed load for the next process under 0.3.1, and a bound
+    /// the store picked for itself would drop the oldest of them here.
+    @Test(
+        "A late read keeps everything a queue within the host's own limit held",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func lateReadKeepsAQueueWithinTheConfiguredLimit() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let limit = 5000
+        let seeded = (0 ..< limit).map { Signal(name: "seeded.\($0)", sessionID: "session-a", recordedAt: signalDate) }
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem).persist(seeded)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(queueLimit: limit),
+            transport: SpyTransport(),
+            queueStorage: FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: fixedClock(at: signalDate)
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        recorder.updateConsent(.granted)
+        recorder.record("during.a")
+        recorder.writer.waitForPendingWrites()
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        recorder.record("after.b")
+        recorder.writer.waitForPendingWrites()
+
+        let onDisk = try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL))
+        #expect(onDisk.count == limit + 2)
+        #expect(onDisk.first?.name == "seeded.0")
+        #expect(onDisk.suffix(2).map(\.name) == ["during.a", "after.b"])
+    }
 }
 
 /// What a closure on another thread saw, read back by the test body after it.
