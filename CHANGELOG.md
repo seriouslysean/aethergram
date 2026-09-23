@@ -15,8 +15,8 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
   now runs, and the property reads back the clamped value. `queueLimit` is not capped, and a value
   that is not finite, or not positive, still traps at construction, as in 0.3.1.
 - `TelemetryDeckTransport` fails a precondition naming the background `URLSession` at the first
-  send over one. The send aborted the host at the same moment before, with an exception that named
-  neither.
+  send over one. The send aborted the host at the same moment before, with an `NSGenericException`
+  about completion handlers that did not name the transport.
 - Calling back into the recorder from a seam it calls under its lock (`clientUserProvider`,
   `environmentProvider`, any `RetentionStore` call, `SignalQueueStorage.load()`) still terminates
   the process, now through a precondition at the recorder entry point that was re-entered rather

@@ -7,11 +7,12 @@ import Testing
 /// Which `URLSession` the transport accepts.
 ///
 /// A background session refuses completion-handler and async data tasks with
-/// an `NSGenericException`, which aborts the host with a message that names
-/// neither the transport nor the session. The transport traps at the same
-/// moment, the first send, with one that names both. Not at construction: 0.3.1
-/// constructed over a background session without trapping, and a host that
-/// builds a transport and never sends — consent withheld — must keep running.
+/// an `NSGenericException`, which aborts the host with a message about
+/// completion handlers that does not name the transport. The transport traps
+/// at the same moment, the first send, with one that names it and the
+/// session. Not at construction: 0.3.1 constructed over a background session
+/// without trapping, and a host that builds a transport and never sends —
+/// consent withheld — must keep running.
 @Suite("TelemetryDeck transport session", .serialized, .tags(.lifecycle))
 struct TelemetryDeckTransportSessionTests {
     @Test("A default session constructs without trapping")
