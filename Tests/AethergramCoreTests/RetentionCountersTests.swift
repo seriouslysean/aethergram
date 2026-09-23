@@ -170,6 +170,82 @@ struct RetentionCountersTests {
         #expect(record.previousSessionSeconds == nil)
     }
 
+    /// The negative case above routes through `touching`, which refuses to move
+    /// the checkpoint backwards, so it only ever proves the zero-length path.
+    /// An explicit end is the one caller that hands `folding` a negative
+    /// duration directly — a clock set back between start and end.
+    @Test("An explicit end before its own start is discarded and not counted")
+    func explicitEndBeforeStartIsDiscarded() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let opened = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+
+        let closed = RetentionCounters.recordingSessionEnd(in: opened, at: start.addingTimeInterval(-5))
+
+        #expect(closed.completedSessionsCount == 0)
+        #expect(closed.totalSessionSeconds == 0)
+        #expect(closed.previousSessionSeconds == nil)
+        #expect(closed.openSessionStartedAt == nil)
+    }
+
+    /// A record whose session has a start but no checkpoint has no measured
+    /// end. It is closed so the next session can open, and counted as nothing
+    /// rather than as a guess.
+    @Test("An open session with no recorded activity closes without being counted")
+    func openSessionWithoutActivityClosesUncounted() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let record = RetentionRecord(firstSessionDay: "2026-01-05", totalSessionsCount: 1, openSessionStartedAt: start)
+
+        let closed = RetentionCounters.closingOpenSession(in: record)
+
+        #expect(closed.openSessionStartedAt == nil)
+        #expect(closed.completedSessionsCount == 0)
+        #expect(closed.totalSessionSeconds == 0)
+        #expect(closed.previousSessionSeconds == nil)
+    }
+
+    /// The cap is what bounds the record's size; without eviction a daily user
+    /// grows it forever. Oldest days go first, and the acquisition day is not
+    /// part of the history, so it survives the eviction.
+    @Test("The day history keeps only the most recent days past its limit")
+    func dayHistoryEvictsOldestPastLimit() throws {
+        let first = try testDate(year: 2024, month: 1, day: 1)
+        var record: RetentionRecord?
+        for offset in 0 ... RetentionCounters.distinctDayLimit {
+            let day = try #require(testCalendar.date(byAdding: .day, value: offset, to: first))
+            record = RetentionCounters.recordingSessionStart(in: record, at: day, calendar: testCalendar)
+        }
+        let capped = try #require(record)
+        let last = try #require(testCalendar.date(byAdding: .day, value: RetentionCounters.distinctDayLimit, to: first))
+
+        #expect(capped.distinctDaysUsed.count == RetentionCounters.distinctDayLimit)
+        #expect(capped.distinctDaysUsed.first == "2024-01-02")
+        #expect(capped.distinctDaysUsed.last == RetentionCounters.dayString(for: last, calendar: testCalendar))
+        #expect(capped.firstSessionDay == "2024-01-01")
+    }
+
+    /// A day turns over at the device's midnight, not UTC's, and the window
+    /// is thirty calendar days even across the 23-hour day a spring-forward
+    /// makes. 2026-03-08 is that day in New York.
+    @Test("Days follow the device's midnight and the window spans a daylight-saving change")
+    func dayMathFollowsLocalMidnightAcrossDaylightSaving() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        func local(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) throws -> Date {
+            try #require(calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute)))
+        }
+
+        var record: RetentionRecord?
+        for date in try [local(2, 5, 23, 30), local(2, 6, 23, 30), local(3, 7, 23, 30), local(3, 8, 23, 30)] {
+            record = RetentionCounters.recordingSessionStart(in: record, at: date, calendar: calendar)
+        }
+        let parameters = RetentionCounters.parameters(from: record, at: try local(3, 8, 23, 45), calendar: calendar)
+
+        // 23:30 in New York is already the next day in UTC.
+        #expect(record?.distinctDaysUsed == ["2026-02-05", "2026-02-06", "2026-03-07", "2026-03-08"])
+        // 2026-02-06 is exactly thirty days before 2026-03-08; 2026-02-05 is not.
+        #expect(parameters[PayloadKey.retentionDistinctDaysUsedLastMonth] == "3")
+    }
+
     /// The deactivation hook is more precise than the checkpoint when it fires,
     /// and it is allowed to fire; it is simply not required to.
     @Test("An explicit end closes the session against its own instant")
