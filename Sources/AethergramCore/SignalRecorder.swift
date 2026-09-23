@@ -645,8 +645,11 @@ public final class SignalRecorder: Sendable {
         return OwnedDrain(id: id, task: makeDrainTask(id: id, after: delay))
     }
 
+    /// Utility, matching the writer queue, rather than inherited: most records
+    /// come from the main actor, and a drain at its priority would put the
+    /// encode and the request in contention with the host's UI.
     private func makeDrainTask(id: Int, after delay: TimeInterval) -> Task<Void, Never> {
-        Task { [weak self] in
+        Task(priority: .utility) { [weak self] in
             if delay > 0 {
                 do {
                     try await Task.sleep(for: .seconds(delay))
