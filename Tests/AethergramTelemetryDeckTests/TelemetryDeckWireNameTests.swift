@@ -124,6 +124,28 @@ struct TelemetryDeckWireNameTests {
         #expect(mapped == ["packID": "starter", "roundIndex": "3"])
     }
 
+    /// A caller key spelled as a wire name lands on the same wire key as the
+    /// package key mapped to it. Consumer parameters win the core's merge, so
+    /// they win here too. Dictionary order changes with capacity, so the filler
+    /// sizes put the two colliding keys in both iteration orders; a winner
+    /// chosen by iteration order fails at least one of them.
+    @Test("A caller key colliding with a mapped package key wins in every iteration order", arguments: [
+        ("TelemetryDeck.AppInfo.version", PayloadKey.appVersion, "1.0"),
+        ("TelemetryDeck.RunContext.isTestFlight", PayloadKey.runContextChannel, RunContextChannel.beta.rawValue)
+    ])
+    func callerKeyWinsAWireNameCollision(wireName: String, packageKey: String, packageValue: String) {
+        for fillerCount in 0 ..< 64 {
+            var parameters = [wireName: "from-caller", packageKey: packageValue]
+            for index in 0 ..< fillerCount {
+                parameters["filler.\(index)"] = "\(index)"
+            }
+
+            let mapped = TelemetryDeckWireNames.payload(from: parameters)
+
+            #expect(mapped[wireName] == "from-caller", "lost with \(fillerCount) filler keys")
+        }
+    }
+
     @Test("A beta channel also emits the vendor's legacy isTestFlight flag")
     func betaChannelEmitsLegacyTestFlightFlag() {
         let mapped = TelemetryDeckWireNames.payload(
