@@ -86,7 +86,7 @@ struct DeliverySchedulingTests {
         dead.recorder.record("survivor")
         // The dead process's write is what the next one inherits, so it has
         // to reach disk before that process is abandoned.
-        dead.recorder.writer.waitForPendingWrites()
+        await dead.recorder.writer.awaitPendingWrites()
         #expect(dead.transport.sendCount == 0)
         #expect(dead.storage.signalsOnDisk.count == 1)
 

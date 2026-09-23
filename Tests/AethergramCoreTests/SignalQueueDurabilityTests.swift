@@ -32,7 +32,7 @@ struct SignalQueueDurabilityTests {
         // The write is serialized off the caller, so waiting for it is
         // what the consumer's own deactivation flush does; reading the file
         // without it races the writer instead of observing it.
-        dead.recorder.writer.waitForPendingWrites()
+        await dead.recorder.writer.awaitPendingWrites()
         #expect(dead.storage.signalsOnDisk.count == 2)
 
         let revivedStart = try testDate(year: 2026, month: 1, day: 6)
@@ -40,7 +40,7 @@ struct SignalQueueDurabilityTests {
         revived.recorder.updateConsent(.granted)
         revived.recorder.record("new.c")
         await revived.recorder.drain()
-        revived.recorder.writer.waitForPendingWrites()
+        await revived.recorder.writer.awaitPendingWrites()
 
         #expect(deadTransport.sendCount == 0)
         #expect(revived.transport.sentSignalNames == ["old.a", "old.b", "new.c"])
@@ -65,7 +65,7 @@ struct SignalQueueDurabilityTests {
         dead.recorder.updateConsent(.granted)
         dead.recorder.beginSession()
         dead.recorder.record("old")
-        dead.recorder.writer.waitForPendingWrites()
+        await dead.recorder.writer.awaitPendingWrites()
         #expect(dead.transport.sendCount == 0)
 
         let revived = makeFixture(

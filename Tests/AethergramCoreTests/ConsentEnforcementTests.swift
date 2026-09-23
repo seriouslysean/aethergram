@@ -147,13 +147,13 @@ struct ConsentEnforcementTests {
         // supersedes the unwritten snapshot and no file is ever created.
         // The precondition this test needs — signals genuinely on disk —
         // has to be established rather than assumed.
-        fixture.recorder.writer.waitForPendingWrites()
+        await fixture.recorder.writer.awaitPendingWrites()
         #expect(fixture.storage.fileExists)
         #expect(fixture.storage.signalsOnDisk.count == 2)
         #expect(fixture.retention.record != nil)
 
         fixture.recorder.updateConsent(.declined)
-        fixture.recorder.writer.waitForPendingWrites()
+        await fixture.recorder.writer.awaitPendingWrites()
 
         #expect(!fixture.storage.fileExists)
         #expect(fixture.storage.signalsOnDisk.isEmpty)
@@ -221,9 +221,9 @@ struct ConsentEnforcementTests {
         // Forces the snapshot to disk before the purge, so the purge has
         // something to fail at; coalescing would otherwise let the purge
         // supersede the write and there would be nothing to resurrect.
-        recorder.writer.waitForPendingWrites()
+        await recorder.writer.awaitPendingWrites()
         recorder.updateConsent(.declined)
-        recorder.writer.waitForPendingWrites()
+        await recorder.writer.awaitPendingWrites()
 
         // The purge was asked for and failed, so the signals are genuinely
         // still there. Without that, the test would prove nothing.
@@ -267,9 +267,9 @@ struct ConsentEnforcementTests {
         for name in ["alpha", "beta", "gamma"] {
             recorder.record(name)
         }
-        recorder.writer.waitForPendingWrites()
+        await recorder.writer.awaitPendingWrites()
         recorder.reset()
-        recorder.writer.waitForPendingWrites()
+        await recorder.writer.awaitPendingWrites()
 
         #expect(storage.purgeCallCount == 1)
         #expect(storage.survivingSignals.count == 3)
@@ -301,12 +301,12 @@ struct ConsentEnforcementTests {
         // supersedes the unwritten snapshot and no file is ever created.
         // The precondition this test needs — signals genuinely on disk —
         // has to be established rather than assumed.
-        fixture.recorder.writer.waitForPendingWrites()
+        await fixture.recorder.writer.awaitPendingWrites()
         #expect(fixture.storage.fileExists)
         #expect(fixture.retention.record != nil)
 
         fixture.recorder.reset()
-        fixture.recorder.writer.waitForPendingWrites()
+        await fixture.recorder.writer.awaitPendingWrites()
 
         #expect(!fixture.storage.fileExists)
         #expect(fixture.storage.signalsOnDisk.isEmpty)
@@ -455,6 +455,9 @@ struct ConsentEnforcementTests {
         recorder.record("fresh")
         storage.releasePurge()
         await resetDone.wait()
+        // The reset returns once its purge lands and promises nothing after
+        // it; "fresh" was submitted after the purge, so it needs its own wait.
+        await recorder.writer.awaitPendingWrites()
 
         #expect(storage.signals.map(\.name) == ["fresh"])
         // A counter set is the other durable copy, and the count says which
