@@ -4,7 +4,7 @@ import Testing
 @testable import ConsumerHostExtension
 
 /// Holds the block `performExpiringActivity` was handed, so a test calls it in any order.
-private final class Activity: Sendable {
+final class Activity: Sendable {
     private let block = Mutex<(@Sendable (Bool) -> Void)?>(nil)
 
     var perform: ExtensionFlush.PerformExpiringActivity {
@@ -37,7 +37,7 @@ struct ExtensionFlushTests {
         #expect(begun.value == 0)
     }
 
-    @Test("an activity that starts expired cancels the work as it registers, and never waits")
+    @Test("an activity that starts expired never starts the work, and never waits")
     func initiallyExpired() async {
         let activity = Activity()
         let work = StubWork()
@@ -47,12 +47,11 @@ struct ExtensionFlushTests {
             expire: { expiries.increment() }, work: { await work.run() }
         )
         activity.call(expired: true)
-        #expect(!work.started.isSet)
         let returned = onThread { activity.call(expired: false) }
 
         #expect(await returned.within())
-        #expect(await work.finished.within())
-        #expect(work.wasCancelled)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(!work.started.isSet)
         #expect(expiries.value == 1)
     }
 

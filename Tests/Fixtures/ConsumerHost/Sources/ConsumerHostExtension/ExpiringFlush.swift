@@ -51,8 +51,9 @@ public final class ExpiringFlush: Sendable {
         self.beforeRegistration = beforeRegistration
     }
 
-    /// Starts the work. Returns `false` when the grant expired before the task registered: the
-    /// task is cancelled as it registers, and the caller must not wait for it.
+    /// Starts the work. Returns `false` when the grant expired first, and the caller must not wait:
+    /// an expiry before the call starts nothing, and one that lands while the task is being
+    /// created cancels it as it registers.
     @discardableResult
     public func start(priority: TaskPriority = .utility) -> Bool {
         let task = Task.detached(priority: priority) { [self] in

@@ -3,7 +3,7 @@ import Testing
 
 /// The two UIKit calls, recorded, with the expiration handler kept for the test to fire.
 @MainActor
-private final class BackgroundTasks {
+final class BackgroundTasks {
     var begun: [String] = []
     var ended: [Int] = []
     var expirationHandler: (@MainActor @Sendable () -> Void)?

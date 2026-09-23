@@ -1,3 +1,4 @@
+import Aethergram
 import ConsumerHostExtension
 
 /// The app pattern: work run under `UIApplication.beginBackgroundTask(withName:expirationHandler:)`.
@@ -70,18 +71,32 @@ public final class AppFlush<Token: Sendable> {
     }
 }
 
+extension AppFlush {
+    /// A flush of `recorder` inside one background task.
+    public convenience init(
+        beginBackgroundTask: @escaping BeginBackgroundTask,
+        endBackgroundTask: @escaping EndBackgroundTask,
+        recorder: SignalRecorder
+    ) {
+        self.init(
+            beginBackgroundTask: beginBackgroundTask, endBackgroundTask: endBackgroundTask,
+            work: { await recorder.flushAndWait() }
+        )
+    }
+}
+
 #if canImport(UIKit)
 import UIKit
 
 extension AppFlush where Token == UIBackgroundTaskIdentifier {
-    /// Binds the flush to an application's background tasks.
-    public convenience init(application: UIApplication, work: @escaping ExpiringFlush.Work) {
+    /// Binds a flush of `recorder` to an application's background tasks.
+    public convenience init(application: UIApplication, recorder: SignalRecorder) {
         self.init(
             beginBackgroundTask: { name, expirationHandler in
                 application.beginBackgroundTask(withName: name, expirationHandler: expirationHandler)
             },
             endBackgroundTask: { application.endBackgroundTask($0) },
-            work: work
+            recorder: recorder
         )
     }
 }

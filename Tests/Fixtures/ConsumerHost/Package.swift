@@ -29,11 +29,11 @@ let package = Package(
         // not, so this target stays out of the extension-safe build.
         .target(
             name: "ConsumerHostApp",
-            dependencies: ["ConsumerHostExtension"]
+            dependencies: ["ConsumerHostExtension", .product(name: "Aethergram", package: aethergramIdentity)]
         ),
         .testTarget(
             name: "ConsumerHostTests",
-            dependencies: ["ConsumerHostExtension", "ConsumerHostApp"]
+            dependencies: ["ConsumerHostExtension", "ConsumerHostApp", .product(name: "Aethergram", package: aethergramIdentity)]
         )
     ]
 )
