@@ -816,7 +816,8 @@ struct SignalQueueDurabilityTests {
     /// A process whose load fails and whose later read succeeds writes what
     /// the file held ahead of its own snapshot, so a run of such processes
     /// adds a snapshot to the file each time and nothing trims it. What is
-    /// carried is bounded at the default queue limit, oldest dropped first.
+    /// carried is bounded at the queue limit, oldest dropped first: here the
+    /// default, since no recorder has handed these stores one of its own.
     @Test(
         "A run of processes whose loads keep failing does not grow the queue file without bound",
         .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")

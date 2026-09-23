@@ -54,9 +54,10 @@ public protocol SignalQueueStorage: Sendable {
 ///
 /// A queue it could not read keeps the writes off the file, and every write
 /// retries the read. Once it reads, what the file held, up to the newest
-/// 1,000 signals, is written ahead of every snapshot until a load hands it
-/// back or an erase removes it, because the recorder never saw those signals
-/// and only a later process can send them. A copy of one store is the same store and shares both; a store
+/// `queueLimit` signals of the recorder it backs, is written ahead of every
+/// snapshot until a load hands it back or an erase removes it, because the
+/// recorder never saw those signals and only a later process can send them.
+/// A copy of one store is the same store and shares all of it; a store
 /// constructed separately is not. Give a second consumer in one process a
 /// `filename` of its own, and give a second process a container of its own.
 public struct FileSignalQueueStorage: SignalQueueStorage {
@@ -89,6 +90,15 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
 
     public func purge() {
         file.withLock { purgeLocked() }
+    }
+
+    // MARK: Internal
+
+    /// Bounds what a late read carries at the limit of the recorder this
+    /// store backs. The recorder calls it at construction; a store never
+    /// given one keeps the default.
+    func adoptQueueLimit(_ limit: Int) {
+        file.withLock { file.queueLimit = limit }
     }
 
     // MARK: Private
@@ -238,7 +248,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             // the oldest signals the file holds, and a run of processes that
             // each carry everything before them would otherwise grow the file
             // by a snapshot apiece.
-            let limit = AethergramConfiguration.defaultQueueLimit
+            let limit = file.queueLimit
             file.carried = Array(signals.suffix(limit))
             if signals.count > limit {
                 logger.error("queue read recovered count=\(signals.count) dropped=\(signals.count - limit)")
@@ -471,13 +481,15 @@ private final class QueueFile: @unchecked Sendable {
     /// ahead of every snapshot until a load or an erase.
     ///
     /// A late read replaces it rather than adding to it, and keeps only the
-    /// newest `AethergramConfiguration.defaultQueueLimit`: the store has no
-    /// configuration of its own, and without a bound each process in a row
-    /// whose load fails and whose later read succeeds would carry everything
-    /// before it and grow the file by a snapshot. The file stays within that
-    /// bound plus one snapshot until the first process whose load succeeds,
-    /// whose restore trims it to its own limit oldest-first.
+    /// newest `queueLimit`: without a bound each process in a row whose load
+    /// fails and whose later read succeeds would carry everything before it
+    /// and grow the file by a snapshot. The file stays within that bound plus
+    /// one snapshot until the first process whose load succeeds, whose restore
+    /// trims it to its own limit oldest-first.
     var carried: [Signal] = []
+    /// The recorder's `queueLimit`, handed over when it takes the store, and
+    /// the default until then.
+    var queueLimit = AethergramConfiguration.defaultQueueLimit
     /// Log bookkeeping only, so a degraded store says so once rather than on
     /// every write: why writes are being skipped, and whether the look for
     /// the mark is failing.

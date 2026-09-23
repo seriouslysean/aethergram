@@ -112,8 +112,8 @@ public struct AethergramConfiguration: Sendable {
     /// magnitude below that and some thirty million years past any schedule.
     static let maximumInterval: TimeInterval = 1e15
 
-    /// `queueLimit`'s default, and the bound on what a queue store carries
-    /// for the next process, which has no configuration to read. Read off the
+    /// `queueLimit`'s default, and the bound on what a file store carries for
+    /// the next process until a recorder hands it its own. Read off the
     /// initializer rather than named in it, so the two cannot drift and the
     /// public signature shows a value rather than an internal name.
     static let defaultQueueLimit = AethergramConfiguration(logSubsystem: "").queueLimit
