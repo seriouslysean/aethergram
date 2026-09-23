@@ -422,7 +422,7 @@ printf '\nconsumer fixture\n'
 # with no upcoming-feature flag: it compiles what a host writes, and tests the patterns a host
 # flushes under in an extension and in an app. Both builds go to scratch paths, never into the tree.
 FIXTURE="$ROOT/Tests/Fixtures/ConsumerHost"
-FIXTURE_TESTS=9
+FIXTURE_TESTS=15
 
 it "the fixture's extension target builds for iOS release as extension-safe, alone"
 OUT="$(ios_build "$FIXTURE" "$TMP/fixture-ios" --target ConsumerHostExtension 2>&1)"; GATE_RC=$?
