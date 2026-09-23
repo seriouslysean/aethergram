@@ -284,6 +284,37 @@ struct DeliverySchedulingTests {
         #expect(transport.sentSignalNames == ["first", "second"])
     }
 
+    /// Most records come from the main actor, and a task created there
+    /// inherits its priority: the batch encode, the hash and the request
+    /// would compete with the host's UI for as long as they run. Delivery is
+    /// background work, and the writer queue already says so.
+    @Test("A drain kicked off from a high-priority caller does not run at that priority")
+    func drainDoesNotInheritTheCallersPriority() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let transport = PrioritySpyTransport()
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(transmitInterval: 3600),
+            transport: transport,
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: steppingClock(from: start)
+        )
+
+        recorder.updateConsent(.granted)
+        await Task(priority: .high) {
+            recorder.record("Game.started")
+            recorder.flush()
+        }.value
+        await transport.firstSend.wait()
+        withExtendedLifetime(recorder) {}
+
+        #expect(transport.priorities == [.utility])
+    }
+
     /// A backoff any flush can skip is not a backoff.
     ///
     /// `flush()` asks for a drain at zero delay, and so does a record that

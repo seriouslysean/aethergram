@@ -531,3 +531,26 @@ final class HeldFirstSendTransport: SignalTransport, @unchecked Sendable {
     private var held: CheckedContinuation<Void, Never>?
     private var released = false
 }
+
+/// Records the priority each send runs at, and opens a gate on the first.
+final class PrioritySpyTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Internal
+
+    let firstSend = Gate()
+
+    var priorities: [TaskPriority] {
+        lock.withLock { observed }
+    }
+
+    func send(_: SignalBatch) async -> TransportOutcome {
+        let priority = Task.currentPriority
+        lock.withLock { observed.append(priority) }
+        firstSend.open()
+        return .delivered
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private var observed: [TaskPriority] = []
+}
