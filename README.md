@@ -89,7 +89,8 @@ capped at `maxBackoffInterval` but never below `transmitInterval`, and a full ba
 retrying against an endpoint that will keep refusing. Past `queueLimit` the oldest signals are
 dropped, because the recent ones describe the version someone is actually running.
 
-Recording is synchronous and never throws. Persisting and transmitting are deferred off the caller.
+Recording is synchronous and never throws. Queue persistence and transmission are deferred off the
+caller.
 
 ## Adopting it
 

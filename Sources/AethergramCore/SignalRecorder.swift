@@ -16,8 +16,9 @@ import os
 /// **Recording is synchronous and never throws.** Consumers emit from view
 /// code and lifecycle hooks; a call that could suspend would change every call
 /// site and a call that could fail would put error handling on paths that have
-/// nothing useful to do with the error. Persisting and transmitting are
-/// deferred off the caller.
+/// nothing useful to do with the error. Queue persistence and transmission
+/// are deferred off the caller; a retention checkpoint is saved on the
+/// caller's thread, under the recorder's lock.
 public final class SignalRecorder: Sendable {
     // MARK: Lifecycle
 
