@@ -82,13 +82,14 @@ A recorded signal is appended to an in-memory queue and handed to a durable writ
 writer has reached disk with survives a process the OS kills without warning. The write happens on
 the writer's own queue, off the call that recorded it, so `flush()` waits for the writer to catch
 up on the way out — which is why the host calls it from its own deactivation path. Delivery is
-coalesced: nothing waits once a batch is full,
-`transmitInterval` otherwise. A retryable failure keeps the batch queued and backs off
-exponentially to `maxBackoffInterval`; a permanent rejection drops it rather than retrying against
-an endpoint that will keep refusing. Past `queueLimit` the oldest signals are dropped, because the
-recent ones describe the version someone is actually running.
+coalesced: a full batch goes without waiting for company, and anything less waits
+`transmitInterval`. A retryable failure keeps the batch queued and backs off exponentially,
+capped at `maxBackoffInterval` but never below `transmitInterval`, and a full batch or a
+`flush()` still waits out a backoff owed. A permanent rejection drops the batch rather than
+retrying against an endpoint that will keep refusing. Past `queueLimit` the oldest signals are
+dropped, because the recent ones describe the version someone is actually running.
 
-Recording is synchronous and never throws. Transmission is the async half, and it is the only half.
+Recording is synchronous and never throws. Persisting and transmitting are deferred off the caller.
 
 ## Adopting it
 

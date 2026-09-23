@@ -16,8 +16,8 @@ import os
 /// **Recording is synchronous and never throws.** Consumers emit from view
 /// code and lifecycle hooks; a call that could suspend would change every call
 /// site and a call that could fail would put error handling on paths that have
-/// nothing useful to do with the error. Transmission is the async half, and it
-/// is the only half.
+/// nothing useful to do with the error. Persisting and transmitting are
+/// deferred off the caller.
 public final class SignalRecorder: Sendable {
     // MARK: Lifecycle
 
