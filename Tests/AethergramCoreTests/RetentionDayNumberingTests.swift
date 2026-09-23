@@ -17,7 +17,7 @@ struct RetentionDayNumberingTests {
     // MARK: Internal
 
     static let calendars: [Calendar.Identifier] = [
-        .gregorian, .buddhist, .japanese, .hebrew, .islamicUmmAlQura, .persian
+        .gregorian, .buddhist, .japanese, .hebrew, .islamicUmmAlQura, .persian, .coptic, .ethiopicAmeteAlem
     ]
 
     /// Calendars whose year numbers, read as Gregorian, fall outside the
