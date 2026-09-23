@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Serializes every write to the durable queue, in the order the recorder
 /// committed them.
@@ -37,7 +38,7 @@ import Foundation
 /// so a kill in the microseconds between them loses that signal where the
 /// synchronous version would not have. `flush()` closes that window at the one
 /// moment it is known to matter, by waiting for pending writes on the way out.
-final class QueueWriter: @unchecked Sendable {
+final class QueueWriter: Sendable {
     // MARK: Lifecycle
 
     init(storage: any SignalQueueStorage, label: String) {
@@ -90,25 +91,29 @@ final class QueueWriter: @unchecked Sendable {
         }
     }
 
+    /// Everything the lock guards, read and written only inside `withLock`.
+    private struct State {
+        var pending = Pending()
+        var scheduled = false
+    }
+
     private let storage: any SignalQueueStorage
     private let queue: DispatchQueue
-    private let lock = NSLock()
-    private var pending = Pending()
-    private var scheduled = false
+    private let state = Mutex(State())
 
     private func submit(_ update: (inout Pending) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        update(&pending)
-        guard !scheduled else { return }
-        scheduled = true
-        // Dispatched inside the lock: unlocking first leaves a window where a
-        // concurrent `waitForPendingWrites()` returns before this intent is on
-        // the queue at all. `self` is captured strongly because a snapshot has
-        // to outlive the recorder that submitted it: `record` does not wait,
-        // so a recorder released before the queue runs would take the writer,
-        // and the unwritten signal, down with it.
-        queue.async { self.drain() }
+        state.withLock { state in
+            update(&state.pending)
+            guard !state.scheduled else { return }
+            state.scheduled = true
+            // Dispatched inside the lock: unlocking first leaves a window where a
+            // concurrent `waitForPendingWrites()` returns before this intent is on
+            // the queue at all. `self` is captured strongly because a snapshot has
+            // to outlive the recorder that submitted it: `record` does not wait,
+            // so a recorder released before the queue runs would take the writer,
+            // and the unwritten signal, down with it.
+            queue.async { self.drain() }
+        }
     }
 
     /// Runs on `queue`. Keeps writing what is pending until nothing is left,
@@ -116,15 +121,15 @@ final class QueueWriter: @unchecked Sendable {
     /// one dispatch rather than queuing one closure per submit.
     private func drain() {
         while true {
-            lock.lock()
-            let next = pending
-            guard !next.isEmpty else {
-                scheduled = false
-                lock.unlock()
-                return
+            let next: Pending? = state.withLock { state in
+                guard !state.pending.isEmpty else {
+                    state.scheduled = false
+                    return nil
+                }
+                defer { state.pending = Pending() }
+                return state.pending
             }
-            pending = Pending()
-            lock.unlock()
+            guard let next else { return }
             if next.purge {
                 storage.purge()
             }
