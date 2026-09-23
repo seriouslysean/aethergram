@@ -59,11 +59,11 @@ branch; an exhaustive switch without one stops compiling when a case arrives.
   is not responsible for — a protected file while the device is locked, a container briefly out of
   reach. It is left where it is, and every write retries the read. Until one succeeds the writes
   stay off the file: the queue keeps transmitting from memory, and loses only its durability
-  against a kill. Once a read succeeds, what the file held is written ahead of the recorder's
-  queue in every write, for the next process to load and send. A purge that can neither delete nor
-  overwrite the file leaves
-  an empty marker file beside it, which every later read takes as "restore nothing" until the
-  delete lands. Both the marker's name and its existence are implementation detail.
+  against a kill. Once a read succeeds, what the file held, up to the recorder's `queueLimit` with
+  the oldest dropped first, is written ahead of the recorder's queue in every write, for the next
+  process to load and send. A purge that can neither delete nor overwrite the file leaves an empty
+  marker file beside it, which every later read takes as "restore nothing" until the delete
+  lands. Both the marker's name and its existence are implementation detail.
 - The on-disk shape of the retention record beyond what `RetentionRecord`'s `Codable`
   conformance promises. Decoding follows that conformance wherever the host's `RetentionStore`
   persists the bytes — the protocol itself specifies no decoding, the storage is the host's.
