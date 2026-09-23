@@ -603,7 +603,7 @@ public final class SignalRecorder: Sendable {
                     current.droppedInOverflow = 0
                 }
                 return (!current.pending.isEmpty, overflowDropped)
-            case .retryable:
+            case .retryable, .retryableAfter:
                 current.consecutiveFailures += 1
                 Self.oweRetry(&current, after: configuration.backoffInterval(
                     consecutiveFailures: current.consecutiveFailures
@@ -624,7 +624,7 @@ public final class SignalRecorder: Sendable {
             logger.info("send ok count=\(sent.count)")
         case let .permanent(reason):
             logger.error("send dropped count=\(sent.count) reason=\(reason, privacy: .public)")
-        case let .retryable(reason):
+        case let .retryable(reason), let .retryableAfter(reason, _):
             logger.info("send retry count=\(sent.count) reason=\(reason, privacy: .public)")
         }
         return keepDraining

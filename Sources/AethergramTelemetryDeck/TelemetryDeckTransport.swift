@@ -40,6 +40,7 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// |---|---|
     /// | 2xx | `delivered` |
     /// | 400, 401, 403, 404, 413, 422, 501, 505 | `permanent` |
+    /// | 429 or 503 with a Retry-After that parses | `retryableAfter` |
     /// | Any other status, including 429 and other 5xx | `retryable` |
     /// | A response that is not HTTP | `retryable` |
     /// | A thrown error, cancellation included | `retryable` |
@@ -73,7 +74,7 @@ public struct TelemetryDeckTransport: SignalTransport {
         )
         do {
             let (_, response) = try await session.data(for: request)
-            return Self.outcome(for: response)
+            return Self.outcome(for: response, now: .now)
         } catch let error as URLError {
             return .retryable(reason: "urlerror-\(error.code.rawValue)")
         } catch {
@@ -89,15 +90,43 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// because the SDK's own `disposition()` treats them as permanent —
     /// everything else, including 429, other 5xx, and no response, stays
     /// queued for the core's backoff.
-    static func outcome(for response: URLResponse) -> TransportOutcome {
+    ///
+    /// A 429 or 503 with a Retry-After that parses says when instead: those
+    /// are the two statuses RFC 9110 §10.2.3 pairs the header with, and any
+    /// other status carrying it is left on the core's schedule.
+    static func outcome(for response: URLResponse, now: Date = .now) -> TransportOutcome {
         guard let http = response as? HTTPURLResponse else { return .retryable(reason: "non-http-response") }
         if (200 ... 299).contains(http.statusCode) { return .delivered }
+        let reason = "http-\(http.statusCode)"
         switch http.statusCode {
         case 400, 401, 403, 404, 413, 422, 501, 505:
-            return .permanent(reason: "http-\(http.statusCode)")
+            return .permanent(reason: reason)
+        case 429, 503:
+            guard
+                let header = http.value(forHTTPHeaderField: "Retry-After"),
+                let delay = retryAfter(header, now: now)
+            else { return .retryable(reason: reason) }
+            return .retryableAfter(reason: reason, delay: delay)
         default:
-            return .retryable(reason: "http-\(http.statusCode)")
+            return .retryable(reason: reason)
         }
+    }
+
+    /// Seconds a Retry-After value asks for, or nil for one outside RFC 9110's
+    /// grammar: `delay-seconds` (`1*DIGIT`) or an `HTTP-date` in any of the
+    /// three forms §5.6.7 obliges a recipient to accept. A date already past
+    /// is zero. A count too large for a finite `Double` is refused rather than
+    /// handed to the core as infinity; any finite size is the core's to bound.
+    static func retryAfter(_ value: String, now: Date) -> TimeInterval? {
+        // OWS around a field value is not part of it (RFC 9110 §5.5).
+        let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.utf8.allSatisfy({ (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains($0) }) {
+            guard let seconds = Double(trimmed), seconds.isFinite else { return nil }
+            return seconds
+        }
+        guard let date = httpDate(trimmed, now: now) else { return nil }
+        return max(0, date.timeIntervalSince(now))
     }
 
     func makeRequest(for batch: SignalBatch) throws -> URLRequest {
@@ -144,6 +173,25 @@ public struct TelemetryDeckTransport: SignalTransport {
     private let configuration: TelemetryDeckConfiguration
     private let session: URLSession
     private let logger: Logger
+
+    /// An `HTTP-date` in IMF-fixdate, rfc850-date, or asctime-date form, all
+    /// in GMT. The two obsolete forms are still ones a recipient must accept
+    /// (RFC 9110 §5.6.7). A two-digit rfc850 year more than 50 years ahead is
+    /// read as the most recent past year with those digits, which is what a
+    /// two-digit start date 50 years back does. asctime pads a single-digit
+    /// day with a space, so runs of spaces are collapsed first.
+    private static func httpDate(_ value: String, now: Date) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.twoDigitStartDate = Calendar(identifier: .gregorian).date(byAdding: .year, value: -50, to: now)
+        let collapsed = value.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+        for format in ["EEE, dd MMM yyyy HH:mm:ss 'GMT'", "EEEE, dd-MMM-yy HH:mm:ss 'GMT'", "EEE MMM d HH:mm:ss yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: collapsed) { return date }
+        }
+        return nil
+    }
 
     private static func sha256(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))

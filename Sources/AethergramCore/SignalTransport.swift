@@ -34,6 +34,17 @@ public enum TransportOutcome: Equatable, Sendable {
     case delivered
     /// Try the same batch again after a backoff. It stays queued.
     case retryable(reason: String)
+    /// Try the same batch again no sooner than `delay` seconds from now, as
+    /// the backend asked. It stays queued, and counts as a failure exactly as
+    /// `retryable` does; the recorder waits for the later of `delay` and its
+    /// own backoff, and bounds `delay` at the one-year interval ceiling.
+    ///
+    /// A separate case rather than a second value on `retryable`, because a
+    /// host that binds `case let .retryable(reason)` would stop compiling on
+    /// that; a new case breaks only a switch with no `default`, which this
+    /// enum's stability contract already requires. A host that matches
+    /// `.retryable` alone to mean "will be retried" must match this case too.
+    case retryableAfter(reason: String, delay: TimeInterval)
     /// Rejected in a way retrying cannot fix. The batch is dropped.
     case permanent(reason: String)
 }
