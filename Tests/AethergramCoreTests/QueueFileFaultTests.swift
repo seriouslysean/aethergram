@@ -65,7 +65,7 @@ struct QueueFileFaultTests {
     /// decoder: every line whole before it, plus a last line cut exactly at
     /// its newline. The last signal carries a character outside ASCII, so
     /// some cuts fall inside one.
-    @Test("A tail cut at any byte of the last two lines keeps every whole line and never takes an append")
+    @Test("A tail cut at any byte of the last two lines keeps every whole line and appends only after a whole line")
     func tailCutAtEveryOffsetKeepsWholeLines() throws {
         let directory = try #require(TestTempDirectory.url)
         let fileURL = directory.appendingPathComponent(queueFilename)
