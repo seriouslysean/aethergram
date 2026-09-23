@@ -289,9 +289,10 @@ struct SignalQueueDurabilityTests {
         #expect(storage.signalsOnDisk.isEmpty)
     }
 
-    /// `JSONEncoder` throws on a non-finite `Double`, and it encodes the queue
-    /// as one array: a single such signal stops every signal from persisting
-    /// and takes the batch down with it at the transport.
+    /// `JSONEncoder` throws on a non-finite `Double`, and a store that
+    /// encodes the queue in one call loses every signal to it: a single such
+    /// signal stops the queue from persisting and takes the batch down with it
+    /// at the transport.
     @Test(
         "A non-finite measure costs its own value and nothing else",
         arguments: [Double.nan, Double.infinity]
@@ -581,7 +582,7 @@ struct SignalQueueDurabilityTests {
         // The fixture has to be the failure it claims. Both halves were
         // refused, so the declined signals are still in the file — otherwise
         // this passes for the ordinary reason and proves nothing.
-        #expect(try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).count == 1)
+        #expect(try signalLines(in: fileURL).count == 1)
 
         // A fresh store is the next process, opened under a later grant.
         let reborn = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
@@ -710,7 +711,7 @@ struct SignalQueueDurabilityTests {
         // nothing was written beside it.
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path)
             == ["aethergram-signal-queue.json"])
-        #expect(try !JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).isEmpty)
+        #expect(try !signalLines(in: fileURL).isEmpty)
 
         #expect(storage.load().isEmpty)
     }
@@ -840,10 +841,10 @@ struct SignalQueueDurabilityTests {
             #expect(storage.load().isEmpty)
             try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
             storage.persist([Signal(name: "lifetime.\(lifetime)", sessionID: "session-b", recordedAt: signalDate)])
-            largest = try max(largest, JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).count)
+            largest = try max(largest, signalLines(in: fileURL).count)
         }
 
-        let onDisk = try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL))
+        let onDisk = try signalLines(in: fileURL)
         #expect(largest <= bound + 1)
         #expect(onDisk.last?.name == "lifetime.24")
         #expect(!onDisk.contains { $0.name == "seeded.0" })
@@ -886,11 +887,20 @@ struct SignalQueueDurabilityTests {
         recorder.record("after.b")
         recorder.writer.waitForPendingWrites()
 
-        let onDisk = try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL))
+        let onDisk = try signalLines(in: fileURL)
         #expect(onDisk.count == limit + 2)
         #expect(onDisk.first?.name == "seeded.0")
         #expect(onDisk.suffix(2).map(\.name) == ["during.a", "after.b"])
     }
+}
+
+/// The queue file read one encoded signal per line, decoded here rather than
+/// by the store, so an assertion on what the file holds does not check the
+/// store against itself.
+private func signalLines(in fileURL: URL) throws -> [Signal] {
+    try Data(contentsOf: fileURL)
+        .split(separator: UInt8(ascii: "\n"))
+        .map { try JSONDecoder().decode(Signal.self, from: Data($0)) }
 }
 
 /// What a closure on another thread saw, read back by the test body after it.
