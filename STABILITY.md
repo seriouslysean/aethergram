@@ -61,9 +61,10 @@ branch; an exhaustive switch without one stops compiling when a case arrives.
   against a kill. Once a read succeeds, what the file held, up to the recorder's `queueLimit` with
   the oldest dropped first, is written ahead of the recorder's queue in every write, for the next
   process to load and send. The recorder hands over that limit only when it is given the store
-  directly; one wrapped in another conformance keeps the default of 1,000. A purge that can neither delete nor overwrite the file leaves an empty
-  marker file beside it, which every later read takes as "restore nothing" until the delete
-  lands. Both the marker's name and its existence are implementation detail.
+  directly; one wrapped in another conformance keeps the limit it already has, 1,000 unless it or a
+  copy of it was also given to a recorder directly. A purge that can neither delete nor overwrite
+  the file leaves an empty marker file beside it, which every later read takes as "restore
+  nothing" until the delete lands. Both the marker's name and its existence are implementation detail.
 - The on-disk shape of the retention record beyond what `RetentionRecord`'s `Codable`
   conformance promises. Decoding follows that conformance wherever the host's `RetentionStore`
   persists the bytes — the protocol itself specifies no decoding, the storage is the host's.

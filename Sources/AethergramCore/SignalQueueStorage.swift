@@ -58,7 +58,8 @@ public protocol SignalQueueStorage: Sendable {
 /// snapshot until a load hands it back or an erase removes it, because the
 /// recorder never saw those signals and only a later process can send them.
 /// The recorder hands its limit only to a store it is given directly; one
-/// reached through another conformance keeps the default of 1,000.
+/// reached through another conformance keeps the limit it already has, 1,000
+/// unless it or a copy of it was also given to a recorder directly.
 /// A copy of one store is the same store and shares all of it; a store
 /// constructed separately is not. Give a second consumer in one process a
 /// `filename` of its own, and give a second process a container of its own.
