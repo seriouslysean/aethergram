@@ -334,6 +334,53 @@ else
     pass
 fi
 
+printf '\napi-break gate\n'
+
+# Proved on the package's own history before it is trusted: 0.3.0 removed `SignalBatch.sessionID`
+# and changed `Signal.init`, and 0.3.2 moved nothing. One scratch directory, so each tag builds once.
+API="$TMP/api"
+api_gate() { "$ROOT/Scripts/check-api-breaks.sh" --scratch "$API" "$@"; }
+
+it "the break 0.3.0 made is refused when declared a patch"
+OUT="$(api_gate --base v0.2.1 --head v0.3.0 --release 0.2.2 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 1 ]; then
+    printf '%s\n' "$OUT"
+    fail "the gate exited $GATE_RC rather than 1 on a break declared a patch"
+elif ! printf '%s\n' "$OUT" | grep -q 'SignalBatch.sessionID has been removed' \
+    || ! printf '%s\n' "$OUT" | grep -q 'Signal.init(name:parameters:floatValue:recordedAt:) has been removed'; then
+    printf '%s\n' "$OUT"
+    fail "the gate refused without naming the removed property and initializer"
+else
+    pass
+fi
+
+it "the same break passes, and is still listed, when declared a 0.x minor"
+OUT="$(api_gate --base v0.2.1 --head v0.3.0 --release 0.3.0 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || ! printf '%s\n' "$OUT" | grep -q 'SignalBatch.sessionID has been removed'; then
+    printf '%s\n' "$OUT"
+    fail "the gate exited $GATE_RC or did not list the break a minor may make"
+else
+    pass
+fi
+
+it "a patch that moved nothing reports no break"
+OUT="$(api_gate --base v0.3.1 --head v0.3.2 --release 0.3.2 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || [ "$(printf '%s\n' "$OUT" | grep -c ': no breaks$')" -ne 2 ]; then
+    printf '%s\n' "$OUT"
+    fail "the gate exited $GATE_RC or found a break between 0.3.1 and 0.3.2"
+else
+    pass
+fi
+
+it "the working tree breaks nothing its CHANGELOG entry does not allow"
+if OUT="$(api_gate 2>&1)"; then
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "Scripts/check-api-breaks.sh refused the working tree against the last release"
+fi
+
 printf '\nswift test\n'
 
 it "the package suite passes"
