@@ -361,8 +361,8 @@ else
     pass
 fi
 
-# watchOS is declared but nothing else compiles it. arm64_32 is the arm every supported watch runs,
-# and the triple's version is the manifest's floor, so an API newer than the floor fails here.
+# watchOS is declared but nothing else compiles it. The triple's version is the manifest's floor,
+# so an API newer than the floor fails here.
 WATCH_SDK="$(xcrun --sdk watchos --show-sdk-path)" || WATCH_SDK=""
 watch_gate() {
     [ -n "$WATCH_SDK" ] || { printf 'xcrun found no watchos SDK\n'; return 1; }
