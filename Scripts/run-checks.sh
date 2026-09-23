@@ -1,12 +1,13 @@
 #!/bin/sh
-# Aethergram repo checks. Four gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. Five gates, in the order a failure is cheapest to read.
 #
-#   Scripts/run-checks.sh    offline, no network
+#   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
-# cannot reach, and `swift test` is the correctness gate.
+# cannot reach, the api-break gate holds the public API to what the release being prepared may
+# change, and `swift test` is the correctness gate.
 
 set -u
 
