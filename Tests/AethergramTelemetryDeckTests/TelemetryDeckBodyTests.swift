@@ -33,7 +33,7 @@ struct TelemetryDeckBodyTests {
     ]
 
     /// Minimal `EnvironmentSnapshot` construction for the partition-mapping
-    /// suite: only `channel` matters to `testPartition(for:)`, so every other
+    /// suite: only `channel` matters to `isTestPartition(for:)`, so every other
     /// field is a placeholder.
     static func snapshot(channel: RunContextChannel = .dev) -> EnvironmentSnapshot {
         EnvironmentSnapshot(
@@ -180,7 +180,7 @@ struct TelemetryDeckBodyTests {
         ]
     )
     func partitionMatchesTheDistributionChannel(row: PartitionRow) throws {
-        let isTestMode = TelemetryDeckConfiguration.testPartition(for: row.snapshot)
+        let isTestMode = TelemetryDeckConfiguration.isTestPartition(for: row.snapshot)
         #expect(
             isTestMode == row.expectedIsTestMode,
             "\(row.name) should read isTestMode == \(row.expectedIsTestMode)"
