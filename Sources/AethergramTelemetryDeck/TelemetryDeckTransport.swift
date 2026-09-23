@@ -113,8 +113,10 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// queued for the core's backoff.
     ///
     /// A 429 or 503 with a Retry-After that parses says when instead: those
-    /// are the two statuses RFC 9110 §10.2.3 pairs the header with, and any
-    /// other status carrying it is left on the core's schedule.
+    /// are the two throttles the header is defined on (RFC 6585 §4, RFC 9110
+    /// §10.2.3), and any other status carrying it keeps its own outcome. A
+    /// 3xx's Retry-After governs the redirected request, which `URLSession`
+    /// issues itself.
     static func outcome(for response: URLResponse, now: Date = .now) -> TransportOutcome {
         guard let http = response as? HTTPURLResponse else { return .retryable(reason: "non-http-response") }
         if (200 ... 299).contains(http.statusCode) { return .delivered }
@@ -196,25 +198,12 @@ public struct TelemetryDeckTransport: SignalTransport {
     let session: URLSession
     private let logger: Logger
 
-    /// An `HTTP-date` in IMF-fixdate, rfc850-date, or asctime-date form, all
-    /// in GMT. The two obsolete forms are still ones a recipient must accept
-    /// (RFC 9110 §5.6.7). A two-digit rfc850 year more than 50 years ahead is
-    /// read as the most recent past year with those digits, which is what a
-    /// two-digit start date 50 years back does. asctime pads a single-digit
-    /// day with a space, so runs of spaces are collapsed first. Internal so a
-    /// test can assert the century a two-digit year lands in, which a past
-    /// date's zero delay hides.
+    /// An `HTTP-date` in IMF-fixdate, rfc850-date, or asctime-date form, or
+    /// nil for anything else. See `HTTPDate` for what each form admits.
+    /// Internal so a test can assert the century a two-digit year lands in,
+    /// which a past date's zero delay hides.
     static func httpDate(_ value: String, now: Date) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.twoDigitStartDate = Calendar(identifier: .gregorian).date(byAdding: .year, value: -50, to: now)
-        let collapsed = value.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
-        for format in ["EEE, dd MMM yyyy HH:mm:ss 'GMT'", "EEEE, dd-MMM-yy HH:mm:ss 'GMT'", "EEE MMM d HH:mm:ss yyyy"] {
-            formatter.dateFormat = format
-            if let date = formatter.date(from: collapsed) { return date }
-        }
-        return nil
+        HTTPDate.parse(value, now: now)
     }
 
     private static func sha256(_ value: String) -> String {
