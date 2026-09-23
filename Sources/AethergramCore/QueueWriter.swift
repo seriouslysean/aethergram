@@ -38,19 +38,20 @@ import Synchronization
 /// names one: the newest at the call for `waitForPendingWrites()` and
 /// `awaitPendingWrites()`, or the one a submit returned for
 /// `awaitWrites(through:)`. A waiter returns once a write has landed that
-/// covers every submission up to its ticket: the drain step that took that
-/// ticket has ended. Nothing submitted after the ticket is promised by the
-/// return, even when it happens to be on the store by then.
+/// covers every submission up to its ticket: the first drain step to start
+/// after that submission has ended. Nothing submitted after the ticket is
+/// promised by the return, even when it happens to be on the store by then.
 ///
 /// A later submission can still lengthen the wait, within that one step and
 /// never by another. A step takes everything pending when it starts,
 /// submissions made after the waiter included, and makes at most two store
-/// calls: the purge, then the newest snapshot. A snapshot that supersedes a
-/// pending one costs the wait nothing, since it replaces that write. One
-/// that lands on the other side of a purge — a snapshot coalesced behind a
-/// pending purge, or a purge submitted over a pending snapshot — adds one
-/// store call. A submission made once the step has started goes to the next
-/// step, which the waiter does not wait for.
+/// calls: the purge, then the newest snapshot. A later snapshot that
+/// supersedes a pending one, or a later purge that drops it, replaces that
+/// call. The step makes one more call than the waiter's own submissions
+/// needed only when it ends up holding a purge and a snapshot where those
+/// held one of the two — a snapshot coalesced behind a pending purge is the
+/// case the recorder meets. A submission made once the step has started
+/// goes to the next step, which the waiter does not wait for.
 ///
 /// **What this costs.** The write no longer completes before `record` returns,
 /// so a kill in the microseconds between them loses that signal where the
@@ -118,8 +119,8 @@ final class QueueWriter: Sendable {
     }
 
     /// Suspends until a write covering the submission that returned `ticket`
-    /// has reached the store: that write itself, or the later snapshot it was
-    /// folded into. A write submitted after the ticket is not promised, and
+    /// has reached the store: that write itself, or a later write that
+    /// superseded it — a newer snapshot, or a purge. A write submitted after the ticket is not promised, and
     /// lengthens the wait by at most one store call, as the type's barrier
     /// describes. Returns at once when that write has already landed.
     ///
