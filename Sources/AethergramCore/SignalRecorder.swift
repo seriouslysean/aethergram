@@ -460,8 +460,10 @@ public final class SignalRecorder: Sendable {
             // Submitted under the same lock that produced it, which is what
             // makes the order writes land in the order the mutations committed.
             // The encode and the atomic write happen on the writer's serial
-            // queue, off this thread — most call sites are the main actor, and
-            // rewriting the whole queue there is O(queue) at every emit.
+            // queue, off this thread. Not every O(queue) cost goes with them:
+            // the snapshot shares this array's storage, so the next append or
+            // eviction while the writer still holds it copies the whole queue
+            // here, under the lock.
             writer.persist(current.pending)
             return (current.pending.count, overflowBegan)
         }
