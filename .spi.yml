@@ -1,0 +1,6 @@
+version: 1
+builder:
+  configs:
+    # Swift Package Index injects the DocC plugin for these targets, so the package never depends
+    # on it. Scripts/run-checks.sh builds the same documentation with docc directly.
+    - documentation_targets: [AethergramCore, AethergramTelemetryDeck]
