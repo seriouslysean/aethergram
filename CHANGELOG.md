@@ -65,10 +65,12 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 - `endSession()` closes only a session this recorder opened, and a `record` advances only that
   session's checkpoint. A session left open by another process is closed by the next
   `beginSession()` against its own last activity, rather than stretched to now.
-- For an app extension — an `.appex` inside an `.app` — `EnvironmentSnapshot.current()` resolves
-  the receipt that `runContext.channel` is read from against the containing app's bundle rather
-  than the extension's own, falling back to the extension's when the app's bundle gives no receipt
-  location.
+- For an app extension on any platform but macOS, which reads no receipt,
+  `EnvironmentSnapshot.current()` resolves the receipt that `runContext.channel` is read from
+  against the containing app's bundle rather than the extension's own, falling back to the
+  extension's when the app's bundle gives no receipt location. The `.appex` has to sit two
+  directory levels under the `.app`, as in `PlugIns/` or `Extensions/`; any other layout keeps the
+  extension's own.
 - A `calendar.hourOfDay` value outside 0-23, which a caller can pass since caller parameters win,
   goes to the wire unchanged instead of trapping the send.
 - A caller key spelled as a vendor wire name wins over the package key mapped onto that name, on
