@@ -63,12 +63,13 @@ Scripts/run-checks.sh:    printf '# see /Users/somebody\n' >> "$RUNNER/Scripts/r
 Scripts/run-checks.sh:    elif ! printf '%s\n' "$OUT" | grep -q 'Scripts/run-checks.sh:.*/Users/somebody'; then
 Scripts/run-checks.sh:printf 'fix: a thing\n\nSee github.com/foo/bar/issues/42\n' > "$TMP/issueurl"
 Scripts/run-checks.sh:printf 'fix: a thing\n\n# see github.com/foo/bar/issues/42\n' > "$TMP/hashline"
-Scripts/run-checks.sh:printf 'Merge pull request #100 from seriouslysean/100-a-branch\n' > "$TMP/mergesubject"
-Scripts/run-checks.sh:printf 'fix: a thing (#100)\n' > "$TMP/squashsubject"
+Scripts/run-checks.sh:printf 'Merge pull request #4812 from seriouslysean/x\n' > "$TMP/mergesubject"
+Scripts/run-checks.sh:printf 'fix: crash when the widget reloads (#4812)\n' > "$TMP/squashsubject"
 Scripts/run-checks.sh:printf 'fix: a thing\n\nSee #100 for why.\n' > "$TMP/bodynumber"
-Scripts/run-checks.sh:printf 'fix: see #100 (#101)\n' > "$TMP/squashprefix"
-Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'fix: a thing (#100)' \
-Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'Merge pull request #101 from seriouslysean/101-a-branch'
+Scripts/run-checks.sh:    && fixture_git merge -q --no-ff -m 'Merge pull request #101 from seriouslysean/101-a-branch' side
+Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'fix: crash when the widget reloads (#4812)'
+Scripts/run-checks.sh:elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'Merge pull request #4812 from seriouslysean/x'
 Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'fix: a thing' -m 'Merge pull request #102 from seriouslysean/102-a-branch'
 Scripts/run-checks.sh:elif ! printf '%s\n' "$OUT" | grep -q '#102'; then
 Scripts/run-checks.sh:printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #404\n' > "$TMP/verbose"

@@ -141,36 +141,26 @@ else
     fail "a clean message was refused"
 fi
 
-it "the merge subject GitHub writes for a web merge is accepted"
-printf 'Merge pull request #100 from seriouslysean/100-a-branch\n' > "$TMP/mergesubject"
-if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/mergesubject" 2>&1)"; then
-    pass
+it "a merge subject typed into a message is refused"
+printf 'Merge pull request #4812 from seriouslysean/x\n' > "$TMP/mergesubject"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/mergesubject" >/dev/null 2>&1; then
+    fail "a message carrying GitHub's merge subject was accepted, though no hook ever sees one GitHub wrote"
 else
-    printf '%s\n' "$OUT"
-    fail "the merge subject GitHub writes itself was refused"
+    pass
 fi
 
-it "the pull request number GitHub appends to a squash subject is accepted"
-printf 'fix: a thing (#100)\n' > "$TMP/squashsubject"
-if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/squashsubject" 2>&1)"; then
-    pass
+it "a pull request number ending a subject is refused"
+printf 'fix: crash when the widget reloads (#4812)\n' > "$TMP/squashsubject"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/squashsubject" >/dev/null 2>&1; then
+    fail "a subject ending in a pull request number was accepted"
 else
-    printf '%s\n' "$OUT"
-    fail "the squash subject GitHub writes itself was refused"
+    pass
 fi
 
 it "an issue number in a body is still refused"
 printf 'fix: a thing\n\nSee #100 for why.\n' > "$TMP/bodynumber"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/bodynumber" >/dev/null 2>&1; then
     fail "a message carrying an issue number in its body was accepted"
-else
-    pass
-fi
-
-it "an issue number before a squash suffix is still refused"
-printf 'fix: see #100 (#101)\n' > "$TMP/squashprefix"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/squashprefix" >/dev/null 2>&1; then
-    fail "an issue number ahead of the squash suffix was accepted"
 else
     pass
 fi
@@ -182,7 +172,7 @@ fixture_git() {
         -c core.hooksPath=/dev/null "$@"
 }
 
-it "history holding GitHub's merge and squash subjects is accepted"
+it "a merge commit carrying GitHub's merge subject is accepted in history"
 HIST="$TMP/history-ok"
 mkdir -p "$HIST/Scripts"
 cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
@@ -190,14 +180,57 @@ chmod +x "$HIST/Scripts/scan-for-leaks.sh"
 (
     cd "$HIST" \
     && fixture_git init -q \
-    && fixture_git commit -q --allow-empty -m 'fix: a thing (#100)' \
-    && fixture_git commit -q --allow-empty -m 'Merge pull request #101 from seriouslysean/101-a-branch'
+    && fixture_git commit -q --allow-empty -m 'fix: a thing' \
+    && fixture_git checkout -q -b side \
+    && fixture_git commit -q --allow-empty -m 'fix: another thing' \
+    && fixture_git checkout -q - \
+    && fixture_git merge -q --no-ff -m 'Merge pull request #101 from seriouslysean/101-a-branch' side
 ) || fail "the fixture history could not be built"
 if OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; then
     pass
 else
     printf '%s\n' "$OUT"
-    fail "a subject GitHub writes itself was refused in history"
+    fail "the subject GitHub writes on a merge commit was refused in history"
+fi
+
+it "a pull request number ending a subject is refused in history"
+HIST="$TMP/history-squash"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'fix: crash when the widget reloads (#4812)'
+) || fail "the fixture history could not be built"
+OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a subject ending in a pull request number was accepted in history"
+elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the subject"
+else
+    pass
+fi
+
+it "a merge subject on a commit that is not a merge is refused in history"
+HIST="$TMP/history-typed-merge"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'Merge pull request #4812 from seriouslysean/x'
+) || fail "the fixture history could not be built"
+OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a merge subject typed onto a single-parent commit was accepted in history"
+elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the subject"
+else
+    pass
 fi
 
 it "a merge subject's shape in a body is still refused in history"
