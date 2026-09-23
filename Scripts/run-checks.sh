@@ -1,11 +1,12 @@
 #!/bin/sh
-# Aethergram repo checks. Three gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. Four gates, in the order a failure is cheapest to read.
 #
 #   Scripts/run-checks.sh    offline, no network
 #
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
-# a gate that never fires looks exactly like one that passes. `swift test` is the correctness gate.
+# a gate that never fires looks exactly like one that passes. The build gates compile what the suite
+# cannot reach, and `swift test` is the correctness gate.
 
 set -u
 
@@ -230,9 +231,38 @@ fi
 
 printf '\nbuild gates\n'
 
-# What the checks compile today: the host, in debug, which is also all `swift test` compiles.
-core_gate() { swift build --package-path "$1" --scratch-path "$2" --target AethergramCore; }
-package_gate() { swift build --package-path "$1" --scratch-path "$2" --target Aethergram; }
+# `swift test` compiles the host in debug, so the iOS arms, the release arm of `#if DEBUG`, and
+# extension safety are proved here instead: an iOS release build with -application-extension, which
+# a host's widget or share extension links under. Warnings stay non-fatal until the known iOS 18
+# deprecation in EnvironmentSnapshot.swift is gone; -warnings-as-errors waits on that.
+IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)" || IOS_SDK=""
+ios_build() {
+    _pkg="$1"; _scratch="$2"; shift 2
+    [ -n "$IOS_SDK" ] || { printf 'xcrun found no iphoneos SDK\n'; return 1; }
+    swift build --package-path "$_pkg" --scratch-path "$_scratch" \
+        -c release --triple arm64-apple-ios18.0 --sdk "$IOS_SDK" -Xswiftc -application-extension \
+        --explicit-target-dependency-import-check error "$@"
+}
+# The core alone, into a scratch path that has never held the adapter's module, so the build proves
+# the core compiles with no adapter in reach rather than finding one left over from a full build.
+core_gate() { ios_build "$1" "$2" --target AethergramCore; }
+package_gate() { ios_build "$1" "$2" --target Aethergram; }
+
+it "the core builds for iOS release with no adapter in reach"
+if OUT="$(core_gate "$ROOT" "$TMP/ios" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the core did not build alone for iOS release"
+fi
+
+it "the package builds for iOS release as extension-safe"
+if OUT="$(package_gate "$ROOT" "$TMP/ios" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the package did not build for iOS release with -application-extension"
+fi
 
 # A copy of the package to break on purpose, so a gate is watched refusing before it is trusted.
 copy_package() { mkdir -p "$1" && cp -R "$ROOT/Package.swift" "$ROOT/Sources" "$ROOT/Tests" "$1/"; }
