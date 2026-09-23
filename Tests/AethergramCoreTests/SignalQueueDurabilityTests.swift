@@ -202,6 +202,44 @@ struct SignalQueueDurabilityTests {
         #expect(fixture.transport.sentSignalNames == ["signal.2", "signal.3", "signal.4"])
     }
 
+    /// A queue file written under a higher limit, or by a store that carried
+    /// a rescued queue ahead of its snapshot, can hold more than the cap now
+    /// in force. The restore trims it oldest-first and writes the trimmed
+    /// queue back before anything is sent. The removal after a delivered batch
+    /// counts evictions since its claim, so it must take exactly the batch —
+    /// resending the oldest survivor or dropping the newest are the failures.
+    @Test("A restored queue past the cap loses its oldest, and a delivery after removes only what it sent")
+    func restoredQueuePastTheCapLosesItsOldest() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let names = (0 ..< 5).map { "old.\($0)" }
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+            .persist(names.map { Signal(name: $0, sessionID: "session-a", recordedAt: signalDate) })
+
+        let storage = RecordingQueueStorage(directory: directory)
+        let transport = MidSendTransport(outcome: .delivered)
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(batchSize: 2, queueLimit: 3, transmitInterval: 3600),
+            transport: transport,
+            queueStorage: storage,
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: fixedClock(at: signalDate)
+        )
+        storage.settle = { [weak recorder] in recorder?.writer.waitForPendingWrites() }
+        let onDiskDuringFirstSend = NamesSeen()
+        transport.duringFirstSend = { onDiskDuringFirstSend.names = storage.signalsOnDisk.map(\.name) }
+
+        recorder.updateConsent(.granted)
+        await recorder.drain()
+
+        #expect(onDiskDuringFirstSend.names == ["old.2", "old.3", "old.4"])
+        #expect(transport.batches.map { $0.signals.map(\.name) } == [["old.2", "old.3"], ["old.4"]])
+        #expect(storage.signalsOnDisk.isEmpty)
+    }
+
     /// A record landing mid-send can evict the front of a full queue, so the
     /// queue no longer starts with the batch in flight. Part of that batch is
     /// still there and part of it is gone, and no comparison of the signals
@@ -774,4 +812,15 @@ struct SignalQueueDurabilityTests {
         let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
         #expect(readable.load().map(\.name) == ["later.b"])
     }
+}
+
+/// What a closure on another thread saw, read back by the test body after it.
+private final class NamesSeen: @unchecked Sendable {
+    var names: [String] {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+
+    private let lock = NSLock()
+    private var stored: [String] = []
 }
