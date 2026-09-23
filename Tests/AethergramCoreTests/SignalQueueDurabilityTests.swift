@@ -715,6 +715,40 @@ struct SignalQueueDurabilityTests {
         #expect(readable.load().map(\.name) == ["pending.a", "later.b"])
     }
 
+    /// "Nobody could look for the mark" is not "there is no mark". Read as
+    /// one, an empty write into a directory out of reach goes ahead as a
+    /// purge, the purge is refused, and the refusal is remembered as an erase
+    /// owed — which the next load then collects from a queue nobody declined.
+    @Test(
+        "A mark nobody could look for is not read as no mark",
+        .enabled(if: getuid() != 0, "root reaches a directory whose permissions refuse everyone")
+    )
+    func markNobodyCouldLookForIsNotReadAsNoMark() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+            .persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        storage.persist([])
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: originalPermissions],
+            ofItemAtPath: directory.path
+        )
+        #expect(storage.load().map(\.name) == ["pending.a"])
+    }
+
     /// Suspending the writes is a state, not a verdict. A store that reads the
     /// file successfully afterwards knows what is there, so the reason to hold
     /// the writes off it is gone — and left standing it would cost the process
