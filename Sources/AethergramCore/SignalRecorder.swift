@@ -359,6 +359,11 @@ public final class SignalRecorder: Sendable {
     /// - `flush()` still waits for the queue writes and starts no drain;
     /// - `flushAndWait()` returns at once;
     /// - `reset()` erases and leaves collection closed.
+    ///
+    /// - Parameter body: The host's own reset work, typically replacing the
+    ///   identifier `clientUserProvider` returns.
+    /// - Returns: What `body` returns.
+    /// - Throws: What `body` throws, once collection has reopened.
     public func resetClosingCollection<R, E: Error>(during body: () throws(E) -> R) throws(E) -> R {
         requireNoReentry()
         let detached: Task<Void, Never>? = lock.withLock { current in
