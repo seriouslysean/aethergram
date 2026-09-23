@@ -25,6 +25,9 @@ let package = Package(
         // leaves this one compiling, which is the test of that claim.
         .target(
             name: "AethergramCore",
+            // The core is what collects, and Apple reads an SDK's privacy
+            // manifest from its bundle, so the manifest ships in this one.
+            resources: [.copy("PrivacyInfo.xcprivacy")],
             swiftSettings: aethergramSwiftSettings
         ),
         // The only module that knows a vendor exists.
