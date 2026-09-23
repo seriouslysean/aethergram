@@ -201,8 +201,10 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// (RFC 9110 §5.6.7). A two-digit rfc850 year more than 50 years ahead is
     /// read as the most recent past year with those digits, which is what a
     /// two-digit start date 50 years back does. asctime pads a single-digit
-    /// day with a space, so runs of spaces are collapsed first.
-    private static func httpDate(_ value: String, now: Date) -> Date? {
+    /// day with a space, so runs of spaces are collapsed first. Internal so a
+    /// test can assert the century a two-digit year lands in, which a past
+    /// date's zero delay hides.
+    static func httpDate(_ value: String, now: Date) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
