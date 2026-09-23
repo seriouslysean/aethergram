@@ -40,6 +40,14 @@ ISSUE_URL_RE='github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(issues|pull)/[0-9]+'
 # itself.
 MESSAGE_RE="/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|$ISSUE_URL_RE|^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):"
 
+# GitHub writes two subjects itself, on a web merge that runs no hook: `Merge pull request #N from
+# <owner>/<branch>` and a squash subject ending ` (#N)`. The first number past 99 would otherwise
+# fail every later history scan, and history cannot be rewritten. Only that number, in that place on
+# a subject, is removed before the scan; the rest of the subject is still read. A line may carry the
+# `%H ` prefix the history tier adds.
+MERGE_SUBJECT_SED='s/^\([0-9a-f]\{40,64\} \)\{0,1\}Merge pull request #[0-9][0-9]* \(from seriouslysean\/[^ ][^ ]*\)$/\1Merge pull request \2/'
+SQUASH_SUBJECT_SED='s/ (#[0-9][0-9]*)$//'
+
 scan() {
     _what="$1"; _re="$2"
     # Exclude this file and the runner: they contain the patterns by definition.
@@ -66,7 +74,8 @@ if [ -n "$MSG" ]; then
     # published message, so that gets cut first. Nothing after is comment-stripped: whether git
     # itself drops a `#` line depends on commit.cleanup (default "strip" for an editor commit,
     # "whitespace" for `-m`), and a line `-m` keeps must still be caught here.
-    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG")" || FOUND=1
+    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG" \
+        | sed -e "1$MERGE_SUBJECT_SED" -e "1$SQUASH_SUBJECT_SED")" || FOUND=1
     if [ "$FOUND" -eq 0 ]; then
         printf 'clean\n'
         exit 0
@@ -89,7 +98,10 @@ scan "issue or pull request URL" "$ISSUE_URL_RE" || FOUND=1
 
 if [ "${1:-}" = "--all" ]; then
     printf 'scanning commit messages\n'
-    scan_messages "$(git log --all --format='%H %s%n%b' 2>/dev/null)" || FOUND=1
+    # Subjects and bodies are read apart, so GitHub's shapes are forgiven on a subject and nowhere else.
+    scan_messages "$(git log --all --format='%H %s' 2>/dev/null \
+        | sed -e "$MERGE_SUBJECT_SED" -e "$SQUASH_SUBJECT_SED")" || FOUND=1
+    scan_messages "$(git log --all --format='%H%n%b' 2>/dev/null)" || FOUND=1
 fi
 
 if [ "$FOUND" -eq 0 ]; then
