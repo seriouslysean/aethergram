@@ -453,12 +453,14 @@ private final class QueueFile: @unchecked Sendable {
     /// signals no load handed back, so no snapshot contains them. Written
     /// ahead of every snapshot until a load or an erase.
     ///
-    /// Bounded by what one file held: a late read replaces it rather than
-    /// adding to it, and needs a failed load first, which clears it. The
-    /// recorder loads once in its life, so under it this is at most one
-    /// earlier process's queue, and the file holds that plus one snapshot —
-    /// up to twice `queueLimit`. The next process's restore trims the file to
-    /// the limit oldest-first, and these are the oldest.
+    /// Bounded by what the file held: a late read replaces it rather than
+    /// adding to it, and needs a failed load first, which clears it. The file
+    /// grows past `queueLimit` by at most one snapshot for each process in a
+    /// row whose own load fails and whose later read succeeds, since each
+    /// carries everything before it; that growth is paid on this read and on
+    /// every write that follows. It ends at the first process whose load
+    /// succeeds: its restore trims the file to the limit oldest-first, and
+    /// these are the oldest.
     var carried: [Signal] = []
     /// Log bookkeeping only, so a degraded store says so once rather than on
     /// every write: why writes are being skipped, and whether the look for
