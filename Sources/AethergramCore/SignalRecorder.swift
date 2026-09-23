@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Synchronization
 
 /// The package's one entry point: consent gate, durable queue, batching,
 /// backoff, and the retention counters, over a transport it knows nothing
@@ -126,17 +127,23 @@ public final class SignalRecorder: Sendable {
     /// recalled: a transport that honours cancellation stops it.
     public func updateConsent(_ state: ConsentState) {
         requireNoReentry()
-        let erased: (happened: Bool, drain: Task<Void, Never>?) = lock.withLock { current in
+        let erased: (happened: Bool, drain: Task<Void, Never>?, queued: Int) = lock.withLock { current in
             current.consent = state
             guard !state.permitsCollection else {
                 Self.openSessionIfNeeded(&current)
-                return (false, nil)
+                restoreQueueIfNeeded(&current)
+                return (false, nil, current.pending.count)
             }
             eraseCollected(&current)
-            return (true, Self.detachOwnedDrain(&current))
+            return (true, Self.detachOwnedDrain(&current), 0)
         }
         guard erased.happened else {
             logger.info("consent granted")
+            // A queue a killed process left has nobody else coming for it:
+            // the host may record nothing before it is suspended again.
+            if erased.queued > 0 {
+                startDrain(after: configuration.deliveryDelay(queued: erased.queued))
+            }
             return
         }
         erased.drain?.cancel()
@@ -245,10 +252,41 @@ public final class SignalRecorder: Sendable {
         startDrain(after: 0)
     }
 
+    /// `flush()` for a caller that can wait for the send: returns once the
+    /// queue's writes are durable and one delivery attempt has been answered,
+    /// so a host can bracket it with an expiring-activity window.
+    ///
+    /// What it waits for, in order:
+    /// 1. Every queue write submitted before the call, and no later one.
+    /// 2. A drain started at zero delay — or, if one is already sending, that
+    ///    one, and then a drain of its own if anything recorded before the
+    ///    call is still queued. A drain sends batch after batch until the
+    ///    queue empties or a send fails, and ends once the transport has
+    ///    answered the last of them.
+    ///
+    /// It returns without sending when nothing can be sent now: consent is
+    /// withheld, the queue is empty, or a failure still owes the endpoint a
+    /// wait. It never hurries that wait, for the same reason `flush()` does not.
+    ///
+    /// Suspends rather than blocks, so it holds no thread while it waits.
+    /// Cancelling the calling task ends the wait for the send but not the
+    /// send, whose batch is on disk either way; the write barrier is not cut
+    /// short, because what it promises is that the queue is durable.
+    ///
+    /// Named apart from `flush()` because an async overload of one name wins
+    /// in every async context, which would turn each existing unawaited call
+    /// there into a compile error.
     public func flushAndWait() async {
         requireNoReentry()
         await writer.awaitPendingWrites()
-        startDrain(after: 0)
+        // At most twice: behind a drain already sending, then a drain of its
+        // own if the first ended with this caller's signals still queued.
+        for _ in 0 ..< 2 {
+            let hasWork = lock.withLock { $0.consent.permitsCollection && !$0.pending.isEmpty }
+            guard hasWork, let started = startDrain(after: 0) else { return }
+            await Self.awaitCompletion(of: started.running)
+            if started.isNew || Task.isCancelled { return }
+        }
     }
 
     /// Erases everything the package persists. Wire it into the host's
@@ -752,27 +790,52 @@ public final class SignalRecorder: Sendable {
     /// disk. That is the same guarantee the durable queue gives when the OS
     /// kills the process outright, which is why an interrupted flush loses
     /// nothing.
-    private func startDrain(after delay: TimeInterval) {
+    ///
+    /// Returns the drain sending now, if one is, and whether this call
+    /// started it, so a caller that waits knows what it waited on.
+    @discardableResult
+    private func startDrain(after delay: TimeInterval) -> (running: Task<Void, Never>, isNew: Bool)? {
         // The task is created inside the claim, so the slot never holds a
         // half-state and there is no late "still ours?" assignment to guard.
-        let preempted: Task<Void, Never>? = lock.withLock { current in
+        typealias Decision = (running: OwnedDrain?, isNew: Bool, preempted: Task<Void, Never>?)
+        let decided: Decision? = lock.withLock { current in
             guard current.consent.permitsCollection else { return nil }
             let due = max(delay, Self.secondsOwed(current.retryNotBefore))
             switch current.drain {
-            case .running:
-                return nil
+            case let .running(owned):
+                return (owned, false, nil)
             case let .waiting(existing):
                 guard due == 0 else { return nil }
                 let owned = makeOwnedDrain(&current, after: 0)
                 current.drain = .running(owned)
-                return existing.task
+                return (owned, true, existing.task)
             case .idle:
                 let owned = makeOwnedDrain(&current, after: due)
                 current.drain = due > 0 ? .waiting(owned) : .running(owned)
-                return nil
+                return (due > 0 ? nil : owned, true, nil)
             }
         }
-        preempted?.cancel()
+        decided?.preempted?.cancel()
+        guard let decided, let running = decided.running else { return nil }
+        return (running.task, decided.isNew)
+    }
+
+    /// Waits for `task` to end, or for the caller to be cancelled, whichever
+    /// comes first. Awaiting an unstructured task's value cannot be cut short,
+    /// and the drain is the recorder's, not the caller's to cancel.
+    private static func awaitCompletion(of task: Task<Void, Never>) async {
+        let once = ResumeOnce()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                once.arm(continuation)
+                Task {
+                    await task.value
+                    once.resume()
+                }
+            }
+        } onCancel: {
+            once.resume()
+        }
     }
 
     /// A backend's delay as one a sleep can serve. Bounded at the interval
@@ -882,4 +945,35 @@ public final class SignalRecorder: Sendable {
         state.drain = .idle
         return owned?.task
     }
+}
+
+/// A continuation resumed at most once, by whichever of two parties gets
+/// there first, and at once if one got there before it was armed.
+private final class ResumeOnce: Sendable {
+    func arm(_ continuation: CheckedContinuation<Void, Never>) {
+        let resumeNow: Bool = state.withLock { state in
+            guard !state.fired else { return true }
+            state.continuation = continuation
+            return false
+        }
+        if resumeNow { continuation.resume() }
+    }
+
+    func resume() {
+        let waiting: CheckedContinuation<Void, Never>? = state.withLock { state in
+            guard !state.fired else { return nil }
+            state.fired = true
+            let armed = state.continuation
+            state.continuation = nil
+            return armed
+        }
+        waiting?.resume()
+    }
+
+    private struct State {
+        var fired = false
+        var continuation: CheckedContinuation<Void, Never>?
+    }
+
+    private let state = Mutex(State())
 }
