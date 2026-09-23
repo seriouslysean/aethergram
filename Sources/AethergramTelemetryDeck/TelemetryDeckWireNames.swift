@@ -20,11 +20,16 @@ enum TelemetryDeckWireNames {
         presetSignalNames[name] ?? name
     }
 
+    /// Two passes, so a caller key already spelled as a wire name beats the
+    /// package key mapped onto it. One pass would pick the winner by
+    /// dictionary order, which differs per process; the core's rule is that
+    /// consumer parameters win, and every unmapped key is the consumer's.
     static func payload(from parameters: [String: String]) -> [String: String] {
         var mapped: [String: String] = [:]
         mapped.reserveCapacity(parameters.count)
         for (key, value) in parameters {
-            mapped[parameterKeys[key] ?? key] = wireValue(forKey: key, value: value)
+            guard let wireName = parameterKeys[key] else { continue }
+            mapped[wireName] = wireValue(forKey: key, value: value)
             // Dashboards built on the vendor's own isTestFlight flag keep
             // resolving after the collapse to one channel field. Emitted for
             // every channel, not only beta: a chart that groups or filters on
@@ -34,6 +39,9 @@ enum TelemetryDeckWireNames {
                 let isBeta = value == RunContextChannel.beta.rawValue
                 mapped[legacyIsTestFlightWireName] = isBeta ? "true" : "false"
             }
+        }
+        for (key, value) in parameters where parameterKeys[key] == nil {
+            mapped[key] = value
         }
         return mapped
     }
