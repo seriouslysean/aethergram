@@ -16,11 +16,20 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// - Parameter logSubsystem: The host's logging subsystem. Outcomes are the
     ///   core's to log; what this logs is the one fact only the adapter knows —
     ///   which ingest partition a build is posting to.
+    /// - Parameter session: Any session but a background one. Sends are async
+    ///   data tasks, which a background session refuses by raising an
+    ///   exception that aborts the host.
+    /// - Precondition: `session` has no background identifier. Checked here so
+    ///   the trap lands at construction rather than at the first send.
     public init(
         configuration: TelemetryDeckConfiguration,
         logSubsystem: String,
         session: URLSession = .shared
     ) {
+        precondition(
+            session.configuration.identifier == nil,
+            "TelemetryDeckTransport cannot send over a background URLSession"
+        )
         self.configuration = configuration
         self.session = session
         logger = Logger(subsystem: logSubsystem, category: "aethergram-telemetrydeck")
