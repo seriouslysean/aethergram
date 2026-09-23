@@ -356,6 +356,33 @@ struct FlushContractTests {
         try await cancelAndMeasure(recorder)
     }
 
+    /// A host that flushes on every deactivation and cancels on every
+    /// expiry would otherwise grow the registry by one waiter each time.
+    @Test("Cancelled awaited flushes leave no waiter registered")
+    func cancelledFlushesLeaveNoWaiterBehind() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let transport = HeldFirstSendTransport()
+        defer { transport.release() }
+        let recorder = try makeRecorder(directory: directory, transport: transport)
+        recorder.updateConsent(.granted)
+        recorder.record("Game.started")
+        recorder.flush()
+        await transport.firstSendHeld.wait()
+
+        let flushes = (0 ..< 100).map { _ in Task { await recorder.flushAndWait() } }
+        await waitUntil { recorder.flushWaiterCount == 100 }
+        let registered = recorder.flushWaiterCount
+        for flush in flushes {
+            flush.cancel()
+        }
+        for flush in flushes {
+            await flush.value
+        }
+
+        #expect(registered == 100)
+        #expect(recorder.flushWaiterCount == 0)
+    }
+
     /// `withTaskCancellationHandler` runs the handler at once for a task
     /// already cancelled, before anything is registered for it to find.
     @Test("An awaited flush called from a task already cancelled returns promptly")
