@@ -1,5 +1,5 @@
 #!/bin/sh
-# Aethergram repo checks. Five gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. Six gates, in the order a failure is cheapest to read.
 #
 #   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
@@ -7,7 +7,8 @@
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
 # cannot reach, the api-break gate holds the public API to what the release being prepared may
-# change, and `swift test` is the correctness gate.
+# change, the documentation gate builds what Swift Package Index publishes, and `swift test` is the
+# correctness gate.
 
 set -u
 
@@ -434,6 +435,55 @@ if OUT="$(api_gate 2>&1)"; then
 else
     printf '%s\n' "$OUT"
     fail "Scripts/check-api-breaks.sh refused the working tree against the last release"
+fi
+
+printf '\ndocumentation gate\n'
+
+# Swift Package Index builds the docs with a DocC plugin it injects, since the package takes no
+# dependency, not even that one. So they are built here from each module's symbol graph with docc's
+# warnings as errors, which is what makes an unresolved symbol link fail. The api gate's build
+# directory is reused, warm.
+MAC_SDK="$(xcrun --sdk macosx --show-sdk-path)" || MAC_SDK=""
+DOC_TARGET="$(uname -m)-apple-macosx$(xcrun --sdk macosx --show-sdk-version 2>/dev/null)"
+docs_gate() {
+    _pkg="$1"; _build="$2"; _out="$3"
+    [ -n "$MAC_SDK" ] || { printf 'xcrun found no macosx SDK\n'; return 1; }
+    swift build --package-path "$_pkg" --scratch-path "$_build" --target AethergramTelemetryDeck || return 1
+    _bin="$(swift build --package-path "$_pkg" --scratch-path "$_build" --show-bin-path)" || return 1
+    for _m in AethergramCore AethergramTelemetryDeck; do
+        rm -rf "$_out/$_m" && mkdir -p "$_out/$_m/graphs" || return 1
+        xcrun swift-symbolgraph-extract -module-name "$_m" -I "$_bin/Modules" -target "$DOC_TARGET" \
+            -sdk "$MAC_SDK" -minimum-access-level public -module-cache-path "$_bin/ModuleCache" \
+            -output-dir "$_out/$_m/graphs" || return 1
+        # A catalog is optional; without one the module's page comes from its symbols alone.
+        set --
+        for _catalog in "$_pkg/Sources/$_m"/*.docc; do [ -d "$_catalog" ] && set -- "$_catalog"; done
+        xcrun docc convert "$@" --additional-symbol-graph-dir "$_out/$_m/graphs" \
+            --fallback-display-name "$_m" --fallback-bundle-identifier "$_m" \
+            --output-path "$_out/$_m/$_m.doccarchive" --warnings-as-errors || return 1
+    done
+}
+
+it "a doc comment linking a symbol that does not exist is refused"
+BAD="$TMP/broken-doc-link"
+copy_package "$BAD"
+printf '/// Links ``NoSuchSymbolProbe``.\npublic enum BrokenDocLinkProbe {}\n' > "$BAD/Sources/AethergramCore/BrokenDocLink.swift"
+OUT="$(docs_gate "$BAD" "$API/build" "$BAD.docs" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ]; then
+    fail "documentation with an unresolved symbol link built"
+elif ! printf '%s\n' "$OUT" | grep -q 'NoSuchSymbolProbe'; then
+    printf '%s\n' "$OUT"
+    fail "the documentation build failed for a reason other than the link"
+else
+    pass
+fi
+
+it "the documentation builds with no warnings"
+if OUT="$(docs_gate "$ROOT" "$API/build" "$TMP/docs" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "docc refused the documentation"
 fi
 
 printf '\nswift test\n'
