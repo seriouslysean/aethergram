@@ -93,8 +93,23 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         filename: String = "aethergram-signal-queue.json",
         logSubsystem: String
     ) {
+        self.init(
+            directory: directory,
+            filename: filename,
+            logSubsystem: logSubsystem,
+            operations: FoundationQueueFileOperations()
+        )
+    }
+
+    init(
+        directory: URL,
+        filename: String = "aethergram-signal-queue.json",
+        logSubsystem: String,
+        operations: any QueueFileOperations
+    ) {
         fileURL = directory.appendingPathComponent(filename)
         logger = Logger(subsystem: logSubsystem, category: "aethergram-queue")
+        self.operations = operations
     }
 
     // MARK: Public
@@ -124,6 +139,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
 
     private let fileURL: URL
     private let logger: Logger
+    private let operations: any QueueFileOperations
     private let file = QueueFile()
 
     /// Sibling of the queue file, because what failed is every write to the
@@ -152,7 +168,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // owed.
         let mark: ErasureMark
         do {
-            mark = try erasureURL.checkResourceIsReachable() ? .standing : .unknown
+            mark = try operations.markerReachable(erasureURL) ? .standing : .unknown
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             mark = .absent
         } catch {
@@ -223,7 +239,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     private func readQueueFile() -> QueueRead {
         let data: Data
         do {
-            data = try Data(contentsOf: fileURL)
+            data = try operations.read(fileURL)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             return .absent
         } catch {
@@ -380,12 +396,9 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // that fails partway leaves a file this store no longer knows.
         file.onDisk = nil
         do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            try operations.createDirectory(fileURL.deletingLastPathComponent())
             let data = try Self.encodeLines(queue)
-            try data.write(to: fileURL, options: [.atomic])
+            try operations.replaceAtomically(data, at: fileURL)
             file.onDisk = queue
             logger.debug("queue persist ok count=\(queue.count)")
         } catch {
@@ -400,10 +413,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     private func append(_ signals: ArraySlice<Signal>) -> Bool {
         do {
             let lines = try Self.encodeLines(signals)
-            let handle = try FileHandle(forWritingTo: fileURL)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: lines)
+            try operations.append(lines, to: fileURL)
             logger.debug("queue append ok count=\(signals.count)")
             return true
         } catch {
@@ -453,7 +463,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     /// Whether the queue file holds nothing by the time this returns.
     private func emptyTheQueueFile() -> Bool {
         do {
-            try FileManager.default.removeItem(at: fileURL)
+            try operations.remove(fileURL)
             logger.info("queue purge ok")
             return true
         } catch let error as NSError where error.code == NSFileNoSuchFileError {
@@ -470,28 +480,15 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     /// Whether the queue file holds nothing, reached by writing over it where
     /// it stands.
     ///
-    /// Opened without creating: a purge runs on a decline before anything was
-    /// granted, and a file it made would be a write consent never allowed. A
-    /// file that is not there needs no overwrite and leaves nothing to mark.
-    /// Any other refusal cannot rule a file out, so it counts as one the
-    /// erase did not reach. Non-atomic, deliberately — an atomic write needs a
-    /// temp file in this same directory, which the failed delete already
-    /// refused.
+    /// A file that is not there needs no overwrite and leaves nothing to
+    /// mark. Any other refusal cannot rule a file out, so it counts as one
+    /// the erase did not reach.
     private func overwriteInPlace() -> Bool {
-        let handle: FileHandle
         do {
-            handle = try FileHandle(forWritingTo: fileURL)
-        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
-            return true
-        } catch {
-            logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
-            return false
-        }
-        defer { try? handle.close() }
-        do {
-            try handle.truncate(atOffset: 0)
-            try handle.write(contentsOf: Data("[]".utf8))
+            try operations.overwriteInPlace(Data("[]".utf8), at: fileURL)
             logger.info("queue purge ok via overwrite")
+            return true
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
             return true
         } catch {
             logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
@@ -501,7 +498,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
 
     private func markErasureRequired() {
         do {
-            try Data().write(to: erasureURL)
+            try operations.writeMarker(erasureURL)
             logger.error("queue purge unreachable, erasure marked")
         } catch {
             logger.error("queue erasure mark fail \(error.localizedDescription, privacy: .public)")
@@ -516,7 +513,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // failure that settles the debt, and an existence check cannot tell
         // that one from a directory it could not look inside.
         do {
-            try FileManager.default.removeItem(at: erasureURL)
+            try operations.removeMarker(erasureURL)
             return true
         } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
             return true
@@ -524,6 +521,79 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             logger.error("queue erasure mark clear fail \(error.localizedDescription, privacy: .public)")
             return false
         }
+    }
+}
+
+/// Every file operation the file store performs, so a test can fail one
+/// partway and watch what the store recovers and what it writes.
+///
+/// A conformance performs and rethrows; it never classifies. What a failure
+/// means — nothing there, out of reach, erased — is the store's to decide,
+/// because that decision is what a scripted fault exists to exercise.
+protocol QueueFileOperations: Sendable {
+    func read(_ url: URL) throws -> Data
+    /// Adds `data` after what the file holds. Must not create the file: one
+    /// that has gone is not one whose contents the store knows.
+    func append(_ data: Data, to url: URL) throws
+    /// Leaves the old contents or the new, never a mixture.
+    func replaceAtomically(_ data: Data, at url: URL) throws
+    func remove(_ url: URL) throws
+    /// Writes `data` over the file where it stands, for a directory that
+    /// refused the delete. Must not create the file: an erase runs before
+    /// anything was granted, and a file it made would be a write consent
+    /// never allowed.
+    func overwriteInPlace(_ data: Data, at url: URL) throws
+    /// Throws, rather than answering `false`, when the file is not there.
+    func markerReachable(_ url: URL) throws -> Bool
+    func writeMarker(_ url: URL) throws
+    func removeMarker(_ url: URL) throws
+    func createDirectory(_ url: URL) throws
+}
+
+/// The operations on the device's file system.
+struct FoundationQueueFileOperations: QueueFileOperations {
+    func read(_ url: URL) throws -> Data {
+        try Data(contentsOf: url)
+    }
+
+    func append(_ data: Data, to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
+    }
+
+    func replaceAtomically(_ data: Data, at url: URL) throws {
+        try data.write(to: url, options: [.atomic])
+    }
+
+    func remove(_ url: URL) throws {
+        try FileManager.default.removeItem(at: url)
+    }
+
+    /// Non-atomic, deliberately: an atomic write needs a temp file in the
+    /// same directory, which the failed delete already refused.
+    func overwriteInPlace(_ data: Data, at url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: data)
+    }
+
+    func markerReachable(_ url: URL) throws -> Bool {
+        try url.checkResourceIsReachable()
+    }
+
+    func writeMarker(_ url: URL) throws {
+        try Data().write(to: url)
+    }
+
+    func removeMarker(_ url: URL) throws {
+        try FileManager.default.removeItem(at: url)
+    }
+
+    func createDirectory(_ url: URL) throws {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 }
 
