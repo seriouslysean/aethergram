@@ -286,8 +286,9 @@ them:
 
 - **The retention counters restart.** The package does not read the SDK's counters, and the
   `RetentionStore` starts empty, so every existing install's first `beginSession()` after the swap
-  creates its record: `acquisition.firstSessionDate` becomes the migration day and the session and
-  day counts start from zero. A cohort chart shows every existing install arriving on that day.
+  creates its record: `acquisition.firstSessionDate` becomes the migration day, and the session and
+  day counts restart with that session and day counted, so the first totals sent are 1. A cohort
+  chart shows every existing install arriving on that day.
 - **The user hash carries over only if the input does.** The adapter sends the hex SHA-256 of
   `clientUserProvider`'s string with `salt` appended. The vendor's Swift SDK hashed the same way:
   its `customUserID` if the app set one, and otherwise its default identifier, which on iOS is
