@@ -52,13 +52,15 @@ final class QueueWriter: Sendable {
     /// Records the intent to persist `signals`, replacing any unwritten
     /// snapshot but never an unwritten purge. Call from inside the lock that
     /// produced the snapshot: that is what makes write order match commit order.
-    func persist(_ signals: [Signal]) {
+    @discardableResult
+    func persist(_ signals: [Signal]) -> Ticket {
         submit { $0.contents = signals }
     }
 
     /// Records the intent to erase the queue. Drops any unwritten snapshot, so
     /// a decline cannot be undone by a write already in flight.
-    func purge() {
+    @discardableResult
+    func purge() -> Ticket {
         submit {
             $0.purge = true
             $0.contents = nil
@@ -97,6 +99,16 @@ final class QueueWriter: Sendable {
             }
         }
     }
+
+    struct Ticket: Sendable {
+        fileprivate let value: UInt64
+    }
+
+    var waiterCount: Int {
+        state.withLock { $0.waiters.count }
+    }
+
+    func awaitWrites(through _: Ticket) async {}
 
     // MARK: Private
 
@@ -140,17 +152,19 @@ final class QueueWriter: Sendable {
     private let queue: DispatchQueue
     private let state = Mutex(State())
 
-    private func submit(_ update: (inout Pending) -> Void) {
+    private func submit(_ update: (inout Pending) -> Void) -> Ticket {
         state.withLock { state in
             update(&state.pending)
             state.submitted += 1
-            guard !state.scheduled else { return }
+            let ticket = Ticket(value: state.submitted)
+            guard !state.scheduled else { return ticket }
             state.scheduled = true
             // `self` is captured strongly because a snapshot has
             // to outlive the recorder that submitted it: `record` does not wait,
             // so a recorder released before the queue runs would take the writer,
             // and the unwritten signal, down with it.
             queue.async { self.drain() }
+            return ticket
         }
     }
 
