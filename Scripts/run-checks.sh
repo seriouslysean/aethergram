@@ -446,6 +446,32 @@ else
     pass
 fi
 
+# The digester reports no addition, so the listing is proved on the same history: 0.3.0 moved
+# `sessionID` from the batch to each signal, and 0.3.2 moved nothing.
+it "the declarations a release added and dropped are listed"
+OUT="$(api_gate --base v0.2.1 --head v0.3.0 --release 0.3.0 --print-additions 2>&1)"; GATE_RC=$?
+MISSING=""
+for LINE in '    + Var Signal.sessionID: Swift.String' '    - Var SignalBatch.sessionID: Swift.String' \
+    '  AethergramTelemetryDeck: nothing added or dropped'; do
+    printf '%s\n' "$OUT" | grep -qF -- "$LINE" || MISSING="$MISSING [$LINE]"
+done
+if [ "$GATE_RC" -ne 0 ] || [ -n "$MISSING" ]; then
+    printf '%s\n' "$OUT"
+    fail "the listing exited $GATE_RC or lacked:$MISSING"
+else
+    pass
+fi
+
+it "a patch that moved nothing lists no declaration"
+OUT="$(api_gate --base v0.3.1 --head v0.3.2 --print-additions 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || [ "$(printf '%s\n' "$OUT" | grep -c ': nothing added or dropped$')" -ne 2 ] \
+    || printf '%s\n' "$OUT" | grep -q '^    [+-] '; then
+    printf '%s\n' "$OUT"
+    fail "the listing exited $GATE_RC or listed a declaration between 0.3.1 and 0.3.2"
+else
+    pass
+fi
+
 # The working tree's gate, with the override forwarded when $1 carries one.
 release_gate() {
     _release="$1"; shift
@@ -492,7 +518,7 @@ if [ -n "$RELEASE_OVERRIDE" ]; then
 else
     it "the working tree breaks nothing its CHANGELOG entry does not allow"
 fi
-if OUT="$(release_gate "$RELEASE_OVERRIDE" 2>&1)"; then
+if OUT="$(release_gate "$RELEASE_OVERRIDE" --print-additions 2>&1)"; then
     printf '%s\n' "$OUT" | sed 's/^/        /'
     pass
 else
