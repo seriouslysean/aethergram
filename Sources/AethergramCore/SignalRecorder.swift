@@ -119,6 +119,12 @@ public final class SignalRecorder: Sendable {
         logger = Logger(subsystem: configuration.logSubsystem, category: "aethergram")
     }
 
+    /// Cancels a drain that has not started sending. One that has holds the
+    /// recorder until its pass ends, so it is never here.
+    deinit {
+        lock.withLock { $0.drain.owned?.task }?.cancel()
+    }
+
     // MARK: Public
 
     /// Adopts the consumer's consent answer. Granting only opens the gate;
@@ -225,11 +231,10 @@ public final class SignalRecorder: Sendable {
     /// the process may not survive long enough to finish — which is why the
     /// queue is durable rather than why this call blocks.
     ///
-    /// Blocks the caller until the queue writer's current drain goes idle:
-    /// every write submitted before the call, and any submitted while that
-    /// drain runs, so recording continuously from another thread extends the
-    /// wait. A write submitted after the drain goes idle may still be pending
-    /// when it returns. It does not wait for the send.
+    /// Blocks the caller until every queue write submitted before the call
+    /// has reached the store. A write submitted after the call, from any
+    /// thread, is not promised by the return, and lengthens the wait by at
+    /// most one store call. It does not wait for the send.
     public func flush() {
         requireNoReentry()
         // The consumer calls this on its way out of an active cycle, which is
@@ -380,6 +385,8 @@ public final class SignalRecorder: Sendable {
 
     /// Every mutation of the durable queue goes through here, never through
     /// `queueStorage` directly; `load()` is the one read and stays direct.
+    /// Its barrier waits for the writes submitted before the wait began, and
+    /// a later write lengthens it by at most one store call.
     ///
     /// Internal rather than private so a test can wait on the same writes
     /// `flush()` waits on. Both the property and `waitForPendingWrites()` have
@@ -509,8 +516,9 @@ public final class SignalRecorder: Sendable {
         /// How many `resetClosingCollection(during:)` callbacks are running.
         /// The gate is shut while any is, whatever consent says.
         var closedForReset = 0
-        /// How many signals have ever been dropped from the front of the queue.
-        /// A batch carries the value it was claimed under, which is the only
+        /// How many signals a record's overflow has ever evicted from the
+        /// front of the queue. A restore's overflow is not counted: it always
+        /// precedes the first claim. A batch carries the value it was claimed under, which is the only
         /// way to know how much of what it sent the queue still holds: two
         /// signals recorded alike are equal, so a value match cannot tell a
         /// sent signal from the one that replaced it.
@@ -872,11 +880,10 @@ public final class SignalRecorder: Sendable {
     /// The one part of an erase that cannot happen under the lock. The delete
     /// has to land before the caller returns: a recorder torn down in the same
     /// breath as a decline would otherwise leave the file behind. Waits until
-    /// the writer's current drain goes idle, which covers the purge and any
-    /// write submitted while that drain runs. After a decline a record
-    /// submits nothing until another thread grants again; after a reset the
-    /// gate stays open, so recording continuously from another thread extends
-    /// the wait.
+    /// every write submitted before it, the purge included, has reached the
+    /// store. A write submitted after it — a record on another thread, after
+    /// a reset that leaves the gate open — is not promised by the return, and
+    /// lengthens the wait by at most one store call.
     private func awaitErasure() {
         writer.waitForPendingWrites()
     }
@@ -947,10 +954,10 @@ public final class SignalRecorder: Sendable {
             return nil
         case let .waiting(existing):
             guard due == 0 else { return nil }
-            current.drain = .running(makeOwnedDrain(&current, after: 0))
+            current.drain = .running(makeOwnedDrain(&current, after: 0, waiting: false))
             return existing.task
         case .idle:
-            let owned = makeOwnedDrain(&current, after: due)
+            let owned = makeOwnedDrain(&current, after: due, waiting: due > 0)
             current.drain = due > 0 ? .waiting(owned) : .running(owned)
             return nil
         }
@@ -1014,17 +1021,25 @@ public final class SignalRecorder: Sendable {
     }
 
     /// Mints the identifier and the task together, so a task always knows the
-    /// name the slot holds it under. Call from inside the lock.
-    private func makeOwnedDrain(_ state: inout State, after delay: TimeInterval) -> OwnedDrain {
+    /// name the slot holds it under. Call from inside the lock, and install
+    /// the task as `.waiting` exactly when `waiting` is true.
+    private func makeOwnedDrain(_ state: inout State, after delay: TimeInterval, waiting: Bool) -> OwnedDrain {
         state.lastDrainID &+= 1
         let id = state.lastDrainID
-        return OwnedDrain(id: id, task: makeDrainTask(id: id, after: delay))
+        return OwnedDrain(id: id, task: makeDrainTask(id: id, after: delay, promoting: waiting))
     }
 
     /// Utility, matching the writer queue, rather than inherited: most records
     /// come from the main actor, and a drain at its priority would put the
     /// encode and the request in contention with the host's UI.
-    private func makeDrainTask(id: Int, after delay: TimeInterval) -> Task<Void, Never> {
+    ///
+    /// Holds the recorder weakly until it starts sending, so a released
+    /// recorder is not kept alive by a drain that has not started; `deinit`
+    /// cancels that drain. From the promotion on it holds the recorder
+    /// strongly, through its whole pass: a recorder released mid-send still
+    /// sends the rest of what that pass finds queued, and nothing after,
+    /// because the drain its release schedules starts out waiting.
+    private func makeDrainTask(id: Int, after delay: TimeInterval, promoting: Bool) -> Task<Void, Never> {
         Task(priority: .utility) { [weak self, sleep] in
             if delay > 0 {
                 do {
@@ -1035,9 +1050,9 @@ public final class SignalRecorder: Sendable {
                     // that replaced this one.
                     return
                 }
-                guard self?.promoteWaitingDrain(id: id) == true else { return }
             }
             guard !Task.isCancelled, let self else { return }
+            if promoting, !promoteWaitingDrain(id: id) { return }
             await drain()
             releaseDrainSlot(id: id)
         }
@@ -1079,8 +1094,10 @@ public final class SignalRecorder: Sendable {
             let delay = current.consecutiveFailures == 0 && waiters.count == 0
                 ? configuration.transmitInterval
                 : Self.secondsOwed(current.retryNotBefore)
-            let owned = makeOwnedDrain(&current, after: delay)
-            current.drain = delay > 0 ? .waiting(owned) : .running(owned)
+            // Waiting even at zero delay, so the task promotes through a
+            // weak reference that a released recorder's `deinit` has
+            // cancelled first.
+            current.drain = .waiting(makeOwnedDrain(&current, after: delay, waiting: true))
         }
     }
 
