@@ -3,7 +3,7 @@
 What each release changed that a host can see. What a version number promises is in
 [STABILITY.md](STABILITY.md); this file is the history that contract was applied to.
 
-## 0.3.2
+## 0.3.2 — 2026-09-23
 
 A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 
