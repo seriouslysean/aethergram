@@ -87,10 +87,10 @@ ids, and, in a message, agent-session trailers. It also refuses a numbered issue
 not a stable reference either. The file tier reads the index, so stage a file before expecting it
 to be scanned.
 
-Two exemptions, each as narrow as it can be. GitHub writes its own subjects on a web merge, which
-runs no hook: `Merge pull request #N from seriouslysean/<branch>`, and a squash subject ending in
-` (#N)`. The scan forgives that number, in that place, on the subject line only; a body carrying
-the same shape is still refused. And the scanner and the runner carry leak-shaped fixtures on
+Two exemptions, each as narrow as it can be. GitHub writes its own subject on a web merge, which
+runs no hook: `Merge pull request #N from seriouslysean/<branch>`. The history scan forgives that
+number, in that subject, on a merge commit only; the same shape anywhere else, a body included, is
+still refused. And the scanner and the runner carry leak-shaped fixtures on
 purpose, so they are scanned line by line like every other file, and only their exact fixture lines
 are allowed, listed in `Scripts/scan-for-leaks.sh`. A fixture that changes has to change there
 too.
