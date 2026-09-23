@@ -11,7 +11,7 @@ public struct AethergramConfiguration: Sendable {
     /// interval, back off to at most 5 minutes.
     ///
     /// - Precondition: `batchSize` is positive; `queueLimit` is positive and
-    ///   at most 100,000; `transmitInterval` and `maxBackoffInterval` are
+    ///   at most 1,250; `transmitInterval` and `maxBackoffInterval` are
     ///   finite, positive, and at most one year (365 days). Anything else
     ///   traps here, at construction, rather than at the first signal.
     public init(
@@ -42,7 +42,7 @@ public struct AethergramConfiguration: Sendable {
         precondition(batchSize > 0, "AethergramConfiguration.batchSize must be positive")
         precondition(
             queueLimit > 0 && queueLimit <= Self.maximumQueueLimit,
-            "AethergramConfiguration.queueLimit must be positive and at most 100,000"
+            "AethergramConfiguration.queueLimit must be positive and at most 1,250"
         )
         precondition(
             transmitInterval > 0 && transmitInterval <= Self.maximumInterval,
@@ -135,8 +135,9 @@ public struct AethergramConfiguration: Sendable {
     /// recorder derives must stay under this too.
     static let maximumInterval: TimeInterval = 365 * 24 * 60 * 60
 
-    /// The largest `queueLimit` may be.
-    static let maximumQueueLimit = 100_000
+    /// Grant restores the whole queue file on the caller's thread; at about 4 KB
+    /// a signal, 1,250 is the most measured to restore within 50 ms and 30 MB.
+    static let maximumQueueLimit = 1250
 
     /// `queueLimit`'s default, and the bound on what a file store carries for
     /// the next process until a recorder hands it its own. Read off the
