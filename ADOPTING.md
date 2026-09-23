@@ -91,9 +91,9 @@ So each of them:
 
 `UIDevice` is main-actor isolated, so an identifier read from it is read on the main actor and
 stored where the provider can reach it from any thread. Read it in the activation step, after the
-answer is adopted and only when it permits collection. The OS supplies `identifierForVendor`, so
-reading it mints and persists nothing; it can be nil, so read it again at every activation rather
-than once per process:
+answer is adopted and only when it permits collection. `identifierForVendor` can be nil until the
+device is first unlocked after a restart, so read it again at every activation rather than once per
+process:
 
 ```swift
 let analyticsIdentifier = Mutex<String?>(nil)   // import Synchronization
@@ -290,11 +290,12 @@ them:
   day counts restart with that session and day counted, so the first totals sent are 1. A cohort
   chart shows every existing install arriving on that day.
 - **The user hash carries over only if the input does.** The adapter sends the hex SHA-256 of
-  `clientUserProvider`'s string with `salt` appended. The vendor's Swift SDK hashed the same way:
-  its `customUserID` if the app set one, and otherwise its default identifier, which on iOS is
-  `UIDevice.current.identifierForVendor?.uuidString` (`SignalManager.swift` and
-  `CryptoHashing.swift` in its source). For an install to keep its hash, return that same string,
-  unhashed, and keep `salt` at the SDK's value — empty unless the app set one.
+  `clientUserProvider`'s string with `salt` appended. The vendor's Swift SDK, at its 2.14.1 tag,
+  hashes the same way (`Sources/TelemetryDeck/Helpers/CryptoHashing.swift`), over the signal's
+  `customUserID` if the app passed one, then the configuration's `defaultUser` if the app set one,
+  and otherwise, on iOS, `UIDevice.current.identifierForVendor?.uuidString`
+  (`Sources/TelemetryDeck/Signals/SignalManager.swift`). For an install to keep its hash, return
+  that same string, unhashed, and keep `salt` at the SDK's value — empty unless the app set one.
 
 Then confirm, on a real run:
 
