@@ -9,12 +9,12 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
 
 - `SignalRecorder`: its initializer's parameter list, `updateConsent`, `record`,
   `recordPurchaseCompleted`, `recordError`, `beginSession`, `endSession`, `flush`, and `reset`.
-- `AethergramConfiguration`: its stored properties, its initializer's defaults and bounds, and the
-  two pure policy functions `deliveryDelay(queued:)` and
-  `backoffInterval(consecutiveFailures:)`. The initializer traps on a `batchSize` or `queueLimit`
-  that is not positive, a `queueLimit` over 100,000, and a `transmitInterval` or
-  `maxBackoffInterval` that is not finite and positive or is over one year, so a value outside
-  those bounds fails at launch rather than at the first signal.
+- `AethergramConfiguration`: its stored properties, its initializer's defaults, and the two pure
+  policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`. The
+  initializer traps on a `batchSize` or `queueLimit` that is not positive and on a
+  `transmitInterval` or `maxBackoffInterval` that is not finite and positive, so a bad value fails
+  at launch rather than at the first signal. It clamps both intervals to one year and `queueLimit`
+  to 100,000.
 - `ConsentState`, its raw values, and its `permitsCollection` verdict. The raw values are API
   because a host persists them.
 - The host seams: `SignalQueueStorage`, `RetentionStore`, and `SignalTransport`, along with

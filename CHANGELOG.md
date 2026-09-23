@@ -7,11 +7,11 @@ What each release changed that a host can see. What a version number promises is
 
 A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 
-### Traps
+### Configuration and traps
 
-- `AethergramConfiguration` traps at construction when `transmitInterval` or `maxBackoffInterval`
-  is over one year, or `queueLimit` is over 100,000. A host configured above either ceiling now
-  terminates at launch, where it used to construct.
+- `AethergramConfiguration` clamps `transmitInterval` and `maxBackoffInterval` to one year and
+  `queueLimit` to 100,000. A host configured above either ceiling now runs at the ceiling. A value
+  that is not finite, or not positive, still traps at construction, as before.
 - `TelemetryDeckTransport` traps at construction when given a background `URLSession`. Such a
   session used to abort the host at the first send instead.
 - Calling back into the recorder from a seam it calls under its lock (`clientUserProvider`,
@@ -43,16 +43,21 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 - Day strings (`acquisition.firstSessionDate` and the distinct-day history) are `yyyy-MM-dd` in the
   Gregorian calendar, in the time zone of the calendar the recorder was given. A device set to
   another calendar used to send its own year, such as a Buddhist year 543 ahead. A stored record
-  written before this release is converted once, and the record gains a `daysAreGregorian` key,
-  which decodes to false when absent.
+  is converted when the recorder loads it: a day that already reads as a Gregorian date between
+  2015-01-01 and tomorrow is kept, any other is read in the recorder's calendar and kept converted
+  only if the result lands in that window, and otherwise kept as written. So a rebuilt or
+  downgraded record is never converted twice. A record written under the Ethiopic calendar before
+  0.3.2 cannot be told apart from a Gregorian one, because the year numbers overlap, and is left as
+  written.
 - A session's first recorded signal after `beginSession()` is checkpointed, so a session killed
   inside the ten-second checkpoint interval is measured to that signal rather than discarded.
 - `endSession()` closes only a session this recorder opened, and a `record` advances only that
   session's checkpoint. A session left open by another process is closed by the next
   `beginSession()` against its own last activity, rather than stretched to now.
-- An app extension reads its containing app's receipt for `runContext.channel`. An App Store
-  install of an extension used to report `dev`; it now reports `store`, so
-  `testPartition(for:)` sends it to the live partition.
+- For an app extension — an `.appex` inside an `.app` — `EnvironmentSnapshot.current()` resolves
+  the receipt that `runContext.channel` is read from against the containing app's bundle rather
+  than the extension's own, falling back to the extension's when the app's bundle gives no receipt
+  location.
 - A `calendar.hourOfDay` value outside 0-23, which a caller can pass since caller parameters win,
   goes to the wire unchanged instead of trapping the send.
 - A caller key spelled as a vendor wire name wins over the package key mapped onto that name, on
@@ -68,8 +73,9 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 
 - CI builds the package for iOS release as extension-safe, and the core alone with no adapter in
   reach.
-- The leak scan forgives the pull request number GitHub writes into a merge or squash subject, on
-  the subject line only, and scans its own scripts line by line against a fixture allow-list.
+- The history scan forgives the pull request number in the subject GitHub writes on a merge
+  commit, and nowhere else. The scanner and the check runner are scanned line by line, with only
+  their exact fixture lines allowed.
 
 ## 0.3.1 — 2026-09-12
 
