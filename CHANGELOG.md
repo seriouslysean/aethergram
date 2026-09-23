@@ -37,7 +37,8 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 
 - A queue file that could not be read is retried on every write. Once a read succeeds, what the
   file held, up to the newest `queueLimit` signals, is kept ahead of the recorder's queue in every
-  write, for the next process to load and send. Previously the writes stopped for the life of the
+  write, for the next process to load and send. A store wrapped in another conformance keeps
+  the default of 1,000. Previously the writes stopped for the life of the
   process.
 - The look for the erasure mark checks the mark's reachability and no longer reads file
   attributes.

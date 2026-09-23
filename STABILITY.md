@@ -60,7 +60,8 @@ branch; an exhaustive switch without one stops compiling when a case arrives.
   stay off the file: the queue keeps transmitting from memory, and loses only its durability
   against a kill. Once a read succeeds, what the file held, up to the recorder's `queueLimit` with
   the oldest dropped first, is written ahead of the recorder's queue in every write, for the next
-  process to load and send. A purge that can neither delete nor overwrite the file leaves an empty
+  process to load and send. The recorder hands over that limit only when it is given the store
+  directly; one wrapped in another conformance keeps the default of 1,000. A purge that can neither delete nor overwrite the file leaves an empty
   marker file beside it, which every later read takes as "restore nothing" until the delete
   lands. Both the marker's name and its existence are implementation detail.
 - The on-disk shape of the retention record beyond what `RetentionRecord`'s `Codable`
