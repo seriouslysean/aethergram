@@ -111,14 +111,22 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // alone and the attribute calls return file timestamps. A `false`
         // rather than a throw is a look that did not answer, never an erase
         // owed.
+        let mark: ErasureMark
         do {
-            return try erasureURL.checkResourceIsReachable() ? .standing : .unknown
+            mark = try erasureURL.checkResourceIsReachable() ? .standing : .unknown
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-            return .absent
+            mark = .absent
         } catch {
-            logger.error("queue erasure mark check fail \(error.localizedDescription, privacy: .public)")
+            // Asked on every write, so logged when the look starts failing
+            // rather than each time it still does.
+            if !file.markLookFailing {
+                logger.error("queue erasure mark check fail \(error.localizedDescription, privacy: .public)")
+            }
+            file.markLookFailing = true
             return .unknown
         }
+        file.markLookFailing = false
+        return mark
     }
 
     private func loadLocked() -> [Signal] {
@@ -235,11 +243,11 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         case .standing:
             purgeLocked()
             guard case .absent = erasureMark() else {
-                logger.error("queue persist skip reason=erasure-outstanding")
+                skipPersist(.erasureOutstanding)
                 return
             }
         case .unknown:
-            logger.error("queue persist skip reason=erasure-unknown")
+            skipPersist(.erasureUnknown)
             return
         case .absent:
             break
@@ -251,9 +259,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // survive a kill — which is the cheaper half of the trade against
         // deleting a queue that was only unreadable.
         guard settleUnreadQueue() else {
-            logger.error("queue persist skip reason=unread-queue-on-disk")
+            skipPersist(file.erasureOutstanding ? .erasureOutstanding : .unreadQueueOnDisk)
             return
         }
+        resumePersist()
         // The snapshot is the recorder's whole queue, and `carried` is what
         // the file held that the recorder never saw, so neither replaces the
         // other. An empty snapshot is "everything delivered", which says
@@ -274,6 +283,23 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         } catch {
             logger.error("queue persist fail \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Logs a skipped write when the skipping starts, or its reason changes,
+    /// rather than on every write it costs: while the file stays out of reach
+    /// every record lands here, and each error line is one unified logging
+    /// keeps.
+    private func skipPersist(_ reason: PersistSkip) {
+        guard file.persistSkip != reason else { return }
+        file.persistSkip = reason
+        logger.error("queue persist skip reason=\(reason.rawValue, privacy: .public)")
+    }
+
+    /// The other end of `skipPersist`: once, when a write goes ahead again.
+    private func resumePersist() {
+        guard let reason = file.persistSkip else { return }
+        file.persistSkip = nil
+        logger.info("queue persist resume after=\(reason.rawValue, privacy: .public)")
     }
 
     private func purgeLocked() {
@@ -383,6 +409,13 @@ private enum QueueRead {
     case signals([Signal])
 }
 
+/// Why a write did not reach the file.
+private enum PersistSkip: String {
+    case erasureOutstanding = "erasure-outstanding"
+    case erasureUnknown = "erasure-unknown"
+    case unreadQueueOnDisk = "unread-queue-on-disk"
+}
+
 /// What a look for the mark a failed erase leaves can come back with.
 private enum ErasureMark {
     /// Nothing is owed: no mark, confirmed.
@@ -424,6 +457,11 @@ private final class QueueFile: @unchecked Sendable {
     /// up to twice `queueLimit`. The next process's restore trims the file to
     /// the limit oldest-first, and these are the oldest.
     var carried: [Signal] = []
+    /// Log bookkeeping only, so a degraded store says so once rather than on
+    /// every write: why writes are being skipped, and whether the look for
+    /// the mark is failing.
+    var persistSkip: PersistSkip?
+    var markLookFailing = false
 
     func withLock<T>(_ body: () -> T) -> T {
         lock.lock()
