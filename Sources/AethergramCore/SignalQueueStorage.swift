@@ -466,7 +466,7 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             try operations.remove(fileURL)
             logger.info("queue purge ok")
             return true
-        } catch let error as NSError where error.code == NSFileNoSuchFileError {
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
             // Nothing persisted yet. Purging is still the right postcondition.
             return true
         } catch {
