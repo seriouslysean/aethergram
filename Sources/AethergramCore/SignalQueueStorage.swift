@@ -107,9 +107,12 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     /// nothing away.
     private func erasureMark() -> ErasureMark {
         guard !file.erasureOutstanding else { return .standing }
+        // Reachability rather than attributes, because the answer is presence
+        // alone and the attribute calls return file timestamps. A `false`
+        // rather than a throw is a look that did not answer, never an erase
+        // owed.
         do {
-            _ = try FileManager.default.attributesOfItem(atPath: erasureURL.path)
-            return .standing
+            return try erasureURL.checkResourceIsReachable() ? .standing : .unknown
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             return .absent
         } catch {
