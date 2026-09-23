@@ -647,8 +647,9 @@ public final class SignalRecorder: Sendable {
     /// has to land before the caller returns: a recorder torn down in the same
     /// breath as a decline would otherwise leave the file behind. Waits until
     /// no write is pending, including one submitted while it waits. After a
-    /// decline a record submits nothing; after a reset the gate stays open,
-    /// so recording continuously from another thread extends the wait.
+    /// decline a record submits nothing until another thread grants again;
+    /// after a reset the gate stays open, so recording continuously from
+    /// another thread extends the wait.
     private func awaitErasure() {
         writer.waitForPendingWrites()
     }

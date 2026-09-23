@@ -117,7 +117,7 @@ submitted while they wait:
 | Call | Returns once | Extended by recording from another thread |
 |---|---|---|
 | `flush()` | No queue write is pending. It does not wait for the send. | Yes, for as long as it continues |
-| `updateConsent` with anything but `.granted` | The erase has reached the queue store and the retention store. | No: a record after a decline writes nothing |
+| `updateConsent` with anything but `.granted` | The erase has reached the queue store and the retention store. | No, unless another thread grants again while it waits: a record after a decline writes nothing |
 | `reset()` | The same. | Yes, while consent is granted: a reset leaves it as it was |
 
 ## Phase 3: wire the adapter
