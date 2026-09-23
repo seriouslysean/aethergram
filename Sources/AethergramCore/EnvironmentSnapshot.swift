@@ -5,7 +5,8 @@ import Foundation
 /// `dev` is anything that is neither a TestFlight nor an App Store install:
 /// a debug build, a simulator run, or a Release build sideloaded straight to
 /// a device. `EnvironmentSnapshot.current()` is what tells the three apart;
-/// an app extension answers from its containing app's receipt.
+/// for an app extension it asks the containing app's bundle for the receipt
+/// location, falling back to the extension's own.
 public enum RunContextChannel: String, Sendable {
     case dev
     case beta
@@ -159,8 +160,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// build Xcode installs straight to a device has no receipt file at all —
     /// `appStoreReceiptURL` still returns a path, but nothing exists there —
     /// so an absent file is neither channel rather than defaulting to App
-    /// Store by the same negation. For an app extension `receiptPath` is its
-    /// containing app's receipt; see `receiptURL(forBundleAt:receiptURL:)`.
+    /// Store by the same negation. For an app extension `receiptPath` is the
+    /// location its containing app's bundle gives, falling back to its own;
+    /// see `receiptURL(forBundleAt:receiptURL:)`.
     /// `AppTransaction.shared.environment` is the modern, async replacement
     /// for all of this, and it is async: this
     /// function is called from a synchronous snapshot, so adopting it would
@@ -182,10 +184,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// resolution is testable on a host that never reads a receipt.
     ///
     /// An `.appex` two directories under an `.app` — `PlugIns/`, or
-    /// `Extensions/` for ExtensionKit — reads the containing app's receipt,
-    /// because read against its own bundle an extension reports every App
-    /// Store install as `dev`. Any other layout, or a containing app with no
-    /// answer, keeps the bundle's own.
+    /// `Extensions/` for ExtensionKit — asks the containing app's bundle for
+    /// the receipt location rather than its own. Any other layout, or a
+    /// containing app that gives no location, keeps the bundle's own.
     static func receiptURL(forBundleAt bundleURL: URL, receiptURL: (URL) -> URL?) -> URL? {
         guard bundleURL.pathExtension == "appex" else { return receiptURL(bundleURL) }
         let containingApp = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -229,9 +230,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         #endif
     }
 
-    /// The receipt for `bundle`, or for its containing app when `bundle` is an
-    /// app extension, whose own `appStoreReceiptURL` finds no receipt and
-    /// would report every App Store install of the extension as `dev`.
+    /// The receipt location for `bundle`: for an app extension, the
+    /// containing app bundle's `appStoreReceiptURL`, falling back to the
+    /// extension's own when that gives none.
     ///
     /// Not read on macOS: `appStoreReceiptURL` is deprecated there in favour of
     /// an async StoreKit call a synchronous snapshot cannot make, and
