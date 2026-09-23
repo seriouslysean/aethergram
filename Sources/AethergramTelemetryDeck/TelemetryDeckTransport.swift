@@ -138,15 +138,18 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// Seconds a Retry-After value asks for, or nil for one outside RFC 9110's
     /// grammar: `delay-seconds` (`1*DIGIT`) or an `HTTP-date` in any of the
     /// three forms §5.6.7 obliges a recipient to accept. A date already past
-    /// is zero. A count too large for a finite `Double` is refused rather than
-    /// handed to the core as infinity; any finite size is the core's to bound.
+    /// is zero. A count too large for a finite `Double` saturates to the
+    /// largest finite one, never infinity; any finite size is the core's to
+    /// bound at its interval ceiling.
     static func retryAfter(_ value: String, now: Date) -> TimeInterval? {
         // OWS around a field value is not part of it (RFC 9110 §5.5).
         let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
         guard !trimmed.isEmpty else { return nil }
         if trimmed.utf8.allSatisfy({ (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains($0) }) {
-            guard let seconds = Double(trimmed), seconds.isFinite else { return nil }
-            return seconds
+            // Refusing an overflowing count would retry on the core's schedule,
+            // sooner than asked. RFC 9111 §1.2.2 saturates a cache's
+            // delta-seconds likewise; it is an analogy, not Retry-After's rule.
+            return min(Double(trimmed) ?? .infinity, .greatestFiniteMagnitude)
         }
         guard let date = httpDate(trimmed, now: now) else { return nil }
         return max(0, date.timeIntervalSince(now))
