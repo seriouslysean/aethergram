@@ -1,7 +1,8 @@
 name: ci
 
-# The suite is the merge gate. Offline and seconds, so nothing green depends on a vendor being
-# reachable: the adapter's tests assert the request a batch produces, they do not send it.
+# The suite is the merge gate. Offline and a few minutes from cold, so nothing green depends on a
+# vendor being reachable: the adapter's tests assert the request a batch produces, they do not send
+# it. Scripts/run-checks.sh is the whole gate, so a local run and this job prove the same things.
 
 on:
   pull_request:
