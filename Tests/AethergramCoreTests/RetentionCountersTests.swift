@@ -84,6 +84,29 @@ struct RetentionCountersTests {
         #expect(record.totalSessionsCount == 2)
     }
 
+    /// An extension is often killed within seconds of opening. A checkpoint
+    /// that waits out the whole interval before its first write leaves such a
+    /// session closing at zero seconds, which `folding` discards, so the
+    /// average only ever hears about the sessions long enough to survive it.
+    @Test("A session killed inside the checkpoint interval still closes with its measured duration")
+    func shortKilledSessionIsMeasured() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        var record = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        let touch = RetentionCounters.touching(record, at: start.addingTimeInterval(3))
+        #expect(touch.shouldPersist, "the first activity after a start is the one a kill would otherwise lose")
+        record = touch.record
+
+        record = RetentionCounters.recordingSessionStart(
+            in: record,
+            at: start.addingTimeInterval(3600),
+            calendar: testCalendar
+        )
+
+        #expect(record.completedSessionsCount == 1)
+        #expect(record.totalSessionSeconds == 3)
+        #expect(record.previousSessionSeconds == 3)
+    }
+
     /// The divisor is completed sessions, matching the vendor's `dropLast()`.
     /// Dividing by started sessions is low by `k/(k+1)` forever — half the
     /// truth at one completed session — because the in-flight session
