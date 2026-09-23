@@ -31,10 +31,13 @@ public protocol SignalQueueStorage: Sendable {
 
 /// Atomic-file queue storage.
 ///
-/// `Data.write(to:options:[.atomic])` returns only once the bytes are on disk,
-/// which is what survives the SIGKILL the OS hands a suspended extension
-/// without warning. A buffered write would lose the queue at exactly the
-/// moment the queue exists to survive.
+/// `Data.write(to:options:[.atomic])` writes an auxiliary file and then
+/// replaces the queue file with it, so a reader finds the old queue or the new
+/// one, never part of either. Once it returns the bytes are the kernel's, not
+/// the process's, which is what survives the SIGKILL the OS hands a suspended
+/// extension without warning; a write still buffered in the process would lose
+/// the queue at exactly the moment the queue exists to survive. That is the
+/// whole claim: it is not a promise the bytes reached the storage device.
 ///
 /// It owns its file, in the sense the protocol describes. Three things it can
 /// be carrying are the instance's own — a queue it could not read, what a
