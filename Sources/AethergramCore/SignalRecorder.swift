@@ -594,9 +594,7 @@ public final class SignalRecorder: Sendable {
                 // for an identifier it has already said it does not have, as
                 // often as the consumer flushes.
                 current.consecutiveFailures += 1
-                Self.oweRetry(&current, after: configuration.backoffInterval(
-                    consecutiveFailures: current.consecutiveFailures
-                ))
+                Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
                 logger.error("drain halt reason=no-client-user")
                 return nil
             }
@@ -640,10 +638,15 @@ public final class SignalRecorder: Sendable {
                     current.droppedInOverflow = 0
                 }
                 return (!current.pending.isEmpty, overflowDropped)
-            case .retryable, .retryableAfter:
+            case .retryable:
                 current.consecutiveFailures += 1
-                Self.oweRetry(&current, after: configuration.backoffInterval(
-                    consecutiveFailures: current.consecutiveFailures
+                Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
+                return (false, 0)
+            case let .retryableAfter(_, delay):
+                current.consecutiveFailures += 1
+                Self.oweRetry(&current, after: max(
+                    retryDelay(current.consecutiveFailures),
+                    Self.servableDelay(delay)
                 ))
                 return (false, 0)
             }
@@ -766,6 +769,15 @@ public final class SignalRecorder: Sendable {
         preempted?.cancel()
     }
 
+    /// A backend's delay as one a sleep can serve. Bounded at the interval
+    /// ceiling, because a sleep traps past about 9.2e18 seconds and one
+    /// header is all it takes; a NaN or a past delay asks for no wait, so it
+    /// owes what the backoff owes.
+    private static func servableDelay(_ delay: TimeInterval) -> TimeInterval {
+        guard delay > 0 else { return 0 }
+        return min(delay, AethergramConfiguration.maximumInterval)
+    }
+
     /// Records what the next attempt owes the endpoint. Call from inside the
     /// lock.
     private static func oweRetry(_ state: inout State, after interval: TimeInterval) {
@@ -836,13 +848,15 @@ public final class SignalRecorder: Sendable {
             guard current.drain.owned?.id == id else { return }
             current.drain = .idle
             guard current.consent.permitsCollection, !current.pending.isEmpty else { return }
-            // Steady interval when nothing failed, the backoff when something
-            // did; `backoffInterval` is the one place that distinction lives.
-            let owned = makeOwnedDrain(
-                &current,
-                after: configuration.backoffInterval(consecutiveFailures: current.consecutiveFailures)
-            )
-            current.drain = .waiting(owned)
+            // The steady interval when nothing failed, and what the failure
+            // owes when something did: the jittered draw, or the backend's
+            // own delay where that is later. Recomputing a backoff here would
+            // hand every install the same deterministic ceiling again.
+            let delay = current.consecutiveFailures == 0
+                ? configuration.transmitInterval
+                : Self.secondsOwed(current.retryNotBefore)
+            let owned = makeOwnedDrain(&current, after: delay)
+            current.drain = delay > 0 ? .waiting(owned) : .running(owned)
         }
     }
 
