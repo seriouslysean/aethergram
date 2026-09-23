@@ -49,9 +49,9 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
   is converted when the recorder loads it: a day that already reads as a Gregorian date between
   2015-01-01 and tomorrow is kept, any other is read in the recorder's calendar and kept converted
   only if the result lands in that window, and otherwise kept as written. So a rebuilt or
-  downgraded record is never converted twice. A record written under the Ethiopic calendar before
-  0.3.2 cannot be told apart from a Gregorian one, because the year numbers overlap, and is left as
-  written.
+  downgraded record is never converted twice. A record written before 0.3.2 under the Ethiopic
+  calendar's Incarnation-era numbering cannot be told apart from a Gregorian one, because the year
+  numbers overlap, and is left as written.
 - A session's first recorded signal after `beginSession()` is checkpointed, so a session killed
   inside the ten-second checkpoint interval is measured to that signal rather than discarded.
 - `endSession()` closes only a session this recorder opened, and a `record` advances only that
