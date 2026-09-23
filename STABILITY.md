@@ -15,8 +15,7 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
   `transmitInterval` or `maxBackoffInterval` that is not finite and positive, so a bad value fails
   at launch rather than at the first signal. It clamps both intervals, which then read back
   clamped, to a ceiling far past any real schedule and below the size that crashed the host's
-  first coalescing sleep, and does not cap `queueLimit`. Ceilings for `queueLimit` and the
-  intervals are planned for a minor release.
+  first coalescing sleep, and does not cap `queueLimit`.
 - `ConsentState`, its raw values, and its `permitsCollection` verdict. The raw values are API
   because a host persists them.
 - The host seams: `SignalQueueStorage`, `RetentionStore`, and `SignalTransport`, along with

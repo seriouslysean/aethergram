@@ -13,8 +13,7 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
   past any real schedule and below about 9.2e18 seconds, where `Duration.seconds` traps. A larger
   interval crashed the host in the coalescing sleep its first record scheduled; that configuration
   now runs, and the property reads back the clamped value. `queueLimit` is not capped, and a value
-  that is not finite, or not positive, still traps at construction, as in 0.3.1. Ceilings for
-  `queueLimit` and the intervals are planned for a minor release.
+  that is not finite, or not positive, still traps at construction, as in 0.3.1.
 - `TelemetryDeckTransport` fails a precondition naming the background `URLSession` at the first
   send over one. The send aborted the host at the same moment before, with an exception that named
   neither.
