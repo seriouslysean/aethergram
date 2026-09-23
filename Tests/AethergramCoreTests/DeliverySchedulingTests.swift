@@ -809,6 +809,44 @@ struct DeliverySchedulingTests {
         #expect(sleep.startedCount == 1)
         #expect(sleep.cancelled.isOpen)
     }
+
+    /// With no delay owed, the drain a pass schedules on its way out could
+    /// start while that pass still holds the recorder, take it strongly
+    /// itself, and send again after the host let go — and each such pass
+    /// hands the recorder on to the next.
+    @Test("Releasing the recorder mid-send sends nothing after that pass, even with no delay owed")
+    func releasingTheRecorderMidSendSendsNothingAfterAtZeroDelay() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let transport = NamedHoldTransport(holding: ["a"], failing: ["c"])
+        defer { transport.releaseAll() }
+        let released = WeakReference<SignalRecorder>()
+        do {
+            let recorder = try SignalRecorder(
+                configuration: testConfiguration(batchSize: 1, transmitInterval: 3600),
+                transport: transport,
+                queueStorage: RecordingQueueStorage(directory: directory),
+                retentionStore: SpyRetentionStore(),
+                clientUserProvider: { "client-user" },
+                environmentProvider: { [:] },
+                calendar: testCalendar,
+                now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
+                retryDelay: { _ in 0 }
+            )
+            released.value = recorder
+            recorder.updateConsent(.granted)
+            recorder.record("a")
+            await transport.held("a").wait()
+            recorder.record("b")
+            recorder.record("c")
+            await recorder.writer.awaitPendingWrites()
+        }
+        transport.release("a")
+        await waitUntil { released.value == nil }
+        try await Task.sleep(for: .milliseconds(200))
+
+        #expect(released.value == nil)
+        #expect(transport.sentSignalNames == ["a", "b", "c"])
+    }
 }
 
 // MARK: - Waiting on scheduled work
