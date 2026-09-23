@@ -193,6 +193,23 @@ struct QueueFileFaultTests {
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(markerFilename).path))
     }
 
+    /// "No such file" is a Foundation code, and 4 means something else in
+    /// another domain: an interrupted call, in POSIX's. Read by its code
+    /// alone, a refusal there says the queue is gone while it still stands.
+    @Test("A remove refused with another domain's error that shares no-such-file's code still erases the queue")
+    func refusalOutsideFoundationIsNotReadAsNothingThere() throws {
+        let directory = try #require(TestTempDirectory.url)
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem).persist(signals("a", "b"))
+        let operations = FaultingFileOperations()
+        operations.script(.remove, .refuse(NSError(domain: NSPOSIXErrorDomain, code: Int(EINTR))))
+        let storage = faultingStore(directory, operations)
+
+        storage.purge()
+
+        #expect(operations.writes == [.remove, .overwrite, .removeMarker])
+        #expect(freshLoad(directory).isEmpty)
+    }
+
     // MARK: Files past the limit
 
     /// Restore trims oldest-first to the limit in force and writes the trim
