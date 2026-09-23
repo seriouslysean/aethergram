@@ -197,14 +197,19 @@ public final class SignalRecorder: Sendable {
     /// rather than public so tests can await a transmission the consumer only
     /// ever kicks off; `flush()` is the consumer's door.
     func drain() async {
-        let claimed: Bool = lock.withLock { current in
-            guard !current.isDraining else { return false }
-            current.isDraining = true
-            return true
+        let claim: Int? = lock.withLock { current in
+            guard current.drainClaim == nil else { return nil }
+            current.lastClaimID &+= 1
+            current.drainClaim = current.lastClaimID
+            return current.lastClaimID
         }
-        guard claimed else { return }
-        defer { lock.withLock { $0.isDraining = false } }
-        while await sendNextBatch() {}
+        guard let claim else { return }
+        defer {
+            lock.withLock { current in
+                if current.drainClaim == claim { current.drainClaim = nil }
+            }
+        }
+        while await sendNextBatch(claim: claim) {}
     }
 
     // MARK: Private
@@ -244,7 +249,12 @@ public final class SignalRecorder: Sendable {
         var retention: RetentionRecord?
         var retentionLoaded = false
         var queueRestored = false
-        var isDraining = false
+        /// The drain allowed to claim batches, by the token it claimed with.
+        /// A token rather than a flag, so an erase can take the claim from a
+        /// drain whose cancelled send has not yet unwound without that drain's
+        /// eventual release taking it from the one that replaced it.
+        var drainClaim: Int?
+        var lastClaimID = 0
         /// At most one drain is owned at a time, and the slot says which of
         /// the three states it is in rather than leaving that to be inferred
         /// from a pair of flags and an optional.
@@ -300,6 +310,12 @@ public final class SignalRecorder: Sendable {
         /// The session and the environment go too: both were read under the
         /// grant being erased, and a regrant that reused the session would join
         /// what follows it to what preceded it.
+        ///
+        /// The claim goes because everything it could send is gone: the batch
+        /// in flight belongs to the erased generation, its verdict is
+        /// discarded, and `nextBatch` refuses the old token from here on, so
+        /// the drain after this one cannot find itself locked out until the
+        /// cancelled send unwinds.
         mutating func eraseCollected() {
             pending = []
             retention = nil
@@ -310,6 +326,7 @@ public final class SignalRecorder: Sendable {
             openedSessionAt = nil
             sessionID = ""
             environment = nil
+            drainClaim = nil
             eraseGeneration &+= 1
         }
     }
@@ -414,8 +431,8 @@ public final class SignalRecorder: Sendable {
 
     /// One transmission attempt. Returns whether another batch should follow
     /// immediately, so `drain` stays a loop over a single decision.
-    private func sendNextBatch() async -> Bool {
-        guard let claimed = nextBatch() else { return false }
+    private func sendNextBatch(claim: Int) async -> Bool {
+        guard let claimed = nextBatch(claim: claim) else { return false }
         // Last gate before the bytes leave. It narrows the window rather than
         // closing it: nothing in here can recall a request already handed to
         // the transport, so what it buys is that the answer is re-read at the
@@ -439,9 +456,14 @@ public final class SignalRecorder: Sendable {
     /// The identifier is resolved in here rather than by the caller: outside
     /// the lock, a decline landing between the consent check and the read would
     /// let the host mint one while the answer is withheld.
-    private func nextBatch() -> (batch: SignalBatch, generation: Int, evicted: Int)? {
+    ///
+    /// A drain whose claim an erase took claims nothing more. Without that,
+    /// one that got past its last verdict before the erase would come back
+    /// for the new queue's front alongside the drain that now owns it, and
+    /// the same batch would go out twice.
+    private func nextBatch(claim: Int) -> (batch: SignalBatch, generation: Int, evicted: Int)? {
         lock.withLock { current -> (batch: SignalBatch, generation: Int, evicted: Int)? in
-            guard current.consent.permitsCollection else { return nil }
+            guard current.consent.permitsCollection, current.drainClaim == claim else { return nil }
             restoreQueueIfNeeded(&current)
             guard !current.pending.isEmpty else { return nil }
             guard let clientUser = clientUserProvider() else {
@@ -645,7 +667,7 @@ public final class SignalRecorder: Sendable {
     /// The delay is served; from here the task cannot be hurried, only awaited.
     ///
     /// False when the slot moved on while this one slept. Draining anyway would
-    /// take `isDraining` from the live drain and hold it for a whole
+    /// take the claim from the live drain and hold it for a whole
     /// transmission, so the replacement wakes to find a queue it cannot claim.
     private func promoteWaitingDrain(id: Int) -> Bool {
         lock.withLock { current in
