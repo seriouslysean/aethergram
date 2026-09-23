@@ -21,11 +21,14 @@ public struct TelemetryDeckTransport: SignalTransport {
     ///   exception that aborts the host. A send over one fails a precondition
     ///   first, at the same moment, with a message that names the session.
     ///   Construction does not check it, so a host that never sends keeps
-    ///   running.
+    ///   running. Defaults to one ephemeral session, built once, with no
+    ///   cookie store, credential store, or URL cache, so nothing the host's
+    ///   `URLSession.shared` holds reaches the ingest. A host that passes its
+    ///   own takes on whatever that one carries.
     public init(
         configuration: TelemetryDeckConfiguration,
         logSubsystem: String,
-        session: URLSession = .shared
+        session: URLSession = TelemetryDeckTransport.defaultSession
     ) {
         self.configuration = configuration
         self.session = session
@@ -83,6 +86,24 @@ public struct TelemetryDeckTransport: SignalTransport {
     }
 
     // MARK: Internal
+
+    /// An ephemeral session with no cookie store, credential store, or URL
+    /// cache, built once and shared by every transport that takes the default.
+    ///
+    /// `URLSession.shared`, the 0.3.x default, uses the process's shared
+    /// `URLCache`, `HTTPCookieStorage`, `URLCredentialStorage`, and
+    /// `registerClass(_:)` protocol list, so a host cookie could ride along to
+    /// the ingest and an ingest reply land in the host's cache. Not public: a
+    /// host holding it could invalidate it under every other transport.
+    @usableFromInline static let defaultSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
 
     /// Status handling mirrors the SDK's own table so the swap does not change
     /// which failures cost signals. The vendor's ingest API documents no status
@@ -171,7 +192,8 @@ public struct TelemetryDeckTransport: SignalTransport {
     }()
 
     private let configuration: TelemetryDeckConfiguration
-    private let session: URLSession
+    /// Internal rather than private so a test can see which one the default is.
+    let session: URLSession
     private let logger: Logger
 
     /// An `HTTP-date` in IMF-fixdate, rfc850-date, or asctime-date form, all
