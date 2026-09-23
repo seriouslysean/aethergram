@@ -96,8 +96,9 @@ sent, so the release corrects a defect in the value rather than changing the for
 on. 0.3.1's doc comment on `RetentionRecord.firstSessionDay`, "`yyyy-MM-dd` in the device's
 calendar", described that defect. A stored day is converted when the recorder loads it, and one
 that no reading places between 2015-01-01 and tomorrow is kept as written. A day written under the
-Ethiopic calendar's Incarnation-era numbering stays unconverted, and one in a Chinese or Dangi leap
-month converts a lunar month early, as the changelog describes.
+Ethiopic calendar's Incarnation-era numbering that also reads as a Gregorian date in that range
+stays unconverted, and one in a Chinese or Dangi leap month converts a lunar month early, as the
+changelog describes.
 
 ## How versions move
 

@@ -269,9 +269,10 @@ enum RetentionCounters {
     /// reading lands in the window. Anything else is kept as written rather
     /// than guessed at. Converted days keep their order and lose duplicates.
     ///
-    /// An Ethiopic year, counted from the incarnation, falls inside the
-    /// Gregorian window, so a day written in that numbering is taken as
-    /// Gregorian and kept. A Chinese or Dangi day in a leap month was written
+    /// An Ethiopic year counted from the incarnation falls inside the
+    /// Gregorian window from 2015 on, so a day written in that numbering in
+    /// months 1-12 is taken as Gregorian and kept; one in the thirteenth
+    /// month fails that reading and is read as Ethiopic. A Chinese or Dangi day in a leap month was written
     /// without its leap flag, so it is read as the ordinary month of that
     /// number, the one before it, and converts a lunar month early.
     static func convertingDaysToGregorian(

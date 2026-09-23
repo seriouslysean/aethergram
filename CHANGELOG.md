@@ -54,11 +54,12 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
   is converted when the recorder loads it: a day that already reads as a Gregorian date between
   2015-01-01 and tomorrow is kept, any other is read in the recorder's calendar and kept converted
   only if the result lands in that window, and otherwise kept as written. So a rebuilt or
-  downgraded record is never converted twice. A record written before 0.3.2 under the Ethiopic
-  calendar's Incarnation-era numbering cannot be told apart from a Gregorian one, because the year
-  numbers overlap, and is left as written. One written under the Chinese or Dangi calendar in a
-  leap month carries no leap-month flag, so it converts to the same day of the ordinary month
-  before it: 2025-07-25, written as `0042-06-01`, converts to 2025-06-25.
+  downgraded record is never converted twice. A day written before 0.3.2 under the Ethiopic
+  calendar's Incarnation-era numbering that also reads as a Gregorian date in that window — any
+  day from Ethiopic year 2015 on outside the thirteenth month — cannot be told apart from a
+  Gregorian one and is left as written; one that does not, such as `2018-13-01`, is read as
+  Ethiopic like any other. One written under the Chinese or Dangi calendar in a leap month carries
+  no leap-month flag, so it converts to the same day of the ordinary month before it: 2025-07-25, written as `0042-06-01`, converts to 2025-06-25.
 - A session's first recorded signal after `beginSession()` is checkpointed, so a session killed
   inside the ten-second checkpoint interval is measured to that signal rather than discarded.
 - `endSession()` closes only a session this recorder opened, and a `record` advances only that
