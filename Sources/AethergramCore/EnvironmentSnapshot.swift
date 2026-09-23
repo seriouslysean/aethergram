@@ -140,8 +140,11 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// build Xcode installs straight to a device has no receipt file at all —
     /// `appStoreReceiptURL` still returns a path, but nothing exists there —
     /// so an absent file is neither channel rather than defaulting to App
-    /// Store by the same negation. `AppTransaction.shared.environment` is the
-    /// modern, async replacement for all of this, and it is async: this
+    /// Store by the same negation. For an app extension `receiptPath` is its
+    /// containing app's receipt, since the extension bundle never holds one;
+    /// see `receiptURL(forBundleAt:receiptURL:)`.
+    /// `AppTransaction.shared.environment` is the modern, async replacement
+    /// for all of this, and it is async: this
     /// function is called from a synchronous snapshot, so adopting it would
     /// change the caller's shape and is deliberately not done here.
     static func buildChannel(
@@ -159,8 +162,16 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// Where the receipt for the bundle at `bundleURL` lives, asking
     /// `receiptURL` for a bundle's own answer. Pure over URLs so the
     /// resolution is testable on a host that never reads a receipt.
+    ///
+    /// An extension's own bundle never holds a receipt, so an `.appex` two
+    /// directories under an `.app` — `PlugIns/` or ExtensionKit's
+    /// `Extensions/` — reads the containing app's. Any other layout, or a
+    /// containing app with no answer, keeps the bundle's own.
     static func receiptURL(forBundleAt bundleURL: URL, receiptURL: (URL) -> URL?) -> URL? {
-        receiptURL(bundleURL)
+        guard bundleURL.pathExtension == "appex" else { return receiptURL(bundleURL) }
+        let containingApp = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        guard containingApp.pathExtension == "app" else { return receiptURL(bundleURL) }
+        return receiptURL(containingApp) ?? receiptURL(bundleURL)
     }
 
     // MARK: Private
@@ -199,6 +210,11 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         #endif
     }
 
+    /// The receipt for `bundle`, or for its containing app when `bundle` is an
+    /// app extension: an extension's own `appStoreReceiptURL` points inside
+    /// the `.appex`, where no receipt is ever written, and would report every
+    /// App Store install of the extension as `dev`.
+    ///
     /// Not read on macOS: `appStoreReceiptURL` is deprecated there in favour of
     /// an async StoreKit call a synchronous snapshot cannot make, and
     /// `buildChannel` answers false for that platform anyway.
