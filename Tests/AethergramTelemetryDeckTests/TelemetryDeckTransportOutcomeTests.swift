@@ -33,24 +33,32 @@ struct TelemetryDeckTransportOutcomeTests {
         #expect(try TelemetryDeckTransport.outcome(for: Self.response(code)) == .retryable(reason: "http-\(code)"))
     }
 
-    /// RFC 9110 §10.2.3 names 429 and 503 as the statuses that carry
-    /// Retry-After. A throttled ingest that says when to come back and is
-    /// retried on the fixed schedule anyway is hit again before it asked to be.
-    @Test("A 429 or 503 carrying Retry-After says when to retry", arguments: [429, 503])
-    func throttleCarriesRetryAfter(code: Int) throws {
-        let response = try Self.response(code, headers: ["Retry-After": "120"])
-        #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryableAfter(
-            reason: "http-\(code)",
-            delay: 120
-        ))
-    }
-
-    /// Any other status that happens to carry the header is not one the RFC
-    /// gives it meaning on, and stays on the core's own schedule.
-    @Test("Retry-After on a status the RFC does not pair it with is ignored", arguments: [408, 500, 502, 504])
-    func retryAfterOnOtherStatusesIsIgnored(code: Int) throws {
-        let response = try Self.response(code, headers: ["Retry-After": "120"])
-        #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryable(reason: "http-\(code)"))
+    /// Only 429 (RFC 6585 §4) and 503 (RFC 9110 §10.2.3) are throttles whose
+    /// Retry-After says when to come back; a throttled ingest retried on the
+    /// fixed schedule anyway is hit before it asked to be. On any other status
+    /// the header is ignored and the status's own outcome stands. A 3xx's
+    /// Retry-After governs the redirected request, which `URLSession` issues
+    /// itself, so one that reaches the adapter carries nothing to honour.
+    @Test(
+        "Only a 429 or 503 turns Retry-After into a delay; any other status keeps its own outcome",
+        arguments: [
+            (429, TransportOutcome.retryableAfter(reason: "http-429", delay: 120)),
+            (503, .retryableAfter(reason: "http-503", delay: 120)),
+            (200, .delivered),
+            (301, .retryable(reason: "http-301")),
+            (408, .retryable(reason: "http-408")),
+            (413, .permanent(reason: "http-413")),
+            (500, .retryable(reason: "http-500")),
+            (501, .permanent(reason: "http-501")),
+            (502, .retryable(reason: "http-502")),
+            (504, .retryable(reason: "http-504"))
+        ]
+    )
+    func retryAfterIsHonouredOnlyOnThrottles(code: Int, expected: TransportOutcome) throws {
+        for value in ["120", "Sun, 06 Nov 1994 08:51:37 GMT"] {
+            let response = try Self.response(code, headers: ["Retry-After": value])
+            #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == expected, "Retry-After: \(value)")
+        }
     }
 
     /// A header that does not parse is no instruction at all; the batch is
@@ -61,48 +69,23 @@ struct TelemetryDeckTransportOutcomeTests {
         #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryable(reason: "http-429"))
     }
 
-    /// `delay-seconds = 1*DIGIT` and the three `HTTP-date` forms of RFC 9110
-    /// §5.6.7, which a recipient must accept, including the two obsolete ones.
+    /// What the core is handed at either extreme: a date already past is a
+    /// zero delay, and the latest date or a count past `UInt64.max` is its
+    /// finite size. None traps; bounding is the core's.
     @Test(
-        "Retry-After parses delay-seconds and every HTTP-date form",
+        "A 429 with a past or far-future Retry-After hands the core a zero or finite delay",
         arguments: [
-            ("0", 0.0),
-            ("120", 120.0),
-            (" 120\t", 120.0),
-            ("Sun, 06 Nov 1994 08:51:37 GMT", 120.0),
-            ("Sunday, 06-Nov-94 08:51:37 GMT", 120.0),
-            ("Sun Nov  6 08:51:37 1994", 120.0)
+            ("Sun, 06 Nov 1994 08:00:00 GMT", 0.0),
+            ("Fri, 31 Dec 9999 23:59:59 GMT", 252_618_189_022.0),
+            ("18446744073709551616", 18_446_744_073_709_551_616.0)
         ]
     )
-    func retryAfterParses(value: String, expected: TimeInterval) {
-        #expect(TelemetryDeckTransport.retryAfter(value, now: Self.now) == expected)
-    }
-
-    /// A date already past is "now", not a negative wait for the core to
-    /// misread.
-    @Test("A Retry-After date already past is a zero delay")
-    func pastRetryAfterDateIsZero() {
-        #expect(TelemetryDeckTransport.retryAfter("Sun, 06 Nov 1994 08:00:00 GMT", now: Self.now) == 0)
-    }
-
-    /// Anything outside the grammar is refused rather than guessed at: a
-    /// sign, a fraction, a unit, a zone other than GMT, or a count too large
-    /// for a `Double` to hold.
-    @Test(
-        "A Retry-After outside the grammar is refused",
-        arguments: [
-            "",
-            "-5",
-            "+5",
-            "1.5",
-            "5s",
-            "0x10",
-            "Sun, 06 Nov 1994 08:51:37 PST",
-            String(repeating: "9", count: 400)
-        ]
-    )
-    func malformedRetryAfterIsRefused(value: String) {
-        #expect(TelemetryDeckTransport.retryAfter(value, now: Self.now) == nil)
+    func extremeRetryAfterReachesTheCoreFinite(value: String, delay: TimeInterval) throws {
+        let response = try Self.response(429, headers: ["Retry-After": value])
+        #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryableAfter(
+            reason: "http-429",
+            delay: delay
+        ))
     }
 
     /// The SDK's `disposition()` guards `as? HTTPURLResponse` and returns
