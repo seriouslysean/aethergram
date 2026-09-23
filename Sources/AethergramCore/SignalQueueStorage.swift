@@ -53,10 +53,10 @@ public protocol SignalQueueStorage: Sendable {
 /// and would write over what the first is protecting.
 ///
 /// A queue it could not read keeps the writes off the file, and every write
-/// retries the read. Once it reads, what the file held is written ahead of
-/// every snapshot until a load hands it back or an erase removes it, because
-/// the recorder never saw those signals and only a later process can send
-/// them. A copy of one store is the same store and shares both; a store
+/// retries the read. Once it reads, what the file held, up to the newest
+/// 1,000 signals, is written ahead of every snapshot until a load hands it
+/// back or an erase removes it, because the recorder never saw those signals
+/// and only a later process can send them. A copy of one store is the same store and shares both; a store
 /// constructed separately is not. Give a second consumer in one process a
 /// `filename` of its own, and give a second process a container of its own.
 public struct FileSignalQueueStorage: SignalQueueStorage {
@@ -215,9 +215,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     /// out of reach.
     ///
     /// A read that succeeds here hands nothing back — the caller is writing,
-    /// not loading — so what the file held becomes `carried`, and goes ahead
-    /// of every snapshot until a load or an erase. That is what keeps those
-    /// signals for the next process, the only one that can send them.
+    /// not loading — so the newest of what the file held become `carried`,
+    /// and go ahead of every snapshot until a load or an erase. That is what
+    /// keeps those signals for the next process, the only one that can send
+    /// them.
     private func settleUnreadQueue() -> Bool {
         guard file.isUnread else { return true }
         switch readQueueFile() {
@@ -233,8 +234,17 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             return !file.erasureOutstanding
         case let .signals(signals):
             file.isUnread = false
-            file.carried = signals
-            logger.info("queue read recovered count=\(signals.count)")
+            // Newest kept, matching the recorder's own eviction: these are
+            // the oldest signals the file holds, and a run of processes that
+            // each carry everything before them would otherwise grow the file
+            // by a snapshot apiece.
+            let limit = AethergramConfiguration.defaultQueueLimit
+            file.carried = Array(signals.suffix(limit))
+            if signals.count > limit {
+                logger.error("queue read recovered count=\(signals.count) dropped=\(signals.count - limit)")
+            } else {
+                logger.info("queue read recovered count=\(signals.count)")
+            }
         }
         return true
     }
@@ -460,14 +470,13 @@ private final class QueueFile: @unchecked Sendable {
     /// signals no load handed back, so no snapshot contains them. Written
     /// ahead of every snapshot until a load or an erase.
     ///
-    /// Bounded by what the file held: a late read replaces it rather than
-    /// adding to it, and needs a failed load first, which clears it. The file
-    /// grows past `queueLimit` by at most one snapshot for each process in a
-    /// row whose own load fails and whose later read succeeds, since each
-    /// carries everything before it; that growth is paid on this read and on
-    /// every write that follows. It ends at the first process whose load
-    /// succeeds: its restore trims the file to the limit oldest-first, and
-    /// these are the oldest.
+    /// A late read replaces it rather than adding to it, and keeps only the
+    /// newest `AethergramConfiguration.defaultQueueLimit`: the store has no
+    /// configuration of its own, and without a bound each process in a row
+    /// whose load fails and whose later read succeeds would carry everything
+    /// before it and grow the file by a snapshot. The file stays within that
+    /// bound plus one snapshot until the first process whose load succeeds,
+    /// whose restore trims it to its own limit oldest-first.
     var carried: [Signal] = []
     /// Log bookkeeping only, so a degraded store says so once rather than on
     /// every write: why writes are being skipped, and whether the look for

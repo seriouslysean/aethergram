@@ -35,8 +35,9 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 ### Durability
 
 - A queue file that could not be read is retried on every write. Once a read succeeds, what the
-  file held is kept ahead of the recorder's queue in every write, for the next process to load and
-  send. Previously the writes stopped for the life of the process.
+  file held, up to the newest 1,000 signals, is kept ahead of the recorder's queue in every write,
+  for the next process to load and send. Previously the writes stopped for the life of the
+  process.
 - The look for the erasure mark checks the mark's reachability and no longer reads file
   attributes.
 
