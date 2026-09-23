@@ -739,7 +739,7 @@ struct DeliverySchedulingTests {
 /// assertion that follows reports the state rather than a timeout. The deadline
 /// is wall time: what is being waited on is a task the pool schedules, not
 /// anything the recorder's own clock advances.
-private func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async {
+func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async {
     let deadline = Date().addingTimeInterval(seconds)
     while !condition(), Date() < deadline {
         try? await Task.sleep(for: .milliseconds(5))

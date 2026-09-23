@@ -569,3 +569,38 @@ struct ReplayableGenerator: RandomNumberGenerator {
         return z ^ (z >> 31)
     }
 }
+
+/// Answers every send after a pause, and counts the answers apart from the
+/// arrivals, so a test can tell a send that was started from one that was
+/// answered. Suspends rather than blocks, so the pause costs the pool nothing.
+final class SlowTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init(pause: Duration) {
+        self.pause = pause
+    }
+
+    // MARK: Internal
+
+    var sentSignalNames: [String] {
+        lock.withLock { received.flatMap { $0.signals.map(\.name) } }
+    }
+
+    var answeredCount: Int {
+        lock.withLock { answered }
+    }
+
+    func send(_ batch: SignalBatch) async -> TransportOutcome {
+        lock.withLock { received.append(batch) }
+        try? await Task.sleep(for: pause)
+        lock.withLock { answered += 1 }
+        return .delivered
+    }
+
+    // MARK: Private
+
+    private let pause: Duration
+    private let lock = NSLock()
+    private var received: [SignalBatch] = []
+    private var answered = 0
+}

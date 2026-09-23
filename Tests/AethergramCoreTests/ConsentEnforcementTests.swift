@@ -74,6 +74,9 @@ struct ConsentEnforcementTests {
 
         #expect(fixture.transport.sendCount == 0)
         #expect(fixture.storage.persistCallCount == 0)
+        // The restore is a read of what an earlier grant collected, so it
+        // waits for this one as every other read does.
+        #expect(fixture.storage.loadCallCount == 0)
         #expect(!fixture.storage.fileExists)
         #expect(fixture.storage.signalsOnDisk.isEmpty)
         #expect(!fixture.clientUserCalls.wasCalled)

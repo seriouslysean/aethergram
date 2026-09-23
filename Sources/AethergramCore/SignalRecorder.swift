@@ -245,6 +245,12 @@ public final class SignalRecorder: Sendable {
         startDrain(after: 0)
     }
 
+    public func flushAndWait() async {
+        requireNoReentry()
+        await writer.awaitPendingWrites()
+        startDrain(after: 0)
+    }
+
     /// Erases everything the package persists. Wire it into the host's
     /// data-reset path: this is what makes the retention counters clearable,
     /// which the SDK this replaces offered no way to do.
