@@ -146,6 +146,9 @@ struct FlushContractTests {
             returned.open()
         }
         await transport.held("a").wait()
+        // The flush notes its queue in the call that registers it, while
+        // nothing holds the recorder's lock; the records below come after.
+        await waitUntil { recorder.flushWaiterCount == 1 }
         // Two later records push "a" and "b" out of a queue of three.
         recorder.record("d")
         recorder.record("e")
