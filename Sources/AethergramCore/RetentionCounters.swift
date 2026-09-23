@@ -48,9 +48,10 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
 
     // MARK: Public
 
-    /// `yyyy-MM-dd` in the Gregorian calendar, on the device's clock. A day,
-    /// never a timestamp: the question a cohort chart asks is which day
-    /// someone arrived.
+    /// `yyyy-MM-dd` in the Gregorian calendar, on the device's clock, except
+    /// a day stored before 0.3.2 that the recorder could not convert, which
+    /// is kept as written. A day, never a timestamp: the question a cohort
+    /// chart asks is which day someone arrived.
     public let firstSessionDay: String
     /// Sessions opened. Includes the one in flight, which is why it cannot be
     /// the divisor for an average of finished sessions.
@@ -61,7 +62,8 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
     /// but no seconds.
     public var completedSessionsCount: Int
     /// Gregorian `yyyy-MM-dd` entries, most recent last, capped at the 400
-    /// most recent.
+    /// most recent. An entry stored before 0.3.2 that the recorder could not
+    /// convert is kept as written.
     public var distinctDaysUsed: [String]
     /// Seconds summed over completed sessions. A session whose measured
     /// duration is not positive, not finite, or over a day adds nothing and
@@ -255,8 +257,8 @@ enum RetentionCounters {
         return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
-    /// The record with every day string in Gregorian numbering, decided string
-    /// by string so that converting twice changes nothing.
+    /// The record with each day string it can place in Gregorian numbering,
+    /// decided string by string so that converting twice changes nothing.
     ///
     /// Releases before 0.3.2 wrote the device's own calendar, and nothing in
     /// a record says which numbering it holds: 0.3.1 saves only the keys it
