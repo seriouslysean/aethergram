@@ -14,7 +14,8 @@ public struct AethergramConfiguration: Sendable {
     ///   `transmitInterval` and `maxBackoffInterval` are finite and positive.
     ///   Anything else traps here, at construction, rather than at the first
     ///   signal. Both intervals are clamped to a ceiling far past any real
-    ///   schedule and below the size that would crash the first retry.
+    ///   schedule and below the size that crashed the first record's
+    ///   coalescing sleep.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,
@@ -51,8 +52,8 @@ public struct AethergramConfiguration: Sendable {
         self.batchSize = batchSize
         self.queueLimit = queueLimit
         // Clamped rather than trapped: every value that constructed before
-        // still constructs, and the ones that crashed at the first retry now
-        // run.
+        // still constructs, and the ones that crashed the first record's
+        // sleep now run.
         self.transmitInterval = min(transmitInterval, Self.maximumInterval)
         self.maxBackoffInterval = min(maxBackoffInterval, Self.maximumInterval)
     }
@@ -77,12 +78,14 @@ public struct AethergramConfiguration: Sendable {
     /// someone is actually running.
     public let queueLimit: Int
 
-    /// Delay between transmission attempts in the steady state.
+    /// Delay between transmission attempts in the steady state. A value
+    /// past the ceiling the initializer clamps to reads back clamped.
     public let transmitInterval: TimeInterval
 
     /// Ceiling on the exponential backoff after repeated failures. A value
     /// below `transmitInterval` means no growth rather than a retry faster
-    /// than the steady state it is meant to back off from.
+    /// than the steady state it is meant to back off from. A value past the
+    /// ceiling the initializer clamps to reads back clamped.
     public let maxBackoffInterval: TimeInterval
 
     /// How long delivery waits after a signal is recorded: nothing once the
@@ -106,10 +109,11 @@ public struct AethergramConfiguration: Sendable {
 
     // MARK: Internal
 
-    /// What both intervals are clamped to. Not a policy ceiling: `Duration`
-    /// traps on seconds past about 1.7e20, which is where a retry deadline
-    /// built from a larger interval crashed, and this sits five orders of
-    /// magnitude below that and some thirty million years past any schedule.
+    /// What both intervals are clamped to. Not a policy ceiling:
+    /// `Duration.seconds` traps on a value past `Int64.max` seconds, about
+    /// 9.2e18, which is where the coalescing sleep the first record schedules
+    /// crashed under 0.3.1, and this sits nearly four orders of magnitude
+    /// below that and some thirty million years past any schedule.
     static let maximumInterval: TimeInterval = 1e15
 
     /// `queueLimit`'s default, and the bound on what a file store carries for
