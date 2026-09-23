@@ -10,11 +10,13 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 ### Configuration and traps
 
 - `AethergramConfiguration` clamps `transmitInterval` and `maxBackoffInterval` to a ceiling far
-  past any real schedule and below about 9.2e18 seconds, where `Duration.seconds` traps. A larger
-  interval crashed the host at the first sleep or retry deadline built from it — the coalescing
-  sleep its first record scheduled, whenever `batchSize` is above 1; that configuration now runs,
-  and the property reads back the clamped value. `queueLimit` is not capped, and a value
-  that is not finite, or not positive, still traps at construction, as in 0.3.1.
+  past any real schedule and below about 9.2e18 seconds, where a sleep that runs traps. An interval
+  from there crashed the host at the first sleep that ran on it — the coalescing sleep its first
+  record scheduled whenever `batchSize` is above 1, or a backoff sleep — and one past about 1.7e20
+  seconds, where `Duration.seconds` itself traps, crashed wherever it was first made a `Duration`.
+  That configuration now runs, and the property reads back the clamped value. An interval that is
+  not finite, or not positive, still traps at construction, as in 0.3.1. `queueLimit` is not
+  capped, and one that is not positive still traps there too.
 - `TelemetryDeckTransport` fails a precondition naming the background `URLSession` at the first
   send over one. The send aborted the host at the same moment before, with an `NSGenericException`
   about completion handlers that did not name the transport.

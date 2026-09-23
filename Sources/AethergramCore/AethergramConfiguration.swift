@@ -14,8 +14,7 @@ public struct AethergramConfiguration: Sendable {
     ///   `transmitInterval` and `maxBackoffInterval` are finite and positive.
     ///   Anything else traps here, at construction, rather than at the first
     ///   signal. Both intervals are clamped to a ceiling far past any real
-    ///   schedule and below the size that crashed the first sleep or retry
-    ///   deadline built from it.
+    ///   schedule and below the size at which a sleep over it traps.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,
@@ -52,8 +51,8 @@ public struct AethergramConfiguration: Sendable {
         self.batchSize = batchSize
         self.queueLimit = queueLimit
         // Clamped rather than trapped: every value that constructed before
-        // still constructs, and the ones that crashed the first sleep or retry
-        // deadline built from them now run.
+        // still constructs, and the ones that crashed the first sleep that ran
+        // on them, or the first `Duration` made from them, now run.
         self.transmitInterval = min(transmitInterval, Self.maximumInterval)
         self.maxBackoffInterval = min(maxBackoffInterval, Self.maximumInterval)
     }
@@ -109,12 +108,14 @@ public struct AethergramConfiguration: Sendable {
 
     // MARK: Internal
 
-    /// What both intervals are clamped to. Not a policy ceiling:
-    /// `Duration.seconds` traps on a value past `Int64.max` seconds, about
-    /// 9.2e18, which is where the first sleep or retry deadline built from a
-    /// larger interval crashed under 0.3.1 — the first record's coalescing
-    /// sleep whenever `batchSize` is above 1. This sits nearly four orders of
-    /// magnitude below that and some thirty million years past any schedule.
+    /// What both intervals are clamped to. Not a policy ceiling: a sleep that
+    /// runs traps on a duration past `Int64.max` seconds, about 9.2e18, and
+    /// `Duration.seconds` itself traps past about 1.7e20. Under 0.3.1 an
+    /// interval past the first crashed the first sleep that ran on it — the
+    /// first record's coalescing sleep whenever `batchSize` is above 1, or a
+    /// backoff sleep — and one past the second crashed wherever it was first
+    /// made a `Duration`. This sits nearly four orders of magnitude below the
+    /// first and some thirty million years past any schedule.
     static let maximumInterval: TimeInterval = 1e15
 
     /// `queueLimit`'s default, and the bound on what a file store carries for

@@ -32,13 +32,14 @@ struct AethergramConfigurationTests {
         #expect(configuration.maxBackoffInterval == twoYears)
     }
 
-    /// `Duration.seconds` traps on a value past `Int64.max` seconds, about
-    /// 9.2e18, so under 0.3.1 an interval that large constructed and then
-    /// crashed its host in the coalescing sleep the first record schedules.
-    /// The ceiling is checked against that bound first, so a ceiling raised
-    /// past it fails here rather than trapping the runner; then the sleep and
-    /// the retry deadline the recorder builds are built from the clamped
-    /// values.
+    /// A sleep that runs traps on a duration past `Int64.max` seconds, about
+    /// 9.2e18, and `Duration.seconds` itself past about 1.7e20, so under 0.3.1
+    /// an interval that large constructed and then crashed its host at the
+    /// first sleep that ran on it. The `#require` is the guard for the running
+    /// sleep: a ceiling raised past `Int64.max` fails there rather than
+    /// trapping the runner. The cancelled sleep and the retry deadline below
+    /// are built from the clamped values, which covers only the conversion to
+    /// a `Duration`.
     @Test("An interval too large for a Duration is clamped rather than trapping the first record's sleep")
     func intervalTooLargeForADurationIsClamped() async throws {
         try #require(AethergramConfiguration.maximumInterval < Double(Int64.max))
@@ -53,8 +54,10 @@ struct AethergramConfigurationTests {
         #expect(configuration.transmitInterval <= AethergramConfiguration.maximumInterval)
         #expect(configuration.maxBackoffInterval <= AethergramConfiguration.maximumInterval)
         #expect(backoff <= AethergramConfiguration.maximumInterval)
-        // Cancelled at once, so nothing waits out the interval: `.seconds`
-        // converts it before the sleep looks at cancellation.
+        // Cancelled at once, so nothing waits out the interval and the sleep
+        // never runs: `.seconds` converts it before the sleep looks at
+        // cancellation, which proves the conversion and nothing about the
+        // running sleep's limit.
         let sleep = Task { try await Task.sleep(for: .seconds(delay)) }
         sleep.cancel()
         _ = await sleep.result
