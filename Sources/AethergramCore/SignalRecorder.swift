@@ -249,7 +249,8 @@ public final class SignalRecorder: Sendable {
     /// it with an expiring-activity window. It always returns promptly when
     /// cancelled.
     ///
-    /// At the call it notes the signals queued, then starts a drain at zero
+    /// At the call it notes the signals queued — or, when the recorder's
+    /// lock is busy then, as soon as it is free — and starts a drain at zero
     /// delay, or joins the one already sending. It returns on the first of:
     /// - Those signals have all left the queue — delivered, permanently
     ///   rejected, or evicted by overflow — and the store has attempted the
@@ -264,8 +265,10 @@ public final class SignalRecorder: Sendable {
     /// - Consent is not granted, or collection is closed for a reset.
     /// - The calling task is cancelled.
     ///
-    /// Records made after the call never extend the wait. No return but the
-    /// first waits for a queue write; `flush()` is the call that does.
+    /// Records made after the call are never waited for. A queue write one
+    /// of them submits can lengthen the wait for the removal by at most one
+    /// store call, as it can `flush()`'s. No return but the first waits for
+    /// a queue write; `flush()` is the call that does.
     ///
     /// What the attempt can lose or repeat: a removal the store fails to
     /// write leaves the batch on disk, and a later process sends it again;
