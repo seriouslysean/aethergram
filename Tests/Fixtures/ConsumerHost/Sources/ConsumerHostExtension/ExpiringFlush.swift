@@ -56,6 +56,7 @@ public final class ExpiringFlush: Sendable {
     /// created cancels it as it registers.
     @discardableResult
     public func start(priority: TaskPriority = .utility) -> Bool {
+        if state.withLock({ $0.expired }) { return false }
         let task = Task.detached(priority: priority) { [self] in
             await work()
             finish()
