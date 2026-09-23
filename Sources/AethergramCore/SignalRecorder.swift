@@ -137,6 +137,7 @@ public final class SignalRecorder: Sendable {
             eraseCollected(&current)
             return (true, Self.detachOwnedDrain(&current), 0)
         }
+        waiters.resumeSettled(writer: writer)
         guard erased.happened else {
             logger.info("consent granted")
             // A queue a killed process left has nobody else coming for it:
@@ -252,40 +253,70 @@ public final class SignalRecorder: Sendable {
         startDrain(after: 0)
     }
 
-    /// `flush()` for a caller that can wait for the send: returns once the
-    /// queue's writes are durable and one delivery attempt has been answered,
-    /// so a host can bracket it with an expiring-activity window.
+    /// `flush()` for a caller that can wait for the send: one attempt at
+    /// delivering what was queued when it was called, so a host can bracket
+    /// it with an expiring-activity window. It always returns promptly when
+    /// cancelled.
     ///
-    /// What it waits for, in order:
-    /// 1. Every queue write submitted before the call, and no later one.
-    /// 2. A drain started at zero delay — or, if one is already sending, that
-    ///    one, and then a drain of its own if anything recorded before the
-    ///    call is still queued. A drain sends batch after batch until the
-    ///    queue empties or a send fails, and ends once the transport has
-    ///    answered the last of them.
+    /// At the call it notes the signals queued, then starts a drain at zero
+    /// delay, or joins the one already sending. It returns on the first of:
+    /// - Those signals have all left the queue — delivered, permanently
+    ///   rejected, or evicted by overflow — and the store has attempted the
+    ///   write that records the removal. That write covers every queue write
+    ///   submitted before it.
+    /// - A send fails and a retry is owed, including when no identifier
+    ///   resolves.
+    /// - A retry was already owed at the call. It returns at once and never
+    ///   hurries that retry, for the same reason `flush()` does not.
+    /// - The queue is erased: a decline, a `reset()`, or a
+    ///   `resetClosingCollection(during:)`.
+    /// - Consent is not granted, or collection is closed for a reset.
+    /// - The calling task is cancelled.
     ///
-    /// It returns without sending when nothing can be sent now: consent is
-    /// withheld, the queue is empty, or a failure still owes the endpoint a
-    /// wait. It never hurries that wait, for the same reason `flush()` does not.
+    /// Records made after the call never extend the wait. No return but the
+    /// first waits for a queue write; `flush()` is the call that does.
     ///
-    /// Suspends rather than blocks, so it holds no thread while it waits.
-    /// Cancelling the calling task ends the wait for the send but not the
-    /// send, whose batch is on disk either way; the write barrier is not cut
-    /// short, because what it promises is that the queue is durable.
+    /// What the attempt can lose or repeat: a removal the store fails to
+    /// write leaves the batch on disk, and a later process sends it again;
+    /// overflow eviction and a permanent rejection drop signals. It loses
+    /// and repeats nothing else.
+    ///
+    /// Cancellation ends the wait without taking the recorder's lock, so a
+    /// restore or an identifier resolution holding that lock cannot delay
+    /// the return. It ends neither the send, whose batch is on disk either
+    /// way, nor the queue writes: work submitted to the writer keeps running
+    /// on the writer's queue, and retains the writer until it finishes.
     ///
     /// Named apart from `flush()` because an async overload of one name wins
     /// in every async context, which would turn each existing unawaited call
     /// there into a compile error.
     public func flushAndWait() async {
         requireNoReentry()
-        await writer.awaitPendingWrites()
-        // At most twice: behind a drain already sending, then a drain of its
-        // own if the first ended with this caller's signals still queued.
-        for _ in 0 ..< 2 {
-            let hasWork = lock.withLock { $0.consent.permitsCollection && !$0.pending.isEmpty }
-            guard hasWork, let started = startDrain(after: 0) else { return }
-            await Self.awaitCompletion(of: started.running)
-            if started.isNew || Task.isCancelled { return }
+        let id = waiters.mint()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                waiters.arm(id, continuation)
+                // A cancel that arrived before the arm found nothing to resume.
+                guard !Task.isCancelled else {
+                    waiters.resume(id)
+                    return
+                }
+                // Captured here when the lock is free, so the count is the
+                // one at the call. When a restore or an identifier resolution
+                // holds it, the caller must not block behind them.
+                if let preempted = lock.withLockIfAvailable({ beginAttempt(id, &$0) }) {
+                    preempted?.cancel()
+                    waiters.resumeSettled(writer: writer)
+                } else {
+                    Task(priority: .utility) { [weak self, waiters] in
+                        guard let self else { return waiters.resume(id) }
+                        lock.withLock { beginAttempt(id, &$0) }?.cancel()
+                        waiters.resumeSettled(writer: writer)
+                    }
+                }
+            }
+        } onCancel: {
+            waiters.resume(id)
         }
     }
 
@@ -304,6 +335,7 @@ public final class SignalRecorder: Sendable {
             Self.openSessionIfNeeded(&current)
             return Self.detachOwnedDrain(&current)
         }
+        waiters.resumeSettled(writer: writer)
         detached?.cancel()
         awaitErasure()
         logger.info("reset ok")
@@ -330,6 +362,12 @@ public final class SignalRecorder: Sendable {
     /// Seconds until the retry the last failure owes, and zero when none is.
     var secondsUntilRetry: TimeInterval {
         lock.withLock { Self.secondsOwed($0.retryNotBefore) }
+    }
+
+    /// How many awaited flushes are registered, so a test can tell a waiter
+    /// a cancel removed from one it left behind.
+    var flushWaiterCount: Int {
+        waiters.count
     }
 
     /// Sends queued signals until the queue empties or a send fails. Internal
@@ -418,6 +456,11 @@ public final class SignalRecorder: Sendable {
         /// from one that inherits a dead process's open session.
         var openedSessionAt: Date?
 
+        /// Whether anything may be collected, queued, or sent now.
+        var gateOpen: Bool {
+            consent.permitsCollection
+        }
+
         /// Whether the open session is the one this instance stamped, rather
         /// than one left by a dead process or a live one sharing the store.
         var ownsOpenSession: Bool {
@@ -434,6 +477,14 @@ public final class SignalRecorder: Sendable {
         /// signals recorded alike are equal, so a value match cannot tell a
         /// sent signal from the one that replaced it.
         var evictedFromFront = 0
+        /// How many signals have ever left the front of the queue, by any
+        /// route: delivered, permanently rejected, or evicted by overflow. An
+        /// awaited flush compares it against what it saw at the call.
+        var dequeuedFromFront = 0
+        /// How many attempts have ended owing a retry. Monotonic, unlike
+        /// `consecutiveFailures`, so a flush can tell a failure after its call
+        /// from the run it started behind.
+        var failedAttempts = 0
         /// Signals dropped since the queue last had room, and zero while it
         /// has room. What logs the overflow once on the way in and once on
         /// the way out, rather than on every record in between.
@@ -487,6 +538,7 @@ public final class SignalRecorder: Sendable {
     private let retryDelay: @Sendable (_ consecutiveFailures: Int) -> TimeInterval
     private let logger: Logger
     private let lock = OSAllocatedUnfairLock(initialState: State())
+    private let waiters = FlushWaiters()
 
     /// The first line of every public entry point. A host seam called under
     /// the lock that calls back in would otherwise die inside the lock's own
@@ -557,11 +609,13 @@ public final class SignalRecorder: Sendable {
                     recordedAt: recordedAt
                 )
             )
+            var overflow = 0
             var overflowBegan = false
             if current.pending.count > configuration.queueLimit {
-                let overflow = current.pending.count - configuration.queueLimit
+                overflow = current.pending.count - configuration.queueLimit
                 current.pending.removeFirst(overflow)
                 current.evictedFromFront &+= overflow
+                current.dequeuedFromFront &+= overflow
                 overflowBegan = current.droppedInOverflow == 0
                 current.droppedInOverflow &+= overflow
             }
@@ -572,9 +626,11 @@ public final class SignalRecorder: Sendable {
             // the snapshot shares this array's storage, so the next append or
             // eviction while the writer still holds it copies the whole queue
             // here, under the lock.
-            writer.persist(current.pending)
+            let checkpoint = writer.persist(current.pending)
+            if overflow > 0 { settleWaiters(current, removal: checkpoint) }
             return (current.pending.count, overflowBegan)
         }
+        waiters.resumeSettled(writer: writer)
         guard let enqueued else {
             logger.debug("record skip consent-withheld")
             return
@@ -596,7 +652,9 @@ public final class SignalRecorder: Sendable {
     /// One transmission attempt. Returns whether another batch should follow
     /// immediately, so `drain` stays a loop over a single decision.
     private func sendNextBatch(claim: Int) async -> Bool {
-        guard let claimed = nextBatch(claim: claim) else { return false }
+        let claimed = nextBatch(claim: claim)
+        waiters.resumeSettled(writer: writer)
+        guard let claimed else { return false }
         // Last gate before the bytes leave. It narrows the window rather than
         // closing it: nothing in here can recall a request already handed to
         // the transport, so what it buys is that the answer is re-read at the
@@ -604,6 +662,7 @@ public final class SignalRecorder: Sendable {
         // and nothing further follows.
         guard permitsCollection(at: claimed.generation) else { return false }
         let outcome = await transport.send(claimed.batch)
+        defer { waiters.resumeSettled(writer: writer) }
         return apply(
             outcome,
             sent: claimed.batch.signals,
@@ -638,7 +697,9 @@ public final class SignalRecorder: Sendable {
                 // for an identifier it has already said it does not have, as
                 // often as the consumer flushes.
                 current.consecutiveFailures += 1
+                current.failedAttempts &+= 1
                 Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
+                settleWaiters(current, removal: nil)
                 logger.error("drain halt reason=no-client-user")
                 return nil
             }
@@ -672,10 +733,16 @@ public final class SignalRecorder: Sendable {
                 // so matching the queue against the batch by value would take
                 // the signal that replaced one it removes.
                 let evictedSinceClaim = current.evictedFromFront &- evicted
-                current.pending.removeFirst(max(0, sent.count - evictedSinceClaim))
+                let removed = max(0, sent.count - evictedSinceClaim)
+                current.pending.removeFirst(removed)
+                current.dequeuedFromFront &+= removed
                 current.consecutiveFailures = 0
                 current.retryNotBefore = nil
-                writer.persist(current.pending)
+                // The checkpoint's own ticket, not a later one: a flush waits
+                // for this removal to reach the store and for nothing
+                // recorded since.
+                let checkpoint = writer.persist(current.pending)
+                settleWaiters(current, removal: checkpoint)
                 var overflowDropped = 0
                 if current.pending.count < configuration.queueLimit {
                     overflowDropped = current.droppedInOverflow
@@ -684,14 +751,18 @@ public final class SignalRecorder: Sendable {
                 return (!current.pending.isEmpty, overflowDropped)
             case .retryable:
                 current.consecutiveFailures += 1
+                current.failedAttempts &+= 1
                 Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
+                settleWaiters(current, removal: nil)
                 return (false, 0)
             case let .retryableAfter(_, delay):
                 current.consecutiveFailures += 1
+                current.failedAttempts &+= 1
                 Self.oweRetry(&current, after: max(
                     retryDelay(current.consecutiveFailures),
                     Self.servableDelay(delay)
                 ))
+                settleWaiters(current, removal: nil)
                 return (false, 0)
             }
         }
@@ -728,6 +799,7 @@ public final class SignalRecorder: Sendable {
         state.eraseCollected()
         writer.purge()
         retentionStore.clear()
+        settleWaiters(state, removal: nil)
     }
 
     /// The one part of an erase that cannot happen under the lock. The delete
@@ -756,9 +828,9 @@ public final class SignalRecorder: Sendable {
         // a higher limit must not transmit past the cap now in force.
         let overflow = state.pending.count - configuration.queueLimit
         state.pending.removeFirst(overflow)
-        state.evictedFromFront &+= overflow
+        state.dequeuedFromFront &+= overflow
         logger.error("restore overflow dropped=\(overflow)")
-        writer.persist(state.pending)
+        settleWaiters(state, removal: writer.persist(state.pending))
     }
 
     /// Day strings are converted here, once per load, rather than on every
@@ -791,51 +863,64 @@ public final class SignalRecorder: Sendable {
     /// kills the process outright, which is why an interrupted flush loses
     /// nothing.
     ///
-    /// Returns the drain sending now, if one is, and whether this call
-    /// started it, so a caller that waits knows what it waited on.
-    @discardableResult
-    private func startDrain(after delay: TimeInterval) -> (running: Task<Void, Never>, isNew: Bool)? {
-        // The task is created inside the claim, so the slot never holds a
-        // half-state and there is no late "still ours?" assignment to guard.
-        typealias Decision = (running: OwnedDrain?, isNew: Bool, preempted: Task<Void, Never>?)
-        let decided: Decision? = lock.withLock { current in
-            guard current.consent.permitsCollection else { return nil }
-            let due = max(delay, Self.secondsOwed(current.retryNotBefore))
-            switch current.drain {
-            case let .running(owned):
-                return (owned, false, nil)
-            case let .waiting(existing):
-                guard due == 0 else { return nil }
-                let owned = makeOwnedDrain(&current, after: 0)
-                current.drain = .running(owned)
-                return (owned, true, existing.task)
-            case .idle:
-                let owned = makeOwnedDrain(&current, after: due)
-                current.drain = due > 0 ? .waiting(owned) : .running(owned)
-                return (due > 0 ? nil : owned, true, nil)
-            }
-        }
-        decided?.preempted?.cancel()
-        guard let decided, let running = decided.running else { return nil }
-        return (running.task, decided.isNew)
+    private func startDrain(after delay: TimeInterval) {
+        lock.withLock { decideDrain(&$0, after: delay) }?.cancel()
     }
 
-    /// Waits for `task` to end, or for the caller to be cancelled, whichever
-    /// comes first. Awaiting an unstructured task's value cannot be cut short,
-    /// and the drain is the recorder's, not the caller's to cancel.
-    private static func awaitCompletion(of task: Task<Void, Never>) async {
-        let once = ResumeOnce()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                once.arm(continuation)
-                Task {
-                    await task.value
-                    once.resume()
-                }
-            }
-        } onCancel: {
-            once.resume()
+    /// `startDrain`'s decision, for a caller already inside the lock. Returns
+    /// the waiting task it pre-empted, to be cancelled outside the lock.
+    ///
+    /// The task is created inside the claim, so the slot never holds a
+    /// half-state and there is no late "still ours?" assignment to guard.
+    private func decideDrain(_ current: inout State, after delay: TimeInterval) -> Task<Void, Never>? {
+        guard current.gateOpen else { return nil }
+        let due = max(delay, Self.secondsOwed(current.retryNotBefore))
+        switch current.drain {
+        case .running:
+            return nil
+        case let .waiting(existing):
+            guard due == 0 else { return nil }
+            current.drain = .running(makeOwnedDrain(&current, after: 0))
+            return existing.task
+        case .idle:
+            let owned = makeOwnedDrain(&current, after: due)
+            current.drain = due > 0 ? .waiting(owned) : .running(owned)
+            return nil
         }
+    }
+
+    /// The locked half of an awaited flush's call: notes what it waits for,
+    /// or settles it at once, and starts or joins a drain. Returns the
+    /// waiting task a zero-delay drain pre-empted.
+    private func beginAttempt(_ id: UInt64, _ current: inout State) -> Task<Void, Never>? {
+        guard current.gateOpen, !current.pending.isEmpty,
+              Self.secondsOwed(current.retryNotBefore) == 0 else {
+            waiters.settleNow(id)
+            return nil
+        }
+        let target = FlushWaiters.Target(
+            generation: current.eraseGeneration,
+            dequeued: current.dequeuedFromFront &+ current.pending.count,
+            failedAttempts: current.failedAttempts
+        )
+        guard waiters.aim(id, at: target) else { return nil }
+        return decideDrain(&current, after: 0)
+    }
+
+    /// Settles every awaited flush `state` answers. Call from inside the
+    /// lock section that produced `state`, with the ticket of the checkpoint
+    /// that section submitted for a removal, so a flush waits for that write
+    /// and no later one.
+    private func settleWaiters(_ state: State, removal: QueueWriter.Ticket?) {
+        waiters.settle(
+            FlushWaiters.Progress(
+                gateOpen: state.gateOpen,
+                generation: state.eraseGeneration,
+                dequeued: state.dequeuedFromFront,
+                failedAttempts: state.failedAttempts
+            ),
+            removal: removal
+        )
     }
 
     /// A backend's delay as one a sleep can serve. Bounded at the interval
@@ -921,7 +1006,10 @@ public final class SignalRecorder: Sendable {
             // owes when something did: the jittered draw, or the backend's
             // own delay where that is later. Recomputing a backoff here would
             // hand every install the same deterministic ceiling again.
-            let delay = current.consecutiveFailures == 0
+            //
+            // A registered flush waits on this drain, so it is not held a
+            // whole interval: it restarts at once, or when the retry is owed.
+            let delay = current.consecutiveFailures == 0 && waiters.count == 0
                 ? configuration.transmitInterval
                 : Self.secondsOwed(current.retryNotBefore)
             let owned = makeOwnedDrain(&current, after: delay)
@@ -947,32 +1035,123 @@ public final class SignalRecorder: Sendable {
     }
 }
 
-/// A continuation resumed at most once, by whichever of two parties gets
-/// there first, and at once if one got there before it was armed.
-private final class ResumeOnce: Sendable {
-    func arm(_ continuation: CheckedContinuation<Void, Never>) {
-        let resumeNow: Bool = state.withLock { state in
-            guard !state.fired else { return true }
-            state.continuation = continuation
-            return false
-        }
-        if resumeNow { continuation.resume() }
+/// The awaited flushes waiting on the recorder, under a lock of their own.
+///
+/// Apart from the recorder's lock so a cancel never takes that one: a
+/// restore or an identifier resolution can hold it for as long as the host
+/// takes, and a cancelled flush has to return regardless. The recorder takes
+/// this lock inside its own, never the reverse, and nothing here calls out
+/// while holding it.
+private final class FlushWaiters: Sendable {
+    // MARK: Internal
+
+    /// What a flush waits for, noted at its call: the erase generation, the
+    /// front count at which everything queued then has left, and the failed
+    /// attempts so far.
+    struct Target {
+        let generation: Int
+        let dequeued: Int
+        let failedAttempts: Int
     }
 
-    func resume() {
-        let waiting: CheckedContinuation<Void, Never>? = state.withLock { state in
-            guard !state.fired else { return nil }
-            state.fired = true
-            let armed = state.continuation
-            state.continuation = nil
-            return armed
+    /// The recorder's state as far as a flush can tell, read in the lock
+    /// section that changed it.
+    struct Progress {
+        let gateOpen: Bool
+        let generation: Int
+        let dequeued: Int
+        let failedAttempts: Int
+    }
+
+    var count: Int {
+        state.withLock { $0.entries.count }
+    }
+
+    func mint() -> UInt64 {
+        state.withLock { state in
+            state.lastID &+= 1
+            return state.lastID
         }
-        waiting?.resume()
+    }
+
+    func arm(_ id: UInt64, _ continuation: CheckedContinuation<Void, Never>) {
+        state.withLock { $0.entries[id] = Entry(continuation: continuation) }
+    }
+
+    /// Removes the waiter and resumes it. Idempotent, so a cancel and a
+    /// settle can both reach it.
+    func resume(_ id: UInt64) {
+        state.withLock { $0.entries.removeValue(forKey: id) }?.continuation.resume()
+    }
+
+    /// Gives a registered waiter its target. False when it is gone, so the
+    /// caller starts no drain for a flush nobody is waiting on.
+    func aim(_ id: UInt64, at target: Target) -> Bool {
+        state.withLock { state in
+            guard state.entries[id] != nil else { return false }
+            state.entries[id]?.target = target
+            return true
+        }
+    }
+
+    /// Readies a waiter to return without waiting for anything.
+    func settleNow(_ id: UInt64) {
+        state.withLock { state in
+            guard state.entries[id] != nil else { return }
+            state.entries[id]?.target = nil
+            state.ready.append((id, nil))
+        }
+    }
+
+    /// Readies every aimed waiter `progress` answers. One whose signals have
+    /// all left the queue waits for `removal` to land first.
+    func settle(_ progress: Progress, removal: QueueWriter.Ticket?) {
+        state.withLock { state in
+            for (id, entry) in state.entries {
+                guard let target = entry.target else { continue }
+                let erasedOrFailed = !progress.gateOpen
+                    || progress.generation != target.generation
+                    || progress.failedAttempts != target.failedAttempts
+                let left = progress.dequeued &- target.dequeued >= 0
+                guard erasedOrFailed || left else { continue }
+                state.entries[id]?.target = nil
+                state.ready.append((id, erasedOrFailed ? nil : removal))
+            }
+        }
+    }
+
+    /// Returns the waiters settled so far: at once, or once their removal
+    /// has landed. Call outside the recorder's lock, after any section that
+    /// can settle one.
+    func resumeSettled(writer: QueueWriter) {
+        let ready = state.withLock { state in
+            defer { state.ready = [] }
+            return state.ready
+        }
+        for (id, removal) in ready {
+            guard let removal else {
+                resume(id)
+                continue
+            }
+            Task(priority: .utility) { [self] in
+                await writer.awaitWrites(through: removal)
+                resume(id)
+            }
+        }
+    }
+
+    // MARK: Private
+
+    private struct Entry {
+        let continuation: CheckedContinuation<Void, Never>
+        /// Nil until the call is noted, and again once settled.
+        var target: Target?
     }
 
     private struct State {
-        var fired = false
-        var continuation: CheckedContinuation<Void, Never>?
+        var lastID: UInt64 = 0
+        var entries: [UInt64: Entry] = [:]
+        var ready: [(id: UInt64, removal: QueueWriter.Ticket?)] = []
     }
 
     private let state = Mutex(State())
