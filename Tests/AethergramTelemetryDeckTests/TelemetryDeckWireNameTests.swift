@@ -173,6 +173,21 @@ struct TelemetryDeckWireNameTests {
         #expect(mapped["TelemetryDeck.Calendar.hourOfDay"] == "unknown")
     }
 
+    /// Consumer parameters win the merge, so `hourOfDay` can carry any integer
+    /// a caller wrote. `Int.max + 1` traps, and the signal is already durable
+    /// by then, so every relaunch would re-send it and crash again.
+    @Test("An hour outside 0-23 passes through rather than trapping the send", arguments: [
+        "9223372036854775807",
+        "-9223372036854775808",
+        "24",
+        "-1"
+    ])
+    func outOfRangeHourPassesThrough(value: String) {
+        let mapped = TelemetryDeckWireNames.payload(from: [PayloadKey.calendarHourOfDay: value])
+
+        #expect(mapped["TelemetryDeck.Calendar.hourOfDay"] == value)
+    }
+
     /// The shift is keyed on `hourOfDay` alone. A numeric value under any other
     /// key, including one that looks like an hour, must arrive untouched.
     @Test("No other field's value is transformed")
