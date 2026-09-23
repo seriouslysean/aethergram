@@ -47,7 +47,7 @@ struct AppFlushTests {
     }
 
     @Test("an expiry cancels the work and ends the background task at once, and only once")
-    func expiryCancelsAndEnds() async {
+    func expiryCancelsAndEnds() async throws {
         let tasks = BackgroundTasks()
         let work = StubWork()
         let flush = AppFlush(beginBackgroundTask: tasks.begin, endBackgroundTask: tasks.end, work: { await work.run() })
@@ -56,6 +56,8 @@ struct AppFlushTests {
 
         tasks.expirationHandler?()
         #expect(tasks.ended == [7])
+        // Bounded: work nobody cancelled never finishes, and awaiting its task would hang the run.
+        try #require(await work.finished.within(), "the expiry did not cancel the work")
         await flush.waitForWork()
         #expect(work.wasCancelled)
         #expect(tasks.ended == [7])
