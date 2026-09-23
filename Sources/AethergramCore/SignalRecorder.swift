@@ -21,14 +21,39 @@ import os
 public final class SignalRecorder: Sendable {
     // MARK: Lifecycle
 
+    /// Every host seam but the transport is called with the recorder's lock
+    /// held. That lock is not recursive: a seam that calls back into the
+    /// recorder terminates the process at the entry point it called.
+    ///
     /// - Parameters:
+    ///   - configuration: Batching, delivery, and logging policy, read for the
+    ///     life of the recorder.
+    ///   - transport: Where batches go. Called from the recorder's own drain
+    ///     task at utility priority and never under its lock, so a send may
+    ///     suspend for as long as the network takes.
+    ///   - queueStorage: The durable queue. `load()` is called under the lock,
+    ///     once per grant; `persist` and `purge` run on the recorder's serial
+    ///     writer queue. None may call back into the recorder.
+    ///   - retentionStore: Where the session counters live. Every call is made
+    ///     under the lock, and none may call back into the recorder.
     ///   - clientUserProvider: Resolves the consumer's analytics identifier.
     ///     Called only on a transmit that consent already permits, so an
     ///     implementation that mints and persists an identifier on first read
-    ///     cannot plant one before the answer.
+    ///     cannot plant one before the answer. Called under the lock on the
+    ///     drain's thread rather than any caller's: it must be cheap,
+    ///     must not hop to the main actor — `MainActor.assumeIsolated` traps
+    ///     there, and `DispatchQueue.main.sync` deadlocks against a record the
+    ///     main thread is making — and must not call back into the recorder.
     ///   - environmentProvider: The authored default payload. Called at most
     ///     once per grant, on the first permitted record, for the same reason.
     ///     It cannot drop the package's identity: `enqueue` stamps that itself.
+    ///     Called under the lock on whichever thread made that record, with
+    ///     the same constraints as `clientUserProvider`.
+    ///   - calendar: The calendar day-keyed counters and the hour-of-day field
+    ///     are computed in.
+    ///   - now: The clock stamped on every signal and session boundary. A
+    ///     retry deadline does not read it: that is measured on a monotonic
+    ///     clock, so a wall-clock change cannot move it.
     public init(
         configuration: AethergramConfiguration,
         transport: any SignalTransport,
@@ -59,6 +84,7 @@ public final class SignalRecorder: Sendable {
     /// batch — because a toggle that leaves yesterday's signals on disk to be
     /// sent later is not an off switch.
     public func updateConsent(_ state: ConsentState) {
+        requireNoReentry()
         let erased: (happened: Bool, drain: Task<Void, Never>?) = lock.withLock { current in
             current.consent = state
             guard !state.permitsCollection else {
@@ -79,12 +105,14 @@ public final class SignalRecorder: Sendable {
 
     /// Records a consumer signal. The configured prefix is applied here.
     public func record(_ name: String, parameters: [String: String] = [:], floatValue: Double? = nil) {
+        requireNoReentry()
         enqueue(name: configuration.signalPrefix + name, parameters: parameters, floatValue: floatValue)
     }
 
     /// Records the purchase preset. Unprefixed: the name is the package's, and
     /// each adapter maps it onto its vendor's own purchase event.
     public func recordPurchaseCompleted(_ details: PurchaseDetails, parameters: [String: String] = [:]) {
+        requireNoReentry()
         enqueue(
             name: PresetSignal.purchaseCompleted.rawValue,
             parameters: details.parameters.merging(parameters) { $1 },
@@ -101,6 +129,7 @@ public final class SignalRecorder: Sendable {
     /// stray dictionary entry under the same name is a mistake rather than a
     /// more specific value.
     public func recordError(id: String, parameters: [String: String] = [:]) {
+        requireNoReentry()
         var combined = parameters
         combined[PayloadKey.errorID] = id
         enqueue(name: PresetSignal.errorOccurred.rawValue, parameters: combined, floatValue: nil)
@@ -110,6 +139,7 @@ public final class SignalRecorder: Sendable {
     /// a short-lived extension process has no app foreground to key off — so
     /// the host calls it and the package counts.
     public func beginSession() {
+        requireNoReentry()
         lock.withLock { current in
             guard current.consent.permitsCollection else { return }
             loadRetentionIfNeeded(&current)
@@ -145,6 +175,7 @@ public final class SignalRecorder: Sendable {
     /// checkpoint: the store may be shared with a process still running that
     /// session, and closing it against this clock counts time nobody spent.
     public func endSession() {
+        requireNoReentry()
         lock.withLock { current in
             guard current.consent.permitsCollection, current.ownsOpenSession,
                   let existing = current.retention else { return }
@@ -159,6 +190,7 @@ public final class SignalRecorder: Sendable {
     /// the process may not survive long enough to finish — which is why the
     /// queue is durable rather than why this call blocks.
     public func flush() {
+        requireNoReentry()
         // The consumer calls this on its way out of an active cycle, which is
         // the one moment a not-yet-written queue would be lost rather than
         // merely late. Bounded by a single encode and write.
@@ -170,6 +202,7 @@ public final class SignalRecorder: Sendable {
     /// data-reset path: this is what makes the retention counters clearable,
     /// which the SDK this replaces offered no way to do.
     public func reset() {
+        requireNoReentry()
         let detached: Task<Void, Never>? = lock.withLock { current in
             eraseCollected(&current)
             // A reset leaves consent alone, so the gate stays open and the next
@@ -346,6 +379,14 @@ public final class SignalRecorder: Sendable {
     private let now: @Sendable () -> Date
     private let logger: Logger
     private let lock = OSAllocatedUnfairLock(initialState: State())
+
+    /// The first line of every public entry point. A host seam called under
+    /// the lock that calls back in would otherwise die inside the lock's own
+    /// recursion check, frames away from the call that caused it; this names
+    /// the entry point instead.
+    private func requireNoReentry() {
+        lock.precondition(.notOwner)
+    }
 
     /// Whether a batch claimed at `generation` may still be acted on. Consent
     /// alone is not the question: `reset()` erases without moving the answer.

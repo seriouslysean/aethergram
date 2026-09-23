@@ -342,8 +342,8 @@ final class SpyRetentionStore: RetentionStore, @unchecked Sendable {
     /// Run once, inside the `clear` an erase performs — which the recorder
     /// performs inside its own lock. That makes this the only seam a test has
     /// into an erase already in progress, and the work here must not call back
-    /// into the recorder: the lock is not recursive, so this thread would
-    /// deadlock rather than race. Release another thread instead.
+    /// into the recorder: the lock is not recursive, so the process would
+    /// terminate rather than race. Release another thread instead.
     var duringClear: (@Sendable () -> Void)? {
         get { lock.withLock { clearWork } }
         set { lock.withLock { clearWork = newValue } }
