@@ -109,8 +109,8 @@ struct TelemetryDeckWireNameTests {
     }
 
     @Test("A consumer signal name passes through unchanged", arguments: [
-        "Example.Game.started",
-        "Example.Turn.sent",
+        "Example.Alpha.started",
+        "Example.Beta.sent",
         "purchase.attempted"
     ])
     func consumerSignalNamesPassThrough(name: String) {
@@ -119,9 +119,9 @@ struct TelemetryDeckWireNameTests {
 
     @Test("A consumer parameter key passes through unchanged")
     func consumerParameterKeysPassThrough() {
-        let mapped = TelemetryDeckWireNames.payload(from: ["packID": "starter", "roundIndex": "3"])
+        let mapped = TelemetryDeckWireNames.payload(from: ["itemID": "first", "stepIndex": "3"])
 
-        #expect(mapped == ["packID": "starter", "roundIndex": "3"])
+        #expect(mapped == ["itemID": "first", "stepIndex": "3"])
     }
 
     /// A caller key spelled as a wire name lands on the same wire key as the
@@ -240,9 +240,9 @@ struct TelemetryDeckWireNameTests {
         let signal = TelemetryDeckFixture.signal(
             name: PresetSignal.purchaseCompleted.rawValue,
             parameters: [
-                PayloadKey.purchaseProductID: "com.example.app.pack.one",
+                PayloadKey.purchaseProductID: "com.example.app.product.one",
                 PayloadKey.calendarHourOfDay: "23",
-                "packID": "starter"
+                "itemID": "first"
             ],
             floatValue: 1.99
         )
@@ -251,9 +251,9 @@ struct TelemetryDeckWireNameTests {
 
         #expect(try TelemetryDeckFixture.string(element["type"], "type") == "TelemetryDeck.Purchase.completed")
         let payload = try #require(element["payload"] as? [String: String])
-        #expect(payload["TelemetryDeck.Purchase.productID"] == "com.example.app.pack.one")
+        #expect(payload["TelemetryDeck.Purchase.productID"] == "com.example.app.product.one")
         #expect(payload["TelemetryDeck.Calendar.hourOfDay"] == "24")
-        #expect(payload["packID"] == "starter")
+        #expect(payload["itemID"] == "first")
         #expect(payload["purchase.productID"] == nil)
     }
 

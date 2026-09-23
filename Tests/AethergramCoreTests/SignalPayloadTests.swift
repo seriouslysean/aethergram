@@ -171,7 +171,7 @@ struct SignalPayloadTests {
         let start = try testDate(year: 2026, month: 1, day: 5)
         let fixture = makeFixture(
             directory: directory,
-            configuration: testConfiguration(signalPrefix: "sk."),
+            configuration: testConfiguration(signalPrefix: "prefix."),
             now: steppingClock(from: start)
         )
 
@@ -190,7 +190,7 @@ struct SignalPayloadTests {
         await fixture.recorder.drain()
 
         #expect(fixture.transport.sentSignalNames == [
-            "sk.thing.happened",
+            "prefix.thing.happened",
             PresetSignal.purchaseCompleted.rawValue,
             PresetSignal.errorOccurred.rawValue
         ])
