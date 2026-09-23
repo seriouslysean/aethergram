@@ -87,15 +87,15 @@ It follows semantic versioning against the field set, and the reader is who it p
 removed field breaks whoever keyed on it, so a removal is major, an addition is minor, and a
 changed form is whichever of the two a reader would have to react to.
 
-A fix to a field's value that leaves the form a reader keys on alone is none of those. 0.3.2 left
-the version at 2.0.0 while numbering `acquisition.firstSessionDate` in the Gregorian calendar. On a
-device set to Gregorian the string is unchanged. On any other device the old value was not a date
-in the form every other device sent, so the release corrects a defect in the value. 0.3.1's doc
-comment on `RetentionRecord.firstSessionDay`, "`yyyy-MM-dd` in the device's calendar", described
-that defect. A stored day is converted when the recorder loads it, and one that no reading places
-between 2015-01-01 and tomorrow is kept as written. A day written under the Ethiopic calendar's
-Incarnation-era numbering stays unconverted, and one in a Chinese or Dangi leap month converts a
-lunar month early, as the changelog describes.
+A fix to a field's value is none of those. 0.3.2 left the version at 2.0.0 while numbering
+`acquisition.firstSessionDate` in the Gregorian calendar. On a device set to Gregorian the string
+is unchanged. On any other device the old value was not a date in the form every other device
+sent, so the release corrects a defect in the value rather than changing the form a reader keys
+on. 0.3.1's doc comment on `RetentionRecord.firstSessionDay`, "`yyyy-MM-dd` in the device's
+calendar", described that defect. A stored day is converted when the recorder loads it, and one
+that no reading places between 2015-01-01 and tomorrow is kept as written. A day written under the
+Ethiopic calendar's Incarnation-era numbering stays unconverted, and one in a Chinese or Dangi leap
+month converts a lunar month early, as the changelog describes.
 
 ## How versions move
 
