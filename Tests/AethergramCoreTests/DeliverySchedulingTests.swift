@@ -382,9 +382,15 @@ struct DeliverySchedulingTests {
     /// interval for the life of the process.
     ///
     /// Bounded on both sides, because from one sample the two defects look
-    /// alike: fewer than two wakes says the halt scheduled nothing at all,
-    /// more than ten says nothing damped it — flat retries across this window
-    /// would be roughly fifty, and the backoff makes five.
+    /// alike: never reaching a second wake says the halt scheduled nothing at
+    /// all, and more than ten by the end of a window after it says nothing
+    /// damped it — flat retries across that window would be roughly fifty,
+    /// and the backoff makes five.
+    ///
+    /// The halves are measured differently because a starved pool pushes them
+    /// the same way. The lower bound waits to a deadline rather than counting
+    /// inside a window, so a slow runner reaches it late instead of failing;
+    /// the upper bound counts inside one, where starvation only lowers it.
     @Test("A drain halted for want of an identifier backs off instead of waking at the interval")
     func haltedDrainBacksOffRatherThanWakingAtTheInterval() async throws {
         let directory = try #require(TestTempDirectory.url)
@@ -407,10 +413,11 @@ struct DeliverySchedulingTests {
 
         recorder.updateConsent(.granted)
         recorder.record("stranded")
+        await waitUntil { claims.count >= 2 }
+        #expect(claims.count >= 2)
         try await Task.sleep(for: .milliseconds(500))
         withExtendedLifetime(recorder) {}
 
-        #expect(claims.count >= 2)
         #expect(claims.count <= 10)
         // The identifier is what the halt is for: nothing may leave without it.
         #expect(transport.sendCount == 0)
