@@ -63,13 +63,14 @@ final class QueueWriter: @unchecked Sendable {
         }
     }
 
-    /// Waits for any pending write to reach the store.
-    ///
-    /// Bounded by the operation in flight plus at most one purge and one
-    /// persist behind it, each as long as the store takes. Two callers need
-    /// that: the consumer's deactivation path, where the process is about to stop being
-    /// allowed to run, and an erase, which promises the file is gone rather
-    /// than that a delete was asked for.
+    /// Waits until nothing is pending: every write submitted before the call
+    /// and every one submitted while it waits, because the drain it waits
+    /// behind keeps writing until nothing is left. A caller recording
+    /// continuously from another thread extends the wait for as long as it
+    /// keeps submitting. Two callers need it: the consumer's deactivation
+    /// path, where the process is about to stop being allowed to run, and an
+    /// erase, which promises the file is gone rather than that a delete was
+    /// asked for.
     func waitForPendingWrites() {
         queue.sync {}
     }

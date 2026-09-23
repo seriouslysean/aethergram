@@ -200,14 +200,14 @@ public final class SignalRecorder: Sendable {
     /// the process may not survive long enough to finish — which is why the
     /// queue is durable rather than why this call blocks.
     ///
-    /// Blocks the caller until pending queue writes reach the store, and not
-    /// until the send: that runs on the drain, after this returns.
+    /// Blocks the caller until no queue write is pending, including one
+    /// submitted while it waits, so recording continuously from another
+    /// thread extends the wait. It does not wait for the send.
     public func flush() {
         requireNoReentry()
         // The consumer calls this on its way out of an active cycle, which is
         // the one moment a not-yet-written queue would be lost rather than
-        // merely late. Bounded by the write in flight plus one purge and one
-        // persist; the send itself is not waited for.
+        // merely late.
         writer.waitForPendingWrites()
         startDrain(after: 0)
     }
@@ -645,9 +645,10 @@ public final class SignalRecorder: Sendable {
 
     /// The one part of an erase that cannot happen under the lock. The delete
     /// has to land before the caller returns: a recorder torn down in the same
-    /// breath as a decline would otherwise leave the file behind. Bounded by
-    /// the write already in flight, the delete, and at most one snapshot
-    /// submitted after it.
+    /// breath as a decline would otherwise leave the file behind. Waits until
+    /// no write is pending, including one submitted while it waits. After a
+    /// decline a record submits nothing; after a reset the gate stays open,
+    /// so recording continuously from another thread extends the wait.
     private func awaitErasure() {
         writer.waitForPendingWrites()
     }
