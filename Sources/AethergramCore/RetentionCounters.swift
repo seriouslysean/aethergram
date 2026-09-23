@@ -29,7 +29,6 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
         self.previousSessionSeconds = previousSessionSeconds
         self.openSessionStartedAt = openSessionStartedAt
         self.lastActivityAt = lastActivityAt
-        daysAreGregorian = true
     }
 
     /// Tolerant of a record written before the session fields existed: every
@@ -45,7 +44,6 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
         previousSessionSeconds = try container.decodeIfPresent(Double.self, forKey: .previousSessionSeconds)
         openSessionStartedAt = try container.decodeIfPresent(Date.self, forKey: .openSessionStartedAt)
         lastActivityAt = try container.decodeIfPresent(Date.self, forKey: .lastActivityAt)
-        daysAreGregorian = try container.decodeIfPresent(Bool.self, forKey: .daysAreGregorian) ?? false
     }
 
     // MARK: Public
@@ -80,16 +78,6 @@ public struct RetentionRecord: Codable, Equatable, Sendable {
     /// extension left open behind a locked screen reports the time it was used
     /// rather than the time it sat there.
     public var lastActivityAt: Date?
-
-    // MARK: Internal
-
-    /// Whether the day strings are Gregorian. Releases before 0.3.2 wrote them
-    /// in the device's own calendar, and a record decoded without this key is
-    /// one of those: `RetentionCounters` converts it once and sets this, since
-    /// converting twice re-reads a Gregorian year in the old calendar. A record
-    /// built with the public initializer counts as Gregorian, so a host that
-    /// rebuilds its record field by field is never converted again.
-    var daysAreGregorian: Bool
 }
 
 /// Where the retention record lives. The consumer backs this with storage its
@@ -165,13 +153,10 @@ enum RetentionCounters {
         calendar: Calendar
     ) -> RetentionRecord {
         let day = dayString(for: date, calendar: calendar)
-        // Converted before the history is searched for today, or a day written
-        // in the old numbering would be appended a second time.
-        let existing = record.map { convertingDaysToGregorian(in: $0, at: date, calendar: calendar) }
         // Any session still open belongs to a process that is gone. Close it
         // first, against its own last activity rather than against now, so the
         // gap between that kill and this activation is not counted as use.
-        var updated = closingOpenSession(in: existing ?? RetentionRecord(firstSessionDay: day))
+        var updated = closingOpenSession(in: record ?? RetentionRecord(firstSessionDay: day))
         updated.totalSessionsCount = saturatingIncrement(updated.totalSessionsCount)
         updated.openSessionStartedAt = date
         updated.lastActivityAt = date
@@ -241,11 +226,7 @@ enum RetentionCounters {
         at date: Date,
         calendar: Calendar
     ) -> [String: String] {
-        // The recorder reports from the loaded record before a session start
-        // rewrites it, so a record in the old numbering is converted here too.
-        guard let record = record.map({ convertingDaysToGregorian(in: $0, at: date, calendar: calendar) }) else {
-            return [:]
-        }
+        guard let record else { return [:] }
         var parameters: [String: String] = [
             PayloadKey.acquisitionFirstSessionDate: record.firstSessionDay,
             PayloadKey.retentionTotalSessionsCount: "\(record.totalSessionsCount)",
@@ -274,40 +255,46 @@ enum RetentionCounters {
         return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
-    /// A record from before day strings were Gregorian, rewritten in Gregorian
-    /// numbering; any other record unchanged.
+    /// The record with every day string in Gregorian numbering, decided string
+    /// by string so that converting twice changes nothing.
     ///
-    /// Each string is read in `calendar`, on the assumption that the device
-    /// has not switched calendars since writing it. Converted days keep their
-    /// order and lose duplicates. A string that does not name a day in
-    /// `calendar` is kept as written rather than guessed at.
+    /// Releases before 0.3.2 wrote the device's own calendar, and nothing in
+    /// a record says which numbering it holds: 0.3.1 saves only the keys it
+    /// knows, and a host may rebuild the record through the initializer. A
+    /// string that reads as a Gregorian day in the window is kept. Any other
+    /// is read in `calendar`, on the assumption that the device has not
+    /// switched calendars since writing it, and kept converted only if that
+    /// reading lands in the window. Anything else is kept as written rather
+    /// than guessed at. Converted days keep their order and lose duplicates.
+    ///
+    /// An Ethiopic year, counted from the incarnation, falls inside the
+    /// Gregorian window, so a day written in that numbering is taken as
+    /// Gregorian and kept.
     static func convertingDaysToGregorian(
         in record: RetentionRecord,
         at date: Date,
         calendar: Calendar
     ) -> RetentionRecord {
-        guard !record.daysAreGregorian else { return record }
-        var converted: RetentionRecord
-        if calendar.identifier == .gregorian {
-            converted = record
-        } else {
-            let gregorian = dayCalendar(matching: calendar)
-            let convert = { (day: String) in
-                gregorianDay(fromLegacy: day, at: date, calendar: calendar, gregorian: gregorian) ?? day
-            }
-            var seen: Set<String> = []
-            converted = RetentionRecord(
-                firstSessionDay: convert(record.firstSessionDay),
-                totalSessionsCount: record.totalSessionsCount,
-                completedSessionsCount: record.completedSessionsCount,
-                distinctDaysUsed: record.distinctDaysUsed.map(convert).filter { seen.insert($0).inserted },
-                totalSessionSeconds: record.totalSessionSeconds,
-                previousSessionSeconds: record.previousSessionSeconds,
-                openSessionStartedAt: record.openSessionStartedAt,
-                lastActivityAt: record.lastActivityAt
-            )
+        guard calendar.identifier != .gregorian else { return record }
+        let gregorian = dayCalendar(matching: calendar)
+        let window = DayWindow(at: date, gregorian: gregorian)
+        let convert = { (day: String) in
+            guard !window.contains(day) else { return day }
+            return gregorianDay(fromLegacy: day, at: date, calendar: calendar, gregorian: gregorian, window: window)
+                ?? day
         }
-        converted.daysAreGregorian = true
+        var converted = RetentionRecord(
+            firstSessionDay: convert(record.firstSessionDay),
+            totalSessionsCount: record.totalSessionsCount,
+            completedSessionsCount: record.completedSessionsCount,
+            distinctDaysUsed: record.distinctDaysUsed.map(convert),
+            totalSessionSeconds: record.totalSessionSeconds,
+            previousSessionSeconds: record.previousSessionSeconds,
+            openSessionStartedAt: record.openSessionStartedAt,
+            lastActivityAt: record.lastActivityAt
+        )
+        var seen: Set<String> = []
+        converted.distinctDaysUsed.removeAll { !seen.insert($0).inserted }
         return converted
     }
 
@@ -343,13 +330,17 @@ enum RetentionCounters {
         return Int(exactly: average) ?? noCompletedSessions
     }
 
+    /// Bounded above as well as below: a day string no reading could place
+    /// is kept as written, and a far-future year or a non-date sorts after
+    /// every cutoff.
     private static func recentDayCount(in record: RetentionRecord, at date: Date, calendar: Calendar) -> Int {
         let gregorian = dayCalendar(matching: calendar)
+        let window = DayWindow(at: date, gregorian: gregorian)
         guard let cutoff = gregorian.date(byAdding: .day, value: -recentWindowDays, to: date) else {
-            return record.distinctDaysUsed.count
+            return record.distinctDaysUsed.count { window.contains($0) }
         }
         let cutoffDay = dayString(for: cutoff, calendar: gregorian)
-        return record.distinctDaysUsed.count { $0 >= cutoffDay }
+        return record.distinctDaysUsed.count { window.contains($0) && $0 >= cutoffDay }
     }
 
     /// The calendar day strings are numbered in: Gregorian, on the caller's
@@ -362,22 +353,22 @@ enum RetentionCounters {
     }
 
     /// The Gregorian day a string in `calendar`'s numbering named, or nil when
-    /// it names none.
+    /// it names none inside `window`.
     ///
     /// The string carries no era, so it is read in the era current at `date`,
-    /// and in the one before when that lands in the future: a Japanese year
-    /// written before an era change would otherwise be read decades ahead.
-    /// Read at noon, which no time-zone transition skips.
+    /// and in the one before when that lands outside the window: a Japanese
+    /// year written before an era change would otherwise be read decades
+    /// ahead. Read at noon, which no time-zone transition skips.
     private static func gregorianDay(
         fromLegacy day: String,
         at date: Date,
         calendar: Calendar,
-        gregorian: Calendar
+        gregorian: Calendar,
+        window: DayWindow
     ) -> String? {
         let fields = day.split(separator: "-", omittingEmptySubsequences: false).compactMap { Int($0) }
         guard fields.count == 3 else { return nil }
         let currentEra = calendar.component(.era, from: date)
-        let latestPlausible = date.addingTimeInterval(24 * 60 * 60)
         for era in [currentEra, currentEra - 1] {
             let components = DateComponents(era: era, year: fields[0], month: fields[1], day: fields[2], hour: 12)
             guard let resolved = calendar.date(from: components) else { continue }
@@ -388,9 +379,56 @@ enum RetentionCounters {
             guard check.era == era, check.year == fields[0], check.month == fields[1], check.day == fields[2] else {
                 continue
             }
-            guard resolved <= latestPlausible else { continue }
-            return dayString(for: resolved, calendar: gregorian)
+            let converted = dayString(for: resolved, calendar: gregorian)
+            guard window.contains(converted) else { continue }
+            return converted
         }
         return nil
+    }
+}
+
+/// The Gregorian days a stored day string can name: from 2015-01-01, before
+/// anything this package wrote, through tomorrow on the caller's clock.
+///
+/// Also what tells the numberings apart. A Buddhist, Hebrew, or Ethiopic
+/// amete-alem year reads as Gregorian after it, and an Islamic, Persian,
+/// Coptic, or Japanese year before it, so a string inside it needs no calendar
+/// work to be taken as Gregorian.
+private struct DayWindow {
+    // MARK: Lifecycle
+
+    init(at date: Date, gregorian: Calendar) {
+        let tomorrow = gregorian.date(byAdding: .day, value: 1, to: date) ?? date
+        latest = RetentionCounters.dayString(for: tomorrow, calendar: gregorian)
+    }
+
+    // MARK: Internal
+
+    /// Compared as strings: for a well-formed `yyyy-MM-dd`, string order is
+    /// day order.
+    func contains(_ day: String) -> Bool {
+        Self.isWellFormed(day) && day >= Self.earliest && day <= latest
+    }
+
+    // MARK: Private
+
+    private static let earliest = "2015-01-01"
+
+    private let latest: String
+
+    /// Four digits, a dash, a month 01-12, a dash, a day 01-31.
+    private static func isWellFormed(_ day: String) -> Bool {
+        let bytes = Array(day.utf8)
+        guard bytes.count == 10, bytes[4] == UInt8(ascii: "-"), bytes[7] == UInt8(ascii: "-") else { return false }
+        func number(_ range: Range<Int>) -> Int? {
+            var value = 0
+            for byte in bytes[range] {
+                guard byte >= UInt8(ascii: "0"), byte <= UInt8(ascii: "9") else { return nil }
+                value = value * 10 + Int(byte - UInt8(ascii: "0"))
+            }
+            return value
+        }
+        guard number(0 ..< 4) != nil, let month = number(5 ..< 7), let day = number(8 ..< 10) else { return false }
+        return (1 ... 12).contains(month) && (1 ... 31).contains(day)
     }
 }

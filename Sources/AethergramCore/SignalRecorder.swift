@@ -149,7 +149,8 @@ public final class SignalRecorder: Sendable {
         requireNoReentry()
         lock.withLock { current in
             guard current.consent.permitsCollection else { return }
-            loadRetentionIfNeeded(&current)
+            let started = now()
+            loadRetentionIfNeeded(&current, at: started)
             // A session this instance already opened stays open. Two calls land
             // in one activation whenever consent is adopted from another device
             // — the host grants on that arrival, before the cycle's own session
@@ -161,7 +162,6 @@ public final class SignalRecorder: Sendable {
             // that died is also open, and closing that one is the entire point
             // of the inference path.
             if current.ownsOpenSession { return }
-            let started = now()
             current.openedSessionAt = started
             current.sessionID = UUID().uuidString
             let record = RetentionCounters.recordingSessionStart(
@@ -430,10 +430,10 @@ public final class SignalRecorder: Sendable {
         let enqueued: (queued: Int, overflowBegan: Bool)? = lock.withLock { current in
             guard current.consent.permitsCollection else { return nil }
             restoreQueueIfNeeded(&current)
-            loadRetentionIfNeeded(&current)
+            let recordedAt = now()
+            loadRetentionIfNeeded(&current, at: recordedAt)
 
             if current.environment == nil { current.environment = environmentProvider() }
-            let recordedAt = now()
             var merged = current.environment ?? [:]
             // The identity is stamped here rather than left to the provider,
             // because a host that overrides the environment would otherwise
@@ -668,10 +668,16 @@ public final class SignalRecorder: Sendable {
         writer.persist(state.pending)
     }
 
-    private func loadRetentionIfNeeded(_ state: inout State) {
+    /// Day strings are converted here, once per load, rather than on every
+    /// signal: a record from before 0.3.2 holds the device's own numbering,
+    /// and reading it back costs calendar work per day. The converted record
+    /// is what the next save persists.
+    private func loadRetentionIfNeeded(_ state: inout State, at date: Date) {
         guard !state.retentionLoaded else { return }
         state.retentionLoaded = true
-        state.retention = retentionStore.load()
+        state.retention = retentionStore.load().map {
+            RetentionCounters.convertingDaysToGregorian(in: $0, at: date, calendar: calendar)
+        }
     }
 
     /// Starts the one owned drain, or lets an existing one stand.

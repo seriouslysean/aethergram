@@ -9,8 +9,9 @@ import Testing
 /// A device on the Buddhist calendar sent `acquisition.firstSessionDate` as
 /// `2569-09-23`, and the Japanese calendar restarts its year at an era change,
 /// so a string comparison across one put the new era's days before the old
-/// era's. Records written that way are converted once, in the calendar that
-/// wrote them, and never again.
+/// era's. Records written that way are converted when the recorder loads them,
+/// in the calendar that wrote them, one string at a time, so a second load
+/// changes nothing.
 @Suite("Retention day numbering", .tags(.persistence))
 struct RetentionDayNumberingTests {
     // MARK: Internal
@@ -59,8 +60,8 @@ struct RetentionDayNumberingTests {
     }
 
     /// Converted exactly once: a Gregorian 2026 re-read as Buddhist is 1483,
-    /// so a record that forgot it was converted would lose five centuries on
-    /// every load. The encode and decode between the two sessions is the
+    /// so a load that converted again would lose five centuries every time.
+    /// The encode, decode, and second load between the two sessions are the
     /// point — the conversion has to survive the host's storage.
     @Test("A record written in Buddhist numbering converts once and stays converted across storage")
     func legacyBuddhistRecordConvertsOnce() throws {
@@ -68,14 +69,19 @@ struct RetentionDayNumberingTests {
         let legacy = try Self.decodeLegacy(firstSessionDay: "2569-09-01", distinctDaysUsed: ["2569-09-01", "2569-09-23"])
 
         let today = try testDate(year: 2026, month: 9, day: 23)
-        let converted = RetentionCounters.recordingSessionStart(in: legacy, at: today, calendar: calendar)
+        let loaded = RetentionCounters.convertingDaysToGregorian(in: legacy, at: today, calendar: calendar)
+        let converted = RetentionCounters.recordingSessionStart(in: loaded, at: today, calendar: calendar)
         #expect(converted.firstSessionDay == "2026-09-01")
         // Today was already in the legacy history, so it is not appended twice.
         #expect(converted.distinctDaysUsed == ["2026-09-01", "2026-09-23"])
 
         let stored = try JSONDecoder().decode(RetentionRecord.self, from: JSONEncoder().encode(converted))
         let tomorrow = try testDate(year: 2026, month: 9, day: 24)
-        let reloaded = RetentionCounters.recordingSessionStart(in: stored, at: tomorrow, calendar: calendar)
+        let reloaded = RetentionCounters.recordingSessionStart(
+            in: RetentionCounters.convertingDaysToGregorian(in: stored, at: tomorrow, calendar: calendar),
+            at: tomorrow,
+            calendar: calendar
+        )
 
         #expect(reloaded.firstSessionDay == "2026-09-01")
         #expect(reloaded.distinctDaysUsed == ["2026-09-01", "2026-09-23", "2026-09-24"])
@@ -89,7 +95,8 @@ struct RetentionDayNumberingTests {
         let legacy = try Self.decodeLegacy(firstSessionDay: "2569-06-01", distinctDaysUsed: ["2569-06-01", "2569-09-20"])
         let today = try testDate(year: 2026, month: 9, day: 23)
 
-        let parameters = RetentionCounters.parameters(from: legacy, at: today, calendar: calendar)
+        let loaded = RetentionCounters.convertingDaysToGregorian(in: legacy, at: today, calendar: calendar)
+        let parameters = RetentionCounters.parameters(from: loaded, at: today, calendar: calendar)
 
         #expect(parameters[PayloadKey.acquisitionFirstSessionDate] == "2026-06-01")
         #expect(parameters[PayloadKey.retentionDistinctDaysUsedLastMonth] == "1")
@@ -110,7 +117,8 @@ struct RetentionDayNumberingTests {
         let legacy = try Self.decodeLegacy(firstSessionDay: legacyDays[0], distinctDaysUsed: legacyDays)
         let today = try testDate(year: 2026, month: 9, day: 23)
 
-        let converted = RetentionCounters.recordingSessionStart(in: legacy, at: today, calendar: calendar)
+        let loaded = RetentionCounters.convertingDaysToGregorian(in: legacy, at: today, calendar: calendar)
+        let converted = RetentionCounters.recordingSessionStart(in: loaded, at: today, calendar: calendar)
 
         #expect(converted.firstSessionDay == "2019-04-30")
         #expect(converted.distinctDaysUsed == ["2019-04-30", "2026-03-01", "2026-09-20", "2026-09-23"])
