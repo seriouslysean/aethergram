@@ -4,11 +4,10 @@
 
 Report it privately through GitHub's [private vulnerability
 reporting](https://github.com/seriouslysean/aethergram/security/advisories/new), which opens a
-draft advisory visible only to you and the maintainer. Do not open a public issue.
+draft advisory visible only to you and the maintainer. Do not describe it in a public issue.
 
-That link works only while private vulnerability reporting is enabled in Settings → Advanced
-Security. If that page is not available the setting is off, and saying so in a public issue,
-without describing what you found, is enough to get it turned on.
+If that link does not open a draft advisory, open a public issue saying only that you need a
+private channel, without describing what you found.
 
 This is a solo project. It offers no response-time commitment, because it could not keep one.
 
