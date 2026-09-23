@@ -135,7 +135,7 @@ let transport = TelemetryDeckTransport(
 ```
 
 `TelemetryDeckTransport` takes an optional `session:`. Pass only a default or ephemeral
-configuration: a background `URLSession` fails a precondition at construction.
+configuration: a background `URLSession` fails a precondition at the first send over it.
 
 `isTestMode` has no default on purpose. Deriving it from `DEBUG` alone is what sends Release
 simulator runs, developer-device builds, and every beta install to the live partition.
