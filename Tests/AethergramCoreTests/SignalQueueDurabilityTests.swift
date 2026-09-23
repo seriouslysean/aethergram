@@ -450,6 +450,72 @@ struct SignalQueueDurabilityTests {
         #expect(readable.load().map(\.name) == ["pending.a"])
     }
 
+    /// The recorder reads the queue once per grant, so a read that fails is
+    /// never asked again by the process that made it. Holding the writes off
+    /// the file until then holds them off for the rest of the process: every
+    /// signal it records has nothing on disk to survive a kill, long after the
+    /// file became readable again.
+    ///
+    /// The write is what finds out. Once the file reads, what it held goes
+    /// ahead of the snapshot, because the recorder never saw it and the next
+    /// process is the only one that can send it.
+    @Test(
+        "A queue file that becomes readable again takes the writes, and keeps what it held",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func queueFileReadableAgainTakesTheWritesAndKeepsWhatItHeld() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+        #expect(storage.load().isEmpty)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+
+        let next = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(next.load().map(\.name) == ["pending.a", "later.b"])
+    }
+
+    /// What a late read rescued belongs to no snapshot, so a snapshot cannot
+    /// empty it: the recorder's "everything delivered" is about what it holds,
+    /// and it never held these. Only an erase reaches them.
+    @Test(
+        "An empty snapshot keeps what a late read rescued, and an erase does not",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func emptySnapshotKeepsWhatALateReadRescued() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+        #expect(storage.load().isEmpty)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+        storage.persist([])
+        let afterDelivery = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(afterDelivery.load().map(\.name) == ["pending.a"])
+
+        storage.purge()
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        storage.persist([Signal(name: "granted.c", sessionID: "session-c", recordedAt: signalDate)])
+        let afterErase = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(afterErase.load().map(\.name) == ["granted.c"])
+    }
+
     /// The one purge failure the overwrite fallback cannot reach: a file the
     /// filesystem refuses to delete *and* to write over. The bytes stay, and
     /// the recorder's refusal to re-read them lasts exactly as long as its own
