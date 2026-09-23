@@ -295,6 +295,10 @@ public final class SignalRecorder: Sendable {
         /// signals recorded alike are equal, so a value match cannot tell a
         /// sent signal from the one that replaced it.
         var evictedFromFront = 0
+        /// Signals dropped since the queue last had room, and zero while it
+        /// has room. What logs the overflow once on the way in and once on
+        /// the way out, rather than on every record in between.
+        var droppedInOverflow = 0
 
         /// Drops everything collected under a grant. Both callers — a decline
         /// and a data reset — mean the same thing by it, and had drifted: only
@@ -327,6 +331,7 @@ public final class SignalRecorder: Sendable {
             sessionID = ""
             environment = nil
             drainClaim = nil
+            droppedInOverflow = 0
             eraseGeneration &+= 1
         }
     }
@@ -360,7 +365,7 @@ public final class SignalRecorder: Sendable {
     /// forbids before consent — the payload read, the identifier, the disk
     /// write — sits behind the guard on the first line.
     private func enqueue(name: String, parameters: [String: String], floatValue: Double?) {
-        let snapshot: [Signal]? = lock.withLock { current in
+        let enqueued: (queued: Int, overflowBegan: Bool)? = lock.withLock { current in
             guard current.consent.permitsCollection else { return nil }
             restoreQueueIfNeeded(&current)
             loadRetentionIfNeeded(&current)
@@ -403,11 +408,13 @@ public final class SignalRecorder: Sendable {
                     recordedAt: recordedAt
                 )
             )
+            var overflowBegan = false
             if current.pending.count > configuration.queueLimit {
                 let overflow = current.pending.count - configuration.queueLimit
                 current.pending.removeFirst(overflow)
                 current.evictedFromFront &+= overflow
-                logger.error("queue overflow dropped=\(overflow)")
+                overflowBegan = current.droppedInOverflow == 0
+                current.droppedInOverflow &+= overflow
             }
             // Submitted under the same lock that produced it, which is what
             // makes the order writes land in the order the mutations committed.
@@ -415,18 +422,24 @@ public final class SignalRecorder: Sendable {
             // queue, off this thread — most call sites are the main actor, and
             // rewriting the whole queue there is O(queue) at every emit.
             writer.persist(current.pending)
-            return current.pending
+            return (current.pending.count, overflowBegan)
         }
-        guard let snapshot else {
+        guard let enqueued else {
             logger.debug("record skip consent-withheld")
             return
         }
-        logger.debug("record ok name=\(name, privacy: .public) queued=\(snapshot.count)")
+        // Once on the way in, not per record: a queue stays full for as long
+        // as the device is offline, and every emit in that stretch would
+        // otherwise persist an error line.
+        if enqueued.overflowBegan {
+            logger.error("queue overflow began limit=\(self.configuration.queueLimit) dropping=oldest")
+        }
+        logger.debug("record ok name=\(name, privacy: .public) queued=\(enqueued.queued)")
         // A full batch goes now; anything less coalesces, so a burst of signals
         // costs one POST rather than one each. Without this the only drain was
         // the consumer's resign-time flush, and an app extension is suspended
         // moments after resigning — so nothing ever actually left the device.
-        startDrain(after: configuration.deliveryDelay(queued: snapshot.count))
+        startDrain(after: configuration.deliveryDelay(queued: enqueued.queued))
     }
 
     /// One transmission attempt. Returns whether another batch should follow
@@ -497,7 +510,7 @@ public final class SignalRecorder: Sendable {
         // enqueue's own in-lock persist land first, then get clobbered by
         // this stale (already-drained) snapshot arriving after it, silently
         // dropping the newly enqueued signal from durable storage.
-        let keepDraining: Bool? = lock.withLock { current -> Bool? in
+        let applied: (keepDraining: Bool, overflowDropped: Int)? = lock.withLock { current in
             // A verdict on a batch an erase has since dropped applies to
             // nothing: the queue it indexed no longer exists, and its removal
             // would take the front off one recorded under a later grant.
@@ -514,19 +527,28 @@ public final class SignalRecorder: Sendable {
                 current.consecutiveFailures = 0
                 current.retryNotBefore = nil
                 writer.persist(current.pending)
-                return !current.pending.isEmpty
+                var overflowDropped = 0
+                if current.pending.count < configuration.queueLimit {
+                    overflowDropped = current.droppedInOverflow
+                    current.droppedInOverflow = 0
+                }
+                return (!current.pending.isEmpty, overflowDropped)
             case .retryable:
                 current.consecutiveFailures += 1
                 Self.oweRetry(&current, after: configuration.backoffInterval(
                     consecutiveFailures: current.consecutiveFailures
                 ))
-                return false
+                return (false, 0)
             }
         }
-        guard let keepDraining else {
+        guard let applied else {
             logger.info("send outcome discarded count=\(sent.count) reason=erased")
             return false
         }
+        if applied.overflowDropped > 0 {
+            logger.info("queue overflow ended dropped=\(applied.overflowDropped)")
+        }
+        let keepDraining = applied.keepDraining
         switch outcome {
         case .delivered:
             logger.info("send ok count=\(sent.count)")
