@@ -228,6 +228,49 @@ else
     fail "the diff a verbose commit appends was scanned"
 fi
 
+printf '\nbuild gates\n'
+
+# What the checks compile today: the host, in debug, which is also all `swift test` compiles.
+core_gate() { swift build --package-path "$1" --scratch-path "$2" --target AethergramCore; }
+package_gate() { swift build --package-path "$1" --scratch-path "$2" --target Aethergram; }
+
+# A copy of the package to break on purpose, so a gate is watched refusing before it is trusted.
+copy_package() { mkdir -p "$1" && cp -R "$ROOT/Package.swift" "$ROOT/Sources" "$ROOT/Tests" "$1/"; }
+
+it "a core that imports the adapter is refused"
+BAD="$TMP/core-imports-adapter"
+copy_package "$BAD"
+printf 'import AethergramTelemetryDeck\n' > "$BAD/Sources/AethergramCore/ImportsAdapter.swift"
+OUT="$(core_gate "$BAD" "$BAD.build" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ]; then
+    fail "a core importing the adapter built"
+elif ! printf '%s\n' "$OUT" | grep -q 'AethergramTelemetryDeck'; then
+    printf '%s\n' "$OUT"
+    fail "the core build failed for a reason other than the import"
+else
+    pass
+fi
+
+it "the iOS arm, the release arm, and extension-unsafe API are each compiled"
+BAD="$TMP/unbuilt-arms"
+copy_package "$BAD"
+printf '#if os(iOS)\nlet iosArmProbe: Int = iosArmMarker\n#endif\n' > "$BAD/Sources/AethergramCore/IOSArm.swift"
+printf '#if !DEBUG\nlet releaseArmProbe: Int = releaseArmMarker\n#endif\n' > "$BAD/Sources/AethergramCore/ReleaseArm.swift"
+printf '#if os(iOS)\nimport UIKit\n@MainActor func extensionProbe() -> Any { UIApplication.shared }\n#endif\n' \
+    > "$BAD/Sources/AethergramCore/ExtensionUnsafe.swift"
+OUT="$(package_gate "$BAD" "$BAD.build" 2>&1)"; GATE_RC=$?
+# Whole-module release reports every file's error in one pass, so one build proves all three; a
+# missing marker names the arm the gate does not reach.
+MISSING=""
+for MARKER in iosArmMarker releaseArmMarker 'unavailable in application extensions'; do
+    printf '%s\n' "$OUT" | grep -q "$MARKER" || MISSING="$MISSING [$MARKER]"
+done
+if [ "$GATE_RC" -eq 0 ] || [ -n "$MISSING" ]; then
+    fail "the build gate exited $GATE_RC and never reached:$MISSING"
+else
+    pass
+fi
+
 printf '\nswift test\n'
 
 it "the package suite passes"
