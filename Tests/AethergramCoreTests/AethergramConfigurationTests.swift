@@ -32,21 +32,32 @@ struct AethergramConfigurationTests {
         #expect(configuration.maxBackoffInterval == twoYears)
     }
 
-    /// Past about 1.7e20 seconds `Duration.seconds` traps, so an interval
-    /// that large constructed and then crashed its host at the first retry.
-    /// The deadline built here is the one the recorder builds from a backoff.
-    @Test("An interval too large for a Duration is clamped rather than trapping at the first retry")
-    func intervalTooLargeForADurationIsClamped() {
+    /// `Duration.seconds` traps on a value past `Int64.max` seconds, about
+    /// 9.2e18, so under 0.3.1 an interval that large constructed and then
+    /// crashed its host in the coalescing sleep the first record schedules.
+    /// The ceiling is checked against that bound first, so a ceiling raised
+    /// past it fails here rather than trapping the runner; then the sleep and
+    /// the retry deadline the recorder builds are built from the clamped
+    /// values.
+    @Test("An interval too large for a Duration is clamped rather than trapping the first record's sleep")
+    func intervalTooLargeForADurationIsClamped() async throws {
+        try #require(AethergramConfiguration.maximumInterval < Double(Int64.max))
         let configuration = AethergramConfiguration(
             logSubsystem: "test",
             transmitInterval: 1e21,
             maxBackoffInterval: 1e21
         )
+        let delay = configuration.deliveryDelay(queued: 1)
         let backoff = configuration.backoffInterval(consecutiveFailures: 64)
 
         #expect(configuration.transmitInterval <= AethergramConfiguration.maximumInterval)
         #expect(configuration.maxBackoffInterval <= AethergramConfiguration.maximumInterval)
         #expect(backoff <= AethergramConfiguration.maximumInterval)
+        // Cancelled at once, so nothing waits out the interval: `.seconds`
+        // converts it before the sleep looks at cancellation.
+        let sleep = Task { try await Task.sleep(for: .seconds(delay)) }
+        sleep.cancel()
+        _ = await sleep.result
         let now = ContinuousClock.now
         #expect(now.advanced(by: .seconds(backoff)) > now)
     }
