@@ -13,8 +13,8 @@ public struct AethergramConfiguration: Sendable {
     /// - Precondition: `batchSize` and `queueLimit` are positive;
     ///   `transmitInterval` and `maxBackoffInterval` are finite and positive.
     ///   Anything else traps here, at construction, rather than at the first
-    ///   signal. An interval too large to schedule a retry with is clamped to
-    ///   one that is.
+    ///   signal. Both intervals are clamped to a ceiling far past any real
+    ///   schedule and below the size that would crash the first retry.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,

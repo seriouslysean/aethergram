@@ -13,9 +13,9 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
   policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`. The
   initializer traps on a `batchSize` or `queueLimit` that is not positive and on a
   `transmitInterval` or `maxBackoffInterval` that is not finite and positive, so a bad value fails
-  at launch rather than at the first signal. It clamps an interval only when one is large enough
-  to have crashed the host at its first retry. Ceilings for `queueLimit` and the intervals are
-  planned for a minor release.
+  at launch rather than at the first signal. It clamps both intervals to a ceiling far past any
+  real schedule and below the size that crashed the host at its first retry, and does not cap
+  `queueLimit`. Ceilings for `queueLimit` and the intervals are planned for a minor release.
 - `ConsentState`, its raw values, and its `permitsCollection` verdict. The raw values are API
   because a host persists them.
 - The host seams: `SignalQueueStorage`, `RetentionStore`, and `SignalTransport`, along with

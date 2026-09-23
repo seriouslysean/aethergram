@@ -9,11 +9,11 @@ A patch: nothing in the API list moved, and the payload version stays 2.0.0.
 
 ### Configuration and traps
 
-- `AethergramConfiguration` clamps `transmitInterval` and `maxBackoffInterval` only when an
-  interval is large enough to have crashed the host at its first retry, so such a configuration
-  now runs. Every other value behaves as it did in 0.3.1: a value that is not finite, or not
-  positive, still traps at construction, and nothing else is capped. Ceilings for `queueLimit` and
-  the intervals are planned for a minor release.
+- `AethergramConfiguration` clamps `transmitInterval` and `maxBackoffInterval` to a ceiling far
+  past any real schedule and below the size at which an interval crashed the host at its first
+  retry, so a configuration that crashed now runs. `queueLimit` is not capped, and a value that is
+  not finite, or not positive, still traps at construction, as in 0.3.1. Ceilings for `queueLimit`
+  and the intervals are planned for a minor release.
 - `TelemetryDeckTransport` traps at construction when given a background `URLSession`. Such a
   session used to abort the host at the first send instead.
 - Calling back into the recorder from a seam it calls under its lock (`clientUserProvider`,
