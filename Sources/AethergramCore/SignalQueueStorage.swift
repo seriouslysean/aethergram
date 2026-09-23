@@ -36,11 +36,17 @@ public protocol SignalQueueStorage: Sendable {
 /// without warning. A buffered write would lose the queue at exactly the
 /// moment the queue exists to survive.
 ///
-/// It owns its file, in the sense the protocol describes. Two of the refusals
-/// it can be carrying are the instance's own — a queue it could not read, and
-/// an erase that reached neither the bytes nor a mark — so a second live store
-/// over the same path has neither and would write over what the first is
-/// protecting. A copy of one store is the same store and shares both; a store
+/// It owns its file, in the sense the protocol describes. Three things it can
+/// be carrying are the instance's own — a queue it could not read, what a
+/// later read of that queue found, and an erase that reached neither the bytes
+/// nor a mark — so a second live store over the same path has none of them
+/// and would write over what the first is protecting.
+///
+/// A queue it could not read keeps the writes off the file, and every write
+/// retries the read. Once it reads, what the file held is written ahead of
+/// every snapshot until a load hands it back or an erase removes it, because
+/// the recorder never saw those signals and only a later process can send
+/// them. A copy of one store is the same store and shares both; a store
 /// constructed separately is not. Give a second consumer in one process a
 /// `filename` of its own, and give a second process a container of its own.
 public struct FileSignalQueueStorage: SignalQueueStorage {
@@ -113,6 +119,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     }
 
     private func loadLocked() -> [Signal] {
+        // A load answers for the whole file, carried signals included: it
+        // hands them back, erases them, or cannot read them — and then a late
+        // read takes them from the file again.
+        file.carried = []
         // An erase that never landed outranks whatever the file holds: those
         // signals were collected under an answer that has since been
         // withdrawn, and restoring them is the one thing this store must never
@@ -127,16 +137,11 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         case .absent:
             break
         }
-        let data: Data
-        do {
-            data = try Data(contentsOf: fileURL)
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-            // Asked by reading rather than by `fileExists`, which answers "no"
-            // both for a container that holds no queue and for one this
-            // process cannot reach — opposite facts under one answer.
+        switch readQueueFile() {
+        case .absent:
             file.isUnread = false
             return []
-        } catch {
+        case let .unreadable(error):
             // Reading and decoding fail for opposite reasons. A file this
             // process cannot read right now — protected while the device is
             // locked, a container momentarily out of reach — holds a queue
@@ -146,21 +151,71 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             file.isUnread = true
             logger.error("queue read fail \(error.localizedDescription, privacy: .public)")
             return []
-        }
-        // What is on disk is known again, so the reason to hold the writes off
-        // it is gone. Left standing it would cost this process every write it
-        // had left.
-        file.isUnread = false
-        do {
-            return try JSONDecoder().decode([Signal].self, from: data)
-        } catch {
+        case let .undecodable(error):
             // A queue we cannot decode is a queue we cannot send, and it will
             // not decode later either. Dropping it beats retrying a corrupt
             // file on every launch forever.
             logger.error("queue decode fail \(error.localizedDescription, privacy: .public)")
             purgeLocked()
             return []
+        case let .signals(signals):
+            file.isUnread = false
+            return signals
         }
+    }
+
+    /// What the queue file holds, asked by reading rather than by
+    /// `fileExists`, which answers "no" both for a container that holds no
+    /// queue and for one this process cannot reach — opposite facts under one
+    /// answer.
+    private func readQueueFile() -> QueueRead {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return .absent
+        } catch {
+            return .unreadable(error)
+        }
+        do {
+            return try .signals(JSONDecoder().decode([Signal].self, from: data))
+        } catch {
+            return .undecodable(error)
+        }
+    }
+
+    /// Whether the writes may go over the queue file, retrying the read a
+    /// failed one left owed.
+    ///
+    /// Retried here because nothing else would: the recorder loads once, so a
+    /// read that failed is never asked again by that process, and holding the
+    /// writes until it is would cost every write it had left.
+    /// Retried silently, because it runs on every write while the file stays
+    /// out of reach.
+    ///
+    /// A read that succeeds here hands nothing back — the caller is writing,
+    /// not loading — so what the file held becomes `carried`, and goes ahead
+    /// of every snapshot until a load or an erase. That is what keeps those
+    /// signals for the next process, the only one that can send them.
+    private func settleUnreadQueue() -> Bool {
+        guard file.isUnread else { return true }
+        switch readQueueFile() {
+        case .unreadable:
+            return false
+        case .absent:
+            file.isUnread = false
+        case let .undecodable(error):
+            logger.error("queue decode fail \(error.localizedDescription, privacy: .public)")
+            purgeLocked()
+            // A corrupt file the purge could not reach is under a mark now,
+            // and a write under a mark is one the next load erases.
+            return !file.erasureOutstanding
+        case let .signals(signals):
+            file.isUnread = false
+            file.carried = signals
+            logger.info("queue read recovered count=\(signals.count)")
+        }
+        return true
     }
 
     private func persistLocked(_ signals: [Signal]) {
@@ -192,11 +247,16 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // signals in memory still transmit, they just have nothing on disk to
         // survive a kill — which is the cheaper half of the trade against
         // deleting a queue that was only unreadable.
-        guard !file.isUnread else {
+        guard settleUnreadQueue() else {
             logger.error("queue persist skip reason=unread-queue-on-disk")
             return
         }
-        guard !signals.isEmpty else {
+        // The snapshot is the recorder's whole queue, and `carried` is what
+        // the file held that the recorder never saw, so neither replaces the
+        // other. An empty snapshot is "everything delivered", which says
+        // nothing about signals the recorder never had.
+        let queue = file.carried + signals
+        guard !queue.isEmpty else {
             purgeLocked()
             return
         }
@@ -205,9 +265,9 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let data = try JSONEncoder().encode(signals)
+            let data = try JSONEncoder().encode(queue)
             try data.write(to: fileURL, options: [.atomic])
-            logger.debug("queue persist ok count=\(signals.count)")
+            logger.debug("queue persist ok count=\(queue.count)")
         } catch {
             logger.error("queue persist fail \(error.localizedDescription, privacy: .public)")
         }
@@ -216,8 +276,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     private func purgeLocked() {
         // An erase outranks a read this store could not make: the file goes
         // whether or not its contents were ever known, and the writes resume
-        // for whatever is recorded next.
+        // for whatever is recorded next. What a late read rescued goes with
+        // it, having been collected under the same answer.
         file.isUnread = false
+        file.carried = []
         guard emptyTheQueueFile() else {
             // Nothing this store can do reaches those bytes. What it can do is
             // say so — durably where the mark can be written, and in memory
@@ -284,6 +346,16 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
     }
 }
 
+/// What a read of the queue file can come back with. Four answers, because
+/// each asks something different of the caller: nothing to restore, a queue
+/// still good but out of reach, a queue that will never decode, and a queue.
+private enum QueueRead {
+    case absent
+    case unreadable(Error)
+    case undecodable(Error)
+    case signals([Signal])
+}
+
 /// What a look for the mark a failed erase leaves can come back with.
 private enum ErasureMark {
     /// Nothing is owed: no mark, confirmed.
@@ -300,19 +372,31 @@ private enum ErasureMark {
 /// It carries the lock that serializes a read, a write and an erase against
 /// each other — a guarded flag on its own leaves the operation it authorises
 /// racing whatever runs next, and this store's whole job is that nothing
-/// overwrites what another call is protecting — and the two facts that outlive
-/// a call: a queue on disk this store could not read, and an erase that
-/// reached neither the bytes nor a durable mark. Both are read and written
-/// only inside `withLock`.
+/// overwrites what another call is protecting — and the facts that outlive a
+/// call: a queue on disk this store could not read, what a later read of it
+/// found, and an erase that reached neither the bytes nor a durable mark. All
+/// are read and written only inside `withLock`.
 ///
 /// A reference rather than a value because the store is a struct a caller may
 /// copy, and every one of those facts is about the file: two copies over one
-/// path are two views of one queue. Neither fact is durable — a read that
-/// failed here says nothing about the next process, which retries it, and the
-/// mark is what carries an erase across one.
+/// path are two views of one queue. None of them is durable — a read that
+/// failed here says nothing about the next process, which retries it, what a
+/// late read found is in the file for that process to load, and the mark is
+/// what carries an erase across one.
 private final class QueueFile: @unchecked Sendable {
     var isUnread = false
     var erasureOutstanding = false
+    /// What the file held when a read first succeeded after a failed one:
+    /// signals no load handed back, so no snapshot contains them. Written
+    /// ahead of every snapshot until a load or an erase.
+    ///
+    /// Bounded by what one file held: a late read replaces it rather than
+    /// adding to it, and needs a failed load first, which clears it. The
+    /// recorder loads once in its life, so under it this is at most one
+    /// earlier process's queue, and the file holds that plus one snapshot —
+    /// up to twice `queueLimit`. The next process's restore trims the file to
+    /// the limit oldest-first, and these are the oldest.
+    var carried: [Signal] = []
 
     func withLock<T>(_ body: () -> T) -> T {
         lock.lock()

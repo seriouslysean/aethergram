@@ -677,8 +677,10 @@ struct SignalQueueDurabilityTests {
         )
         storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
 
+        // The queue the unreachable directory hid is still first: read as
+        // absent, the write would have replaced it.
         let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
-        #expect(readable.load().map(\.name) == ["pending.a"])
+        #expect(readable.load().map(\.name) == ["pending.a", "later.b"])
     }
 
     /// Suspending the writes is a state, not a verdict. A store that reads the
