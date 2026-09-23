@@ -62,6 +62,49 @@ else
     pass
 fi
 
+it "a scan with no work tree to read fails rather than reporting clean"
+NOTREE="$TMP/no-tree"
+mkdir -p "$NOTREE/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$NOTREE/Scripts/scan-for-leaks.sh"
+chmod +x "$NOTREE/Scripts/scan-for-leaks.sh"
+# The ceiling keeps git from finding a repository above the fixture, wherever TMPDIR points.
+if (cd "$NOTREE" && GIT_CEILING_DIRECTORIES="$TMP" git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
+    fail "the fixture is inside a work tree"
+else
+    OUT="$(cd "$NOTREE" && GIT_CEILING_DIRECTORIES="$TMP" ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+        printf '%s\n' "$OUT"
+        fail "a scan outside a work tree exited $SCAN_RC rather than 2"
+    else
+        pass
+    fi
+fi
+
+it "a leak staged into the runner, outside its fixtures, is refused"
+RUNNER="$TMP/runner"
+mkdir -p "$RUNNER/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$ROOT/Scripts/run-checks.sh" "$RUNNER/Scripts/"
+chmod +x "$RUNNER/Scripts/scan-for-leaks.sh"
+(cd "$RUNNER" && git init -q && git add Scripts)
+# The unmodified runner must scan clean first, or a scanner that refuses the runner wholesale
+# would pass this test for the wrong reason.
+if ! OUT="$(cd "$RUNNER" && ./Scripts/scan-for-leaks.sh 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "the unmodified runner was refused, so its fixtures are not all allowed"
+else
+    printf '# see /Users/somebody\n' >> "$RUNNER/Scripts/run-checks.sh"
+    (cd "$RUNNER" && git add Scripts/run-checks.sh)
+    OUT="$(cd "$RUNNER" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -eq 0 ]; then
+        fail "a leak staged into the runner was accepted"
+    elif ! printf '%s\n' "$OUT" | grep -q 'Scripts/run-checks.sh:.*/Users/somebody'; then
+        printf '%s\n' "$OUT"
+        fail "the scanner refused for a reason other than the staged line"
+    else
+        pass
+    fi
+fi
+
 printf '\ncommit message gate\n'
 
 it "a session trailer in a message is refused"
