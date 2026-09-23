@@ -16,8 +16,15 @@ This is a solo project. It offers no response-time commitment, because it could 
 
 Consent is the trust boundary and it is checked before anything happens. Until the host calls
 `updateConsent(.granted)`, `record` enqueues nothing, writes nothing to disk, resolves no
-identifier, advances no counter, and reaches no transport. Withdrawing consent erases the queue
-file, the retention record, and the pending batch.
+identifier, advances no counter, and reaches no transport. Withdrawing consent through a recorder
+erases that recorder's queue file, its retention record, and its pending batch. A decline made in
+another process — a containing app answering for its extension — takes effect when this process's
+recorder is told; ADOPTING.md says how a host carries it across.
+
+A request already handed to the transport when a decline lands is not recalled. The decline
+cancels it, and a transport that honours cancellation, as the supplied adapter does through
+`URLSession`, stops it; what the server had already received stays received. Nothing recorded
+after the decline can join that request.
 
 Erasing is best effort against a filesystem that can refuse it, and that is the one place the
 promise is narrower than it sounds. If the queue file can be neither deleted nor overwritten, the
