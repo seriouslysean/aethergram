@@ -4,8 +4,8 @@ import Foundation
 ///
 /// `dev` is anything that is neither a TestFlight nor an App Store install:
 /// a debug build, a simulator run, or a Release build sideloaded straight to
-/// a device. `EnvironmentSnapshot.buildChannel` stays the source of truth for
-/// telling the three apart.
+/// a device. `EnvironmentSnapshot.current()` is what tells the three apart;
+/// an app extension answers from its containing app's receipt.
 public enum RunContextChannel: String, Sendable {
     case dev
     case beta
@@ -20,9 +20,10 @@ public enum RunContextChannel: String, Sendable {
 /// beyond what the consumer passed.
 ///
 /// Authored, not inherited. Each field maps to a chart someone reads; see
-/// `PayloadKey` for what was dropped and why. Values are captured once per
-/// process because none of them change inside one — the clock-derived fields
-/// are computed per signal instead, in `SignalRecorder`.
+/// `PayloadKey` for what was dropped and why. The recorder reads the default
+/// payload once per grant, on the first permitted record, and an erase drops
+/// that copy; none of these values change inside a process. The
+/// clock-derived fields are computed per signal instead.
 public struct EnvironmentSnapshot: Equatable, Sendable {
     // MARK: Lifecycle
 
@@ -50,14 +51,24 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
 
     // MARK: Public
 
+    /// `CFBundleShortVersionString`, or empty when the bundle has none.
     public let appVersion: String
+    /// `CFBundleVersion`, or empty when the bundle has none.
     public let appBuild: String
+    /// The machine identifier `uname` reports; on a simulator, the model the
+    /// simulator advertises.
     public let modelName: String
+    /// The OS family the package was compiled for, such as `iOS`.
     public let platform: String
+    /// `major.minor.patch`.
     public let systemVersion: String
+    /// `major.minor`.
     public let systemMajorMinorVersion: String
+    /// The distribution channel this run came down.
     public let channel: RunContextChannel
+    /// The locale's region identifier, or empty when it has none.
     public let region: String
+    /// The locale's language code, or empty when it has none.
     public let language: String
 
     /// The snapshot as payload parameters under canonical keys.
@@ -79,9 +90,17 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         ]
     }
 
-    /// Reads the running process. `bundle` and `locale` are parameters so the
-    /// snapshot is constructible in a test without the test's own bundle
-    /// leaking in as an expectation.
+    /// Reads the running process. Every parameter defaults to the running
+    /// process's own, and exists so the snapshot is constructible in a test
+    /// without the test's own bundle leaking in as an expectation.
+    ///
+    /// - Parameters:
+    ///   - bundle: Supplies the version, the build, and, outside macOS, the
+    ///     receipt the channel is read from.
+    ///   - locale: Supplies the region and the language.
+    ///   - processInfo: Supplies the OS version, and the simulator's model
+    ///     identifier, whose presence marks a simulator run.
+    ///   - fileManager: Answers whether the receipt file exists.
     public static func current(
         bundle: Bundle = .main,
         locale: Locale = .current,

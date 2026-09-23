@@ -42,14 +42,22 @@ public struct PurchaseDetails: Equatable, Sendable {
 
     // MARK: Public
 
+    /// The product identifier as the store knows it.
     public let productID: String
+    /// The storefront's country code.
     public let countryCode: String
+    /// The currency code `price` is in, or nil when unknown; omitted from the
+    /// payload when nil.
     public let currencyCode: String?
+    /// Whether the product belongs to a subscription group. Sent as
+    /// `subscription` or `one-time-purchase`.
     public let isSubscription: Bool
     /// Native amount in `currencyCode`, not converted. Rides the signal's
     /// `floatValue`, so a dashboard summing it must group by currency.
     public let price: Double?
 
+    /// The purchase as payload parameters under canonical keys. `price`
+    /// travels as the signal's `floatValue`, not here.
     public var parameters: [String: String] {
         var parameters: [String: String] = [
             PayloadKey.purchaseType: isSubscription ? "subscription" : "one-time-purchase",

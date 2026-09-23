@@ -37,6 +37,19 @@ public struct TelemetryDeckTransport: SignalTransport {
 
     // MARK: Public
 
+    /// Posts the batch as one request and maps the reply:
+    ///
+    /// | Reply | Outcome |
+    /// |---|---|
+    /// | 2xx | `delivered` |
+    /// | 400, 401, 403, 404, 413, 422, 501, 505 | `permanent` |
+    /// | Any other status, including 429 and other 5xx | `retryable` |
+    /// | A response that is not HTTP | `retryable` |
+    /// | A thrown error, cancellation included | `retryable` |
+    /// | A batch that cannot be encoded | `permanent` |
+    ///
+    /// Cancellation reaches the request through `URLSession`, so an erase
+    /// that cancels the drain stops a send still in flight.
     public func send(_ batch: SignalBatch) async -> TransportOutcome {
         let request: URLRequest
         do {

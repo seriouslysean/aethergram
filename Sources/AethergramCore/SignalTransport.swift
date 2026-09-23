@@ -12,9 +12,13 @@ public struct SignalBatch: Equatable, Sendable {
 
     // MARK: Public
 
+    /// The signals to send, oldest first. The recorder hands over at most
+    /// `AethergramConfiguration.batchSize`.
     public let signals: [Signal]
 
-    /// The consumer's own analytics identifier, unhashed. An adapter that
+    /// The consumer's own analytics identifier, unhashed. `clientUser` is the
+    /// package's neutral name for the identifier a backend groups signals
+    /// by, resolved by the host's `clientUserProvider`. An adapter that
     /// needs it hashed hashes it; the core never invents an identifier and
     /// never persists one.
     public let clientUser: String
@@ -43,6 +47,15 @@ public enum TransportOutcome: Equatable, Sendable {
 ///
 /// The review question for any second adapter: could it be written against
 /// this protocol without changing a line of `AethergramCore`?
+///
+/// A conformance must honour task cancellation: the recorder cancels a send
+/// in flight when consent is withdrawn or the host resets, and a send that
+/// ignores it runs to completion with the batch it was handed. Sends may
+/// overlap across an erase — the cancelled send can still be in flight when
+/// the drain after the erase sends a different batch — so a conformance must
+/// not assume one send at a time.
 public protocol SignalTransport: Sendable {
+    /// Sends one batch and reports what the recorder should do with it.
+    /// Called from the recorder's drain task, never under its lock.
     func send(_ batch: SignalBatch) async -> TransportOutcome
 }

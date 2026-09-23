@@ -17,6 +17,8 @@ public struct TelemetryDeckConfiguration: Sendable {
     ///     existing user, so it stays empty for continuity, not by oversight.
     ///   - namespace: Vendor-documented segregation. Omitted by default,
     ///     which is the SDK's own behaviour.
+    ///   - baseURL: The ingest host. Defaults to `defaultBaseURL`; the path
+    ///     is built onto it by `ingestURL`.
     ///   - isTestMode: No default. A silent DEBUG-only default is exactly the
     ///     defect this replaced (Release simulator and TestFlight builds posted
     ///     to the live partition); every caller derives this explicitly, from
@@ -45,10 +47,16 @@ public struct TelemetryDeckConfiguration: Sendable {
         return url
     }()
 
+    /// The dashboard's app identifier, sent on every signal.
     public let appID: String
+    /// Appended to the client identifier before it is hashed.
     public let salt: String
+    /// The ingest namespace, or nil for the default path.
     public let namespace: String?
+    /// The ingest host `ingestURL` is built on.
     public let baseURL: URL
+    /// Whether signals go to the vendor's test partition. Sent on every
+    /// signal.
     public let isTestMode: Bool
 
     /// `v2/namespace/{ns}/` when a namespace is set, `v2/` otherwise — the
