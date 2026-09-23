@@ -123,9 +123,7 @@ public final class SignalRecorder: Sendable {
             // non-nil `openSessionStartedAt`: a session left open by a process
             // that died is also open, and closing that one is the entire point
             // of the inference path.
-            if let ours = current.openedSessionAt, current.retention?.openSessionStartedAt == ours {
-                return
-            }
+            if current.ownsOpenSession { return }
             let started = now()
             current.openedSessionAt = started
             current.sessionID = UUID().uuidString
@@ -141,9 +139,15 @@ public final class SignalRecorder: Sendable {
 
     /// Closes the session opened by `beginSession()` and folds its duration
     /// into the averages.
+    ///
+    /// Only a session this instance opened. One inherited from another
+    /// process is left for the next `beginSession()` to close against its own
+    /// checkpoint: the store may be shared with a process still running that
+    /// session, and closing it against this clock counts time nobody spent.
     public func endSession() {
         lock.withLock { current in
-            guard current.consent.permitsCollection, let existing = current.retention else { return }
+            guard current.consent.permitsCollection, current.ownsOpenSession,
+                  let existing = current.retention else { return }
             current.openedSessionAt = nil
             let record = RetentionCounters.recordingSessionEnd(in: existing, at: now())
             current.retention = record
@@ -264,6 +268,13 @@ public final class SignalRecorder: Sendable {
         /// repeat `beginSession()` in the same activation can be told apart
         /// from one that inherits a dead process's open session.
         var openedSessionAt: Date?
+
+        /// Whether the open session is the one this instance stamped, rather
+        /// than one left by a dead process or a live one sharing the store.
+        var ownsOpenSession: Bool {
+            guard let openedSessionAt else { return false }
+            return retention?.openSessionStartedAt == openedSessionAt
+        }
         /// How many erases this recorder has performed. A batch carries the
         /// value it was claimed under, so work in flight across an erase can be
         /// told from work that belongs to the queue that exists now.
@@ -351,7 +362,10 @@ public final class SignalRecorder: Sendable {
             // Consumer parameters win: the package's defaults are context, and
             // a caller that names the same key means the more specific thing.
             merged.merge(parameters) { $1 }
-            if let retention = current.retention {
+            // Only our own session's checkpoint moves. An inherited one closes
+            // against the activity its own process last recorded, and moving
+            // that to now would count the gap since the kill as use.
+            if current.ownsOpenSession, let retention = current.retention {
                 let touched = RetentionCounters.touching(retention, at: recordedAt)
                 current.retention = touched.record
                 // Saved under the lock that produced it: a record computed here
