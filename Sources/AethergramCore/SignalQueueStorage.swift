@@ -281,7 +281,8 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         file.isUnread = false
         file.carried = []
         guard emptyTheQueueFile() else {
-            // Nothing this store can do reaches those bytes. What it can do is
+            // A file is there, or cannot be ruled out, and nothing this store
+            // can do reaches its bytes. What it can do is
             // say so — durably where the mark can be written, and in memory
             // regardless, because a refusal that stops the delete and the
             // overwrite stops the mark too.
@@ -305,16 +306,39 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             // Removal can fail on a directory that refuses it while the file
             // itself still accepts writes. Overwriting in place reaches the
             // same postcondition: nothing left to restore under a later grant.
-            // Non-atomic, deliberately — an atomic write needs a temp file in
-            // this same directory, which the failure above already refused.
-            do {
-                try Data("[]".utf8).write(to: fileURL)
-                logger.info("queue purge ok via overwrite")
-                return true
-            } catch {
-                logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
-                return false
-            }
+            return overwriteInPlace()
+        }
+    }
+
+    /// Whether the queue file holds nothing, reached by writing over it where
+    /// it stands.
+    ///
+    /// Opened without creating: a purge runs on a decline before anything was
+    /// granted, and a file it made would be a write consent never allowed. A
+    /// file that is not there needs no overwrite and leaves nothing to mark.
+    /// Any other refusal cannot rule a file out, so it counts as one the
+    /// erase did not reach. Non-atomic, deliberately — an atomic write needs a
+    /// temp file in this same directory, which the failed delete already
+    /// refused.
+    private func overwriteInPlace() -> Bool {
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forWritingTo: fileURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            return true
+        } catch {
+            logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        defer { try? handle.close() }
+        do {
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: Data("[]".utf8))
+            logger.info("queue purge ok via overwrite")
+            return true
+        } catch {
+            logger.error("queue purge fail \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
