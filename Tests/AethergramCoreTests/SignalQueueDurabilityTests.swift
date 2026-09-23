@@ -579,6 +579,38 @@ struct SignalQueueDurabilityTests {
         #expect(next.load().map(\.name) == ["granted.b"])
     }
 
+    /// A purge is not consent: it runs on a decline at launch, before anything
+    /// was ever granted, so what it may leave behind is at most what was there.
+    /// A directory that refuses the delete but holds no queue has nothing for
+    /// the fallback to overwrite and nothing for a mark to stand in for.
+    @Test(
+        "A purge that cannot look inside the directory creates nothing there",
+        .enabled(if: getuid() != 0, "root reaches a directory whose permissions refuse everyone")
+    )
+    func purgeInARefusingDirectoryWithNoQueueCreatesNothing() throws {
+        let directory = try #require(TestTempDirectory.url)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        storage.purge()
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: originalPermissions],
+            ofItemAtPath: directory.path
+        )
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
     /// An erase outranks the read failure that suspended the writes: a decline
     /// has to reach the file whether or not this instance could read it, and
     /// the writes have to resume for whatever the next grant records.
