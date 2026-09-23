@@ -108,9 +108,10 @@ A minor release, because a signature in the API list moved.
 - A non-finite `floatValue` is dropped when the signal is constructed or decoded.
 - `AethergramConfiguration` traps on a non-finite interval, and the backoff ceiling is floored at
   `transmitInterval`. Retention counters saturate rather than trap.
-- Work in flight across an erase is discarded: a send, a counter save, or a queue write from before
-  a decline or a reset cannot land after it, and `updateConsent` and `reset()` return once the
-  purge has reached the store.
+- Work in flight across an erase is discarded. A counter save or a queue write from before a
+  decline or a reset cannot land after it. A send is cancelled and its verdict discarded locally,
+  though a request already on the wire can still reach the server. `updateConsent` and `reset()`
+  return once the purge has reached the store.
 - An overflow eviction during a send no longer causes a resend, and a finished drain restarts for
   signals that landed while it ran.
 - A purge whose delete is refused overwrites the queue file in place.
