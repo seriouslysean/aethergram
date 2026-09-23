@@ -110,7 +110,7 @@ public final class SignalRecorder: Sendable {
         writer = QueueWriter(storage: queueStorage, label: "\(configuration.logSubsystem).aethergram-queue-writer")
         // What a late read carries is bounded by this recorder's limit, not
         // the store's default, or a host queueing more loses the oldest.
-        (queueStorage as? FileSignalQueueStorage)?.adoptQueueLimit(configuration.queueLimit)
+        (queueStorage as? any QueueLimitAdopting)?.adoptQueueLimit(configuration.queueLimit)
         self.retentionStore = retentionStore
         self.clientUserProvider = clientUserProvider
         self.environmentProvider = environmentProvider
