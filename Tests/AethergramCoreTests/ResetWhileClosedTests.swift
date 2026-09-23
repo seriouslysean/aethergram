@@ -16,18 +16,26 @@ import Testing
 struct ResetWhileClosedTests {
     struct RotationFailed: Error {}
 
-    @Test("A record made while the host rotates its identifier is dropped, not sent")
+    /// Every layer the recorder touches, not only the transport: a record
+    /// dropped before the queue reads no payload, resolves no identifier,
+    /// writes nothing, and saves no counter.
+    @Test("A record made while the host rotates its identifier is dropped at every layer, not sent")
     func recordDuringTheCallbackIsDropped() async throws {
         let fixture = try makeFixture()
         fixture.recorder.updateConsent(.granted)
         fixture.recorder.record("before")
+        var before: [Int] = []
+        var after: [Int] = []
 
         fixture.recorder.resetClosingCollection {
+            before = Self.layers(fixture)
             Self.onAnotherThread { fixture.recorder.record("during") }
+            after = Self.layers(fixture)
         }
         fixture.recorder.record("after")
         await fixture.recorder.drain()
 
+        #expect(after == before)
         #expect(fixture.transport.sentSignalNames == ["after"])
     }
 
@@ -344,6 +352,18 @@ struct ResetWhileClosedTests {
     }
 
     // MARK: Private
+
+    /// What each layer has done so far: payload reads, identifier
+    /// resolutions, queue writes, counter saves, and sends.
+    private static func layers(_ fixture: RecorderFixture) -> [Int] {
+        [
+            fixture.environmentCalls.count,
+            fixture.clientUserCalls.count,
+            fixture.storage.persistCallCount,
+            fixture.retention.saved.count,
+            fixture.transport.sendCount
+        ]
+    }
 
     /// Runs `work` on a GCD thread and returns once it has. The callback is
     /// synchronous, so this blocks; it is a GCD thread doing the work, not the

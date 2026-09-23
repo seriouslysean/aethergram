@@ -49,11 +49,13 @@ struct FlushContractTests {
     enum Interruption: CaseIterable, CustomTestStringConvertible {
         case reset
         case decline
+        case resetClosingCollection
 
         var testDescription: String {
             switch self {
             case .reset: "a reset"
             case .decline: "a decline"
+            case .resetClosingCollection: "a reset that closes collection"
             }
         }
     }
@@ -156,8 +158,11 @@ struct FlushContractTests {
         let clock = ContinuousClock()
         let released = clock.now
         transport.release("a")
-        await returned.wait()
+        // Bounded, and the flush cancelled after, so one that never returns
+        // fails the bound below instead of holding the run open.
+        await waitUntil(within: 5) { returned.isOpen }
         let elapsed = released.duration(to: clock.now)
+        waiting.cancel()
         await waiting.value
 
         #expect(elapsed < .seconds(2))
@@ -186,10 +191,14 @@ struct FlushContractTests {
             switch interruption {
             case .reset: recorder.reset()
             case .decline: recorder.updateConsent(.declined)
+            case .resetClosingCollection: recorder.resetClosingCollection {}
             }
         }
-        await returned.wait()
+        // Bounded, and the flush cancelled after, so one that never returns
+        // fails the bound below instead of holding the run open.
+        await waitUntil(within: 5) { returned.isOpen }
         let elapsed = erased.duration(to: clock.now)
+        waiting.cancel()
         await waiting.value
 
         #expect(elapsed < .seconds(1))
@@ -227,7 +236,7 @@ struct FlushContractTests {
         try await Task.sleep(for: .milliseconds(200))
         let returnedBeforeTheRemovalLanded = returned.isOpen
         storage.releasePersist()
-        await waiting.value
+        await finish(waiting)
 
         #expect(!returnedBeforeTheRemovalLanded)
 
@@ -406,7 +415,7 @@ struct FlushContractTests {
             withUnsafeCurrentTask { $0?.cancel() }
             await recorder.flushAndWait()
         }
-        await waiting.value
+        await finish(waiting)
 
         #expect(started.duration(to: clock.now) < .seconds(1))
     }
@@ -442,6 +451,17 @@ struct FlushContractTests {
         )
     }
 
+    /// The suite's time limit cancels the test, not a task it started; this
+    /// passes the cancel on, so a flush that never returns fails the limit
+    /// rather than holding the run open.
+    private func finish(_ task: Task<Void, Never>) async {
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     /// Starts a flush, cancels it once it has had time to reach whatever
     /// is held, and bounds how long the cancel takes to return it.
     private func cancelAndMeasure(_ recorder: SignalRecorder) async throws {
@@ -450,7 +470,7 @@ struct FlushContractTests {
         let clock = ContinuousClock()
         let cancelled = clock.now
         waiting.cancel()
-        await waiting.value
+        await finish(waiting)
         #expect(cancelled.duration(to: clock.now) < .seconds(1))
     }
 }
