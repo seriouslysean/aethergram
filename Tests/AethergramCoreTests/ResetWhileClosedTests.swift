@@ -285,7 +285,7 @@ struct ResetWhileClosedTests {
         }
         await resetDone.wait()
         recorder.record("after")
-        await recorder.flushAndWait()
+        #expect(await flushReturns(recorder))
 
         #expect(transport.sentSignalNames == ["before", "after"])
         #expect(storage.signalsOnDisk.isEmpty)

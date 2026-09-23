@@ -108,3 +108,27 @@ func makeFixture(
         environmentCalls: environmentCalls
     )
 }
+
+// MARK: - Bounding a spawned wait
+
+/// Whether `task` ends within `seconds`, cancelling it either way. It never
+/// awaits a task that has not ended: a flush that ignores its cancel would
+/// hold the run open, and the suite's time limit cancels the test rather
+/// than a task it started. Measure a bound before calling this, since it can
+/// take the whole of `seconds`.
+func ends(_ task: Task<Void, Never>, within seconds: TimeInterval = 5) async -> Bool {
+    let ended = Gate()
+    Task {
+        await task.value
+        ended.open()
+    }
+    await waitUntil(within: seconds) { ended.isOpen }
+    task.cancel()
+    return ended.isOpen
+}
+
+/// Runs an awaited flush in a task of its own and reports whether it
+/// returned within `seconds`, for the reason `ends(_:within:)` gives.
+func flushReturns(_ recorder: SignalRecorder, within seconds: TimeInterval = 10) async -> Bool {
+    await ends(Task { await recorder.flushAndWait() }, within: seconds)
+}

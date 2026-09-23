@@ -37,7 +37,7 @@ struct AwaitedFlushTests {
         // An hour's coalescing wait, so nothing but the flush sends this.
         recorder.record("Game.started")
 
-        await recorder.flushAndWait()
+        #expect(await flushReturns(recorder))
 
         #expect(transport.answeredCount == 1)
         #expect(transport.sentSignalNames == ["Game.started"])
@@ -60,7 +60,7 @@ struct AwaitedFlushTests {
         recorder.record("second")
 
         DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(300)) { transport.release() }
-        await recorder.flushAndWait()
+        #expect(await flushReturns(recorder))
 
         #expect(transport.sentSignalNames == ["first", "second"])
     }
@@ -85,7 +85,7 @@ struct AwaitedFlushTests {
         let sentBefore = transport.sendCount
 
         let clock = ContinuousClock()
-        let elapsed = await clock.measure { await recorder.flushAndWait() }
+        let elapsed = await clock.measure { #expect(await flushReturns(recorder)) }
 
         #expect(elapsed < .seconds(5))
         #expect(transport.sendCount == sentBefore)
@@ -107,7 +107,7 @@ struct AwaitedFlushTests {
         let waiting = Task { await recorder.flushAndWait() }
         await transport.firstSendHeld.wait()
         waiting.cancel()
-        await waiting.value
+        #expect(await ends(waiting, within: 1))
 
         transport.release()
         await waitUntil { recorder.drainsScheduled >= 1 && transport.sendCount == 1 }

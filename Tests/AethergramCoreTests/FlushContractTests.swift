@@ -78,7 +78,7 @@ struct FlushContractTests {
         recorder.updateConsent(.granted)
         recorder.record("Game.started")
 
-        let elapsed = await ContinuousClock().measure { await recorder.flushAndWait() }
+        let elapsed = await ContinuousClock().measure { #expect(await flushReturns(recorder)) }
 
         #expect(elapsed < .seconds(5))
         #expect(transport.sendCount == (answer == .noIdentity ? 0 : 1))
@@ -116,7 +116,7 @@ struct FlushContractTests {
         }
         defer { stop.raise() }
 
-        let elapsed = await ContinuousClock().measure { await recorder.flushAndWait() }
+        let elapsed = await ContinuousClock().measure { #expect(await flushReturns(recorder)) }
         stop.raise()
         await stopped.wait()
 
@@ -162,8 +162,7 @@ struct FlushContractTests {
         // fails the bound below instead of holding the run open.
         await waitUntil(within: 5) { returned.isOpen }
         let elapsed = released.duration(to: clock.now)
-        waiting.cancel()
-        await waiting.value
+        #expect(await ends(waiting))
 
         #expect(elapsed < .seconds(2))
         #expect(transport.sentSignalNames.prefix(2) == ["a", "c"])
@@ -198,8 +197,7 @@ struct FlushContractTests {
         // fails the bound below instead of holding the run open.
         await waitUntil(within: 5) { returned.isOpen }
         let elapsed = erased.duration(to: clock.now)
-        waiting.cancel()
-        await waiting.value
+        #expect(await ends(waiting))
 
         #expect(elapsed < .seconds(1))
     }
@@ -236,9 +234,10 @@ struct FlushContractTests {
         try await Task.sleep(for: .milliseconds(200))
         let returnedBeforeTheRemovalLanded = returned.isOpen
         storage.releasePersist()
-        await finish(waiting)
+        let returnedOnceItLanded = await ends(waiting)
 
         #expect(!returnedBeforeTheRemovalLanded)
+        #expect(returnedOnceItLanded)
 
         #expect(transport.sentSignalNames == ["Game.started"])
         #expect(storage.signals.isEmpty)
@@ -273,7 +272,7 @@ struct FlushContractTests {
                 retryDelay: { _ in 3600 }
             )
             recorder.updateConsent(.granted)
-            await recorder.flushAndWait()
+            #expect(await flushReturns(recorder))
             await waitUntil { transport.sendCount == 2 }
             await recorder.writer.awaitPendingWrites()
 
@@ -293,7 +292,7 @@ struct FlushContractTests {
             now: steppingClock(from: testDate(year: 2026, month: 3, day: 5))
         )
         reborn.updateConsent(.granted)
-        await reborn.flushAndWait()
+        #expect(await flushReturns(reborn))
 
         #expect(transport.sentSignalNames == ["first", "second", "third"])
     }
@@ -387,10 +386,14 @@ struct FlushContractTests {
         for flush in flushes {
             flush.cancel()
         }
-        for flush in flushes {
-            await flush.value
-        }
+        // One bound for all of them, not one each.
+        let allReturned = await ends(Task {
+            for flush in flushes {
+                await flush.value
+            }
+        })
 
+        #expect(allReturned)
         #expect(registered == 100)
         #expect(recorder.flushWaiterCount == 0)
     }
@@ -415,8 +418,9 @@ struct FlushContractTests {
             withUnsafeCurrentTask { $0?.cancel() }
             await recorder.flushAndWait()
         }
-        await finish(waiting)
+        let returned = await ends(waiting, within: 1)
 
+        #expect(returned)
         #expect(started.duration(to: clock.now) < .seconds(1))
     }
 
@@ -451,17 +455,6 @@ struct FlushContractTests {
         )
     }
 
-    /// The suite's time limit cancels the test, not a task it started; this
-    /// passes the cancel on, so a flush that never returns fails the limit
-    /// rather than holding the run open.
-    private func finish(_ task: Task<Void, Never>) async {
-        await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
-    }
-
     /// Starts a flush, cancels it once it has had time to reach whatever
     /// is held, and bounds how long the cancel takes to return it.
     private func cancelAndMeasure(_ recorder: SignalRecorder) async throws {
@@ -470,7 +463,8 @@ struct FlushContractTests {
         let clock = ContinuousClock()
         let cancelled = clock.now
         waiting.cancel()
-        await finish(waiting)
+        let returned = await ends(waiting, within: 1)
+        #expect(returned)
         #expect(cancelled.duration(to: clock.now) < .seconds(1))
     }
 }
