@@ -114,9 +114,11 @@ enum RetentionCounters {
     /// The checkpoint is what makes a session closable after a kill, so it has
     /// to be persisted, but persisting on every signal would put a
     /// `UserDefaults` write on the emit path. Ten seconds bounds the write rate
-    /// and bounds the measurement error: a killed session is under-reported by
-    /// at most this much. The vendor's one-second timer is more precise and
-    /// costs a timer that never fires correctly in this host.
+    /// — one write per interval, plus one for a session's first activity — and
+    /// bounds the measurement error: a killed session is under-reported by at
+    /// most this much, and one with any activity after its start still closes
+    /// with a positive duration. The vendor's one-second timer is more precise
+    /// and costs a timer that never fires correctly in this host.
     static let activityCheckpointInterval: Double = 10
 
     /// The no-data sentinel for `averageSessionSeconds`.
@@ -173,14 +175,18 @@ enum RetentionCounters {
     /// Only advances `lastActivityAt` when the interval has genuinely
     /// elapsed: advancing it on every call would slide the comparison
     /// baseline forward on each touch, so activity more frequent than
-    /// `activityCheckpointInterval` would never cross it.
+    /// `activityCheckpointInterval` would never cross it. The first activity
+    /// after a start is the exception, because a session killed before the
+    /// interval would otherwise close at zero seconds and be discarded.
     static func touching(
         _ record: RetentionRecord,
         at date: Date
     ) -> (record: RetentionRecord, shouldPersist: Bool) {
-        guard record.openSessionStartedAt != nil else { return (record, false) }
-        let moved = date.timeIntervalSince(record.lastActivityAt ?? date)
-        guard moved >= activityCheckpointInterval else { return (record, false) }
+        guard let started = record.openSessionStartedAt else { return (record, false) }
+        let baseline = record.lastActivityAt ?? started
+        let moved = date.timeIntervalSince(baseline)
+        let isFirstActivity = baseline == started
+        guard moved > 0, isFirstActivity || moved >= activityCheckpointInterval else { return (record, false) }
         var updated = record
         updated.lastActivityAt = date
         return (updated, true)

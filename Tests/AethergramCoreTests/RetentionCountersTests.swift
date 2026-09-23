@@ -185,14 +185,19 @@ struct RetentionCountersTests {
     }
 
     /// The checkpoint is the measurement, and persisting it on every signal
-    /// would put a `UserDefaults` write on the emit path.
-    @Test("The activity checkpoint asks for a write only once past the interval")
+    /// would put a `UserDefaults` write on the emit path. The first activity
+    /// after a start is written at once, so a kill cannot erase the session;
+    /// every later one waits out the interval.
+    @Test("The activity checkpoint writes the first activity, then only once past the interval")
     func checkpointCoalescesWrites() throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
-        let record = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        let opened = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
 
-        #expect(!RetentionCounters.touching(record, at: start.addingTimeInterval(1)).shouldPersist)
-        #expect(RetentionCounters.touching(record, at: start.addingTimeInterval(10)).shouldPersist)
+        #expect(!RetentionCounters.touching(opened, at: start).shouldPersist, "no time has passed")
+        let first = RetentionCounters.touching(opened, at: start.addingTimeInterval(1))
+        #expect(first.shouldPersist)
+        #expect(!RetentionCounters.touching(first.record, at: start.addingTimeInterval(2)).shouldPersist)
+        #expect(RetentionCounters.touching(first.record, at: start.addingTimeInterval(11)).shouldPersist)
     }
 
     /// `lastActivityAt` must only advance when the interval
@@ -204,14 +209,15 @@ struct RetentionCountersTests {
     @Test("Sub-interval activity still checkpoints once true elapsed time crosses the interval")
     func subIntervalActivityEventuallyCheckpoints() throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
-        var record = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        let opened = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        var record = RetentionCounters.touching(opened, at: start.addingTimeInterval(1)).record
 
-        for offset in [3, 6, 9] {
+        for offset in [4, 7, 10] {
             let touch = RetentionCounters.touching(record, at: start.addingTimeInterval(Double(offset)))
             #expect(!touch.shouldPersist, "offset \(offset)s must not cross the 10s interval yet")
             record = touch.record
         }
-        let final = RetentionCounters.touching(record, at: start.addingTimeInterval(11))
+        let final = RetentionCounters.touching(record, at: start.addingTimeInterval(12))
         #expect(final.shouldPersist, "11 real seconds since the last checkpoint must cross the interval")
     }
 
