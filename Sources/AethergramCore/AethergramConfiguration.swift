@@ -111,7 +111,7 @@ public struct AethergramConfiguration: Sendable {
     static let maximumInterval: TimeInterval = 365 * 24 * 60 * 60
 
     /// Ceiling on `queueLimit`: a hundred times the default. The queue is held
-    /// in memory and rewritten whole on every save, and at this size one
-    /// rewrite already runs to tens of megabytes.
+    /// in memory and rewritten whole on every save, so its limit is also the
+    /// size of every write, and an extension's memory budget is small.
     static let maximumQueueLimit = 100_000
 }
