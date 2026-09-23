@@ -184,12 +184,24 @@ struct DeliverySchedulingTests {
     ///
     /// Sixty attempts against that rate. On the unfixed code, five runs of
     /// forty attempts landed it five times out of five, the thinnest of them
-    /// once. A run that never lands passes for the wrong reason, which is the
-    /// price of asserting a race at all; what it cannot do is fail for one.
+    /// once.
+    ///
+    /// A run that never lands passes for the wrong reason, so the run counts
+    /// what it can see and fails below a floor. The handoff leaves no trace on
+    /// the fixed code, so what is counted is coarser: an attempt whose racer
+    /// had finished its record, and said so, before `reset()` returned. A
+    /// landing needs the racer on the lock inside the reset, so a run that
+    /// counts few of these landed few; the converse does not hold, which is
+    /// why the floor sits far above the landing rate. Six runs of sixty
+    /// against the unfixed code counted 58 to 60 and failed 4 to 14; forty is
+    /// where the thinnest rate either measurement has seen still expects a
+    /// landing.
     @Test("A signal recorded during a reset is not left with nobody coming for it")
     func signalRecordedDuringAResetIsStillDrained() async throws {
         let directory = try #require(TestTempDirectory.url)
         let start = try testDate(year: 2026, month: 3, day: 4)
+        let landingFloor = 40
+        var landings = 0
         for attempt in 0 ..< 60 {
             let retention = SpyRetentionStore()
             let fixture = makeFixture(
@@ -223,8 +235,12 @@ struct DeliverySchedulingTests {
             // it occupied and schedules nothing of its own.
             recorder.record("first")
             recorder.reset()
+            // Read before anything else can move it: a racer whose record
+            // finished only after the reset returned raced nothing.
+            let landedDuringReset = raced.isRaised
             await recorded.wait()
             guard raced.isRaised else { continue }
+            if landedDuringReset { landings += 1 }
             // Delivery is the only correct outcome, not one of two. The erase
             // is complete before the racer is released — clearing the
             // counters is the last thing it does — so this signal is always
@@ -235,6 +251,9 @@ struct DeliverySchedulingTests {
             withExtendedLifetime(recorder) {}
 
             #expect(fixture.transport.sentSignalNames.contains("late"))
+        }
+        if landings < landingFloor {
+            Issue.record("raced the reset in \(landings) of 60 attempts, below the floor of \(landingFloor)")
         }
     }
 
