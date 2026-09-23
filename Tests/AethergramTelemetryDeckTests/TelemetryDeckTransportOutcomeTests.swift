@@ -33,6 +33,78 @@ struct TelemetryDeckTransportOutcomeTests {
         #expect(try TelemetryDeckTransport.outcome(for: Self.response(code)) == .retryable(reason: "http-\(code)"))
     }
 
+    /// RFC 9110 §10.2.3 names 429 and 503 as the statuses that carry
+    /// Retry-After. A throttled ingest that says when to come back and is
+    /// retried on the fixed schedule anyway is hit again before it asked to be.
+    @Test("A 429 or 503 carrying Retry-After says when to retry", arguments: [429, 503])
+    func throttleCarriesRetryAfter(code: Int) throws {
+        let response = try Self.response(code, headers: ["Retry-After": "120"])
+        #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryableAfter(
+            reason: "http-\(code)",
+            delay: 120
+        ))
+    }
+
+    /// Any other status that happens to carry the header is not one the RFC
+    /// gives it meaning on, and stays on the core's own schedule.
+    @Test("Retry-After on a status the RFC does not pair it with is ignored", arguments: [408, 500, 502, 504])
+    func retryAfterOnOtherStatusesIsIgnored(code: Int) throws {
+        let response = try Self.response(code, headers: ["Retry-After": "120"])
+        #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryable(reason: "http-\(code)"))
+    }
+
+    /// A header that does not parse is no instruction at all; the batch is
+    /// still retryable on the core's schedule rather than dropped.
+    @Test("A 429 whose Retry-After does not parse falls back to a plain retry")
+    func unparseableRetryAfterFallsBack() throws {
+        let response = try Self.response(429, headers: ["Retry-After": "soon"])
+        #expect(TelemetryDeckTransport.outcome(for: response, now: Self.now) == .retryable(reason: "http-429"))
+    }
+
+    /// `delay-seconds = 1*DIGIT` and the three `HTTP-date` forms of RFC 9110
+    /// §5.6.7, which a recipient must accept, including the two obsolete ones.
+    @Test(
+        "Retry-After parses delay-seconds and every HTTP-date form",
+        arguments: [
+            ("0", 0.0),
+            ("120", 120.0),
+            (" 120\t", 120.0),
+            ("Sun, 06 Nov 1994 08:51:37 GMT", 120.0),
+            ("Sunday, 06-Nov-94 08:51:37 GMT", 120.0),
+            ("Sun Nov  6 08:51:37 1994", 120.0)
+        ]
+    )
+    func retryAfterParses(value: String, expected: TimeInterval) {
+        #expect(TelemetryDeckTransport.retryAfter(value, now: Self.now) == expected)
+    }
+
+    /// A date already past is "now", not a negative wait for the core to
+    /// misread.
+    @Test("A Retry-After date already past is a zero delay")
+    func pastRetryAfterDateIsZero() {
+        #expect(TelemetryDeckTransport.retryAfter("Sun, 06 Nov 1994 08:00:00 GMT", now: Self.now) == 0)
+    }
+
+    /// Anything outside the grammar is refused rather than guessed at: a
+    /// sign, a fraction, a unit, a zone other than GMT, or a count too large
+    /// for a `Double` to hold.
+    @Test(
+        "A Retry-After outside the grammar is refused",
+        arguments: [
+            "",
+            "-5",
+            "+5",
+            "1.5",
+            "5s",
+            "0x10",
+            "Sun, 06 Nov 1994 08:51:37 PST",
+            String(repeating: "9", count: 400)
+        ]
+    )
+    func malformedRetryAfterIsRefused(value: String) {
+        #expect(TelemetryDeckTransport.retryAfter(value, now: Self.now) == nil)
+    }
+
     /// The SDK's `disposition()` guards `as? HTTPURLResponse` and returns
     /// `.retry`. A response with no status carries no evidence the batch was
     /// rejected, so dropping it would lose signals on a proxy quirk.
@@ -87,12 +159,16 @@ struct TelemetryDeckTransportOutcomeTests {
 
     // MARK: Private
 
-    private static func response(_ code: Int) throws -> HTTPURLResponse {
+    /// RFC 9110's own example instant, Sun, 06 Nov 1994 08:49:37 GMT, so each
+    /// date form above is two minutes ahead of it.
+    private static let now = Date(timeIntervalSince1970: 784_111_777)
+
+    private static func response(_ code: Int, headers: [String: String]? = nil) throws -> HTTPURLResponse {
         try #require(try HTTPURLResponse(
             url: TelemetryDeckFixture.url("https://nom.telemetrydeck.com/v2/"),
             statusCode: code,
             httpVersion: "HTTP/1.1",
-            headerFields: nil
+            headerFields: headers
         ))
     }
 }
