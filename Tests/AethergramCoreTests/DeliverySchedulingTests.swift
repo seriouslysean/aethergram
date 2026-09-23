@@ -731,6 +731,84 @@ struct DeliverySchedulingTests {
         #expect(afterKill.openSessionStartedAt == opened)
         #expect(afterKill.lastActivityAt == opened.addingTimeInterval(300))
     }
+
+    // MARK: Releasing the recorder
+
+    /// A sleeping drain holds the recorder weakly and has nothing to send
+    /// once it is gone. Left running it would sleep out its interval, up to
+    /// the backoff ceiling, for nothing.
+    @Test("Releasing the recorder cancels a drain sleeping out its delay")
+    func releasingTheRecorderCancelsASleepingDrain() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let sleep = ObservedSleep()
+        let released = WeakReference<SignalRecorder>()
+        do {
+            let recorder = try SignalRecorder(
+                configuration: testConfiguration(transmitInterval: 3600),
+                transport: SpyTransport(),
+                queueStorage: RecordingQueueStorage(directory: directory),
+                retentionStore: SpyRetentionStore(),
+                clientUserProvider: { "client-user" },
+                environmentProvider: { [:] },
+                calendar: testCalendar,
+                now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
+                retryDelay: { _ in 3600 },
+                sleep: sleep.sleep
+            )
+            released.value = recorder
+            recorder.updateConsent(.granted)
+            recorder.record("Game.started")
+            await recorder.writer.awaitPendingWrites()
+            await waitUntil { sleep.startedCount == 1 }
+        }
+        await waitUntil { sleep.cancelled.isOpen }
+
+        #expect(released.value == nil)
+        #expect(sleep.cancelled.isOpen)
+    }
+
+    /// A drain that is sending keeps the recorder alive for the rest of its
+    /// pass, so the batches it had queued still go. What it schedules after
+    /// the pass is a sleeping drain, which the release then cancels.
+    @Test("Releasing the recorder mid-send finishes that pass's batches and schedules nothing after")
+    func releasingTheRecorderMidSendFinishesThePassOnly() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let sleep = ObservedSleep()
+        let transport = NamedHoldTransport(holding: ["a"], failing: ["c"])
+        defer { transport.releaseAll() }
+        let released = WeakReference<SignalRecorder>()
+        do {
+            let recorder = try SignalRecorder(
+                configuration: testConfiguration(batchSize: 1, transmitInterval: 3600),
+                transport: transport,
+                queueStorage: RecordingQueueStorage(directory: directory),
+                retentionStore: SpyRetentionStore(),
+                clientUserProvider: { "client-user" },
+                environmentProvider: { [:] },
+                calendar: testCalendar,
+                now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
+                retryDelay: { _ in 3600 },
+                sleep: sleep.sleep
+            )
+            released.value = recorder
+            recorder.updateConsent(.granted)
+            // A full batch of one sends at once, so "a" is in flight before
+            // the other two are recorded.
+            recorder.record("a")
+            await transport.held("a").wait()
+            recorder.record("b")
+            recorder.record("c")
+            await recorder.writer.awaitPendingWrites()
+        }
+        transport.release("a")
+        await waitUntil { released.value == nil }
+        await waitUntil { sleep.cancelled.isOpen }
+
+        #expect(released.value == nil)
+        #expect(transport.sentSignalNames == ["a", "b", "c"])
+        #expect(sleep.startedCount == 1)
+        #expect(sleep.cancelled.isOpen)
+    }
 }
 
 // MARK: - Waiting on scheduled work
