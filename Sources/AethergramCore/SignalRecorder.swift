@@ -32,8 +32,9 @@ public final class SignalRecorder: Sendable {
     ///     task at utility priority and never under its lock, so a send may
     ///     suspend for as long as the network takes.
     ///   - queueStorage: The durable queue. `load()` is called under the lock,
-    ///     once per grant; `persist` and `purge` run on the recorder's serial
-    ///     writer queue. None may call back into the recorder.
+    ///     at most once per recorder; `persist` and `purge` run on the
+    ///     recorder's serial writer queue. None may call back into the
+    ///     recorder.
     ///   - retentionStore: Where the session counters live. Every call is made
     ///     under the lock, and none may call back into the recorder.
     ///   - clientUserProvider: Resolves the consumer's analytics identifier.
