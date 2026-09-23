@@ -342,8 +342,8 @@ final class SpyRetentionStore: RetentionStore, @unchecked Sendable {
     /// Run once, inside the `clear` an erase performs — which the recorder
     /// performs inside its own lock. That makes this the only seam a test has
     /// into an erase already in progress, and the work here must not call back
-    /// into the recorder: the lock is not recursive, so this thread would
-    /// deadlock rather than race. Release another thread instead.
+    /// into the recorder: the lock is not recursive, so the process would
+    /// terminate rather than race. Release another thread instead.
     var duringClear: (@Sendable () -> Void)? {
         get { lock.withLock { clearWork } }
         set { lock.withLock { clearWork = newValue } }
@@ -440,4 +440,117 @@ final class PurgeResistantQueueStorage: SignalQueueStorage, @unchecked Sendable 
     private let lock = NSLock()
     private var stored: [Signal] = []
     private var purgeCalls = 0
+}
+
+/// A clock the test sets rather than one that advances per read.
+///
+/// The session arithmetic turns on which instant each call saw, and a stepping
+/// clock ties that to how many reads happened before it — a count the recorder
+/// is free to change.
+final class SettableClock: @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init(_ start: Date) {
+        current = start
+    }
+
+    // MARK: Internal
+
+    /// The closure the recorder's `now:` parameter takes.
+    var read: @Sendable () -> Date {
+        { self.lock.withLock { self.current } }
+    }
+
+    func set(_ date: Date) {
+        lock.withLock { current = date }
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private var current: Date
+}
+
+/// Holds its first send open until the test releases it, deaf to cancellation;
+/// every later send answers at once.
+///
+/// Deafness is the point. A cancelled send that unwinds instantly never shows
+/// the window a real one does — `URLSession` has to notice the cancel and the
+/// verdict still has to come back — and a hold that resumed on cancel would
+/// turn a test of that window into a race it could pass by losing.
+///
+/// Suspends rather than blocks, so a held drain costs the pool no thread.
+final class HeldFirstSendTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Internal
+
+    /// Opened once the first send is holding.
+    let firstSendHeld = Gate()
+
+    var sentSignalNames: [String] {
+        lock.withLock { received.flatMap { $0.signals.map(\.name) } }
+    }
+
+    var sendCount: Int {
+        lock.withLock { received.count }
+    }
+
+    /// Idempotent, and safe before the send arrives: a send that finds the
+    /// hold already released does not wait.
+    func release() {
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            released = true
+            let next = held
+            held = nil
+            return next
+        }
+        waiting?.resume()
+    }
+
+    func send(_ batch: SignalBatch) async -> TransportOutcome {
+        let isFirst: Bool = lock.withLock {
+            received.append(batch)
+            return received.count == 1
+        }
+        guard isFirst else { return .delivered }
+        await withCheckedContinuation { continuation in
+            let resumeNow: Bool = lock.withLock {
+                guard !released else { return true }
+                held = continuation
+                return false
+            }
+            firstSendHeld.open()
+            if resumeNow { continuation.resume() }
+        }
+        return .delivered
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private var received: [SignalBatch] = []
+    private var held: CheckedContinuation<Void, Never>?
+    private var released = false
+}
+
+/// Records the priority each send runs at, and opens a gate on the first.
+final class PrioritySpyTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Internal
+
+    let firstSend = Gate()
+
+    var priorities: [TaskPriority] {
+        lock.withLock { observed }
+    }
+
+    func send(_: SignalBatch) async -> TransportOutcome {
+        let priority = Task.currentPriority
+        lock.withLock { observed.append(priority) }
+        firstSend.open()
+        return .delivered
+    }
+
+    // MARK: Private
+
+    private let lock = NSLock()
+    private var observed: [TaskPriority] = []
 }

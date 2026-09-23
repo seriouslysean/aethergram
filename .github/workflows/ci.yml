@@ -1,7 +1,8 @@
 name: ci
 
-# The suite is the merge gate. Offline and seconds, so nothing green depends on a vendor being
-# reachable: the adapter's tests assert the request a batch produces, they do not send it.
+# The suite is the merge gate. Offline and a few minutes from cold, so nothing green depends on a
+# vendor being reachable: the adapter's tests assert the request a batch produces, they do not send
+# it. Scripts/run-checks.sh is the whole gate, so a local run and this job prove the same things.
 
 on:
   pull_request:
@@ -10,6 +11,13 @@ on:
 
 permissions:
   contents: read
+
+# A new push to a pull request supersedes the run before it, so that run is cancelled. Every other
+# run gets a group of its own: GitHub replaces a pending run in a shared group even without
+# cancel-in-progress, and no run on main is one to lose.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -33,7 +41,8 @@ jobs:
       # Full history: the leak scan's history tier runs with --all, and a shallow (depth-1)
       # checkout would leave it scanning the one fetched commit -- a gate that never fires
       # looks exactly like one that passes.
-      - uses: actions/checkout@v4
+      # A tag can be moved to other code after review; a commit SHA cannot.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 

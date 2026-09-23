@@ -7,7 +7,7 @@
         ///
         /// StoreKit is a system framework rather than a dependency, so this
         /// belongs in the package: every app selling in-app purchases wants the
-        /// same four fields, and rebuilding them per app is how they drift.
+        /// same five fields, and rebuilding them per app is how they drift.
         init(transaction: StoreKit.Transaction) {
             self.init(
                 productID: transaction.productID,

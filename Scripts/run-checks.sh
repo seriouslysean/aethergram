@@ -1,11 +1,12 @@
 #!/bin/sh
-# Aethergram repo checks. Three gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. Four gates, in the order a failure is cheapest to read.
 #
 #   Scripts/run-checks.sh    offline, no network
 #
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
-# a gate that never fires looks exactly like one that passes. `swift test` is the correctness gate.
+# a gate that never fires looks exactly like one that passes. The build gates compile what the suite
+# cannot reach, and `swift test` is the correctness gate.
 
 set -u
 
@@ -62,6 +63,49 @@ else
     pass
 fi
 
+it "a scan with no work tree to read fails rather than reporting clean"
+NOTREE="$TMP/no-tree"
+mkdir -p "$NOTREE/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$NOTREE/Scripts/scan-for-leaks.sh"
+chmod +x "$NOTREE/Scripts/scan-for-leaks.sh"
+# The ceiling keeps git from finding a repository above the fixture, wherever TMPDIR points.
+if (cd "$NOTREE" && GIT_CEILING_DIRECTORIES="$TMP" git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
+    fail "the fixture is inside a work tree"
+else
+    OUT="$(cd "$NOTREE" && GIT_CEILING_DIRECTORIES="$TMP" ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+        printf '%s\n' "$OUT"
+        fail "a scan outside a work tree exited $SCAN_RC rather than 2"
+    else
+        pass
+    fi
+fi
+
+it "a leak staged into the runner, outside its fixtures, is refused"
+RUNNER="$TMP/runner"
+mkdir -p "$RUNNER/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$ROOT/Scripts/run-checks.sh" "$RUNNER/Scripts/"
+chmod +x "$RUNNER/Scripts/scan-for-leaks.sh"
+(cd "$RUNNER" && git init -q && git add Scripts)
+# The unmodified runner must scan clean first, or a scanner that refuses the runner wholesale
+# would pass this test for the wrong reason.
+if ! OUT="$(cd "$RUNNER" && ./Scripts/scan-for-leaks.sh 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "the unmodified runner was refused, so its fixtures are not all allowed"
+else
+    printf '# see /Users/somebody\n' >> "$RUNNER/Scripts/run-checks.sh"
+    (cd "$RUNNER" && git add Scripts/run-checks.sh)
+    OUT="$(cd "$RUNNER" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -eq 0 ]; then
+        fail "a leak staged into the runner was accepted"
+    elif ! printf '%s\n' "$OUT" | grep -q 'Scripts/run-checks.sh:.*/Users/somebody'; then
+        printf '%s\n' "$OUT"
+        fail "the scanner refused for a reason other than the staged line"
+    else
+        pass
+    fi
+fi
+
 printf '\ncommit message gate\n'
 
 it "a session trailer in a message is refused"
@@ -97,6 +141,118 @@ else
     fail "a clean message was refused"
 fi
 
+it "a merge subject typed into a message is refused"
+printf 'Merge pull request #4812 from seriouslysean/x\n' > "$TMP/mergesubject"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/mergesubject" >/dev/null 2>&1; then
+    fail "a message carrying GitHub's merge subject was accepted, though no hook ever sees one GitHub wrote"
+else
+    pass
+fi
+
+it "a pull request number ending a subject is refused"
+printf 'fix: crash when the widget reloads (#4812)\n' > "$TMP/squashsubject"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/squashsubject" >/dev/null 2>&1; then
+    fail "a subject ending in a pull request number was accepted"
+else
+    pass
+fi
+
+it "an issue number in a body is still refused"
+printf 'fix: a thing\n\nSee #100 for why.\n' > "$TMP/bodynumber"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/bodynumber" >/dev/null 2>&1; then
+    fail "a message carrying an issue number in its body was accepted"
+else
+    pass
+fi
+
+# The history tier reads `%H %s` lines rather than a message file, so it is proved on real commits.
+# These are throwaway repos: the hooks are switched off so a fixture meant to be refused can exist.
+fixture_git() {
+    git -c user.name=fixture -c user.email=fixture -c commit.gpgsign=false \
+        -c core.hooksPath=/dev/null "$@"
+}
+
+it "a merge commit carrying GitHub's merge subject is accepted in history"
+HIST="$TMP/history-ok"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'fix: a thing' \
+    && fixture_git checkout -q -b side \
+    && fixture_git commit -q --allow-empty -m 'fix: another thing' \
+    && fixture_git checkout -q - \
+    && fixture_git merge -q --no-ff -m 'Merge pull request #101 from seriouslysean/101-a-branch' side
+) || fail "the fixture history could not be built"
+if OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the subject GitHub writes on a merge commit was refused in history"
+fi
+
+it "a pull request number ending a subject is refused in history"
+HIST="$TMP/history-squash"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'fix: crash when the widget reloads (#4812)'
+) || fail "the fixture history could not be built"
+OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a subject ending in a pull request number was accepted in history"
+elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the subject"
+else
+    pass
+fi
+
+it "a merge subject on a commit that is not a merge is refused in history"
+HIST="$TMP/history-typed-merge"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'Merge pull request #4812 from seriouslysean/x'
+) || fail "the fixture history could not be built"
+OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a merge subject typed onto a single-parent commit was accepted in history"
+elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the subject"
+else
+    pass
+fi
+
+it "a merge subject's shape in a body is still refused in history"
+HIST="$TMP/history-body"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'fix: a thing' -m 'Merge pull request #102 from seriouslysean/102-a-branch'
+) || fail "the fixture history could not be built"
+OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a merge subject's shape in a body was accepted in history"
+elif ! printf '%s\n' "$OUT" | grep -q '#102'; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the body line"
+else
+    pass
+fi
+
 it "what a verbose commit appends below the scissors line is not scanned"
 printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #404\n' > "$TMP/verbose"
 if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/verbose" 2>&1)"; then
@@ -104,6 +260,78 @@ if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/verbose" 2>&1)"; the
 else
     printf '%s\n' "$OUT"
     fail "the diff a verbose commit appends was scanned"
+fi
+
+printf '\nbuild gates\n'
+
+# `swift test` compiles the host in debug, so the iOS arms, the release arm of `#if DEBUG`, and
+# extension safety are proved here instead: an iOS release build with -application-extension, which
+# a host's widget or share extension links under. Warnings stay non-fatal until the known iOS 18
+# deprecation in EnvironmentSnapshot.swift is gone; -warnings-as-errors waits on that.
+IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)" || IOS_SDK=""
+ios_build() {
+    _pkg="$1"; _scratch="$2"; shift 2
+    [ -n "$IOS_SDK" ] || { printf 'xcrun found no iphoneos SDK\n'; return 1; }
+    swift build --package-path "$_pkg" --scratch-path "$_scratch" \
+        -c release --triple arm64-apple-ios18.0 --sdk "$IOS_SDK" -Xswiftc -application-extension \
+        --explicit-target-dependency-import-check error "$@"
+}
+# The core alone, into a scratch path that has never held the adapter's module, so the build proves
+# the core compiles with no adapter in reach rather than finding one left over from a full build.
+core_gate() { ios_build "$1" "$2" --target AethergramCore; }
+package_gate() { ios_build "$1" "$2" --target Aethergram; }
+
+it "the core builds for iOS release with no adapter in reach"
+if OUT="$(core_gate "$ROOT" "$TMP/ios" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the core did not build alone for iOS release"
+fi
+
+it "the package builds for iOS release as extension-safe"
+if OUT="$(package_gate "$ROOT" "$TMP/ios" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the package did not build for iOS release with -application-extension"
+fi
+
+# A copy of the package to break on purpose, so a gate is watched refusing before it is trusted.
+copy_package() { mkdir -p "$1" && cp -R "$ROOT/Package.swift" "$ROOT/Sources" "$ROOT/Tests" "$1/"; }
+
+it "a core that imports the adapter is refused"
+BAD="$TMP/core-imports-adapter"
+copy_package "$BAD"
+printf 'import AethergramTelemetryDeck\n' > "$BAD/Sources/AethergramCore/ImportsAdapter.swift"
+OUT="$(core_gate "$BAD" "$BAD.build" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ]; then
+    fail "a core importing the adapter built"
+elif ! printf '%s\n' "$OUT" | grep -q 'AethergramTelemetryDeck'; then
+    printf '%s\n' "$OUT"
+    fail "the core build failed for a reason other than the import"
+else
+    pass
+fi
+
+it "the iOS arm, the release arm, and extension-unsafe API are each compiled"
+BAD="$TMP/unbuilt-arms"
+copy_package "$BAD"
+printf '#if os(iOS)\nlet iosArmProbe: Int = iosArmMarker\n#endif\n' > "$BAD/Sources/AethergramCore/IOSArm.swift"
+printf '#if !DEBUG\nlet releaseArmProbe: Int = releaseArmMarker\n#endif\n' > "$BAD/Sources/AethergramCore/ReleaseArm.swift"
+printf '#if os(iOS)\nimport UIKit\n@MainActor func extensionProbe() -> Any { UIApplication.shared }\n#endif\n' \
+    > "$BAD/Sources/AethergramCore/ExtensionUnsafe.swift"
+OUT="$(package_gate "$BAD" "$BAD.build" 2>&1)"; GATE_RC=$?
+# Whole-module release reports every file's error in one pass, so one build proves all three; a
+# missing marker names the arm the gate does not reach.
+MISSING=""
+for MARKER in iosArmMarker releaseArmMarker 'unavailable in application extensions'; do
+    printf '%s\n' "$OUT" | grep -q "$MARKER" || MISSING="$MISSING [$MARKER]"
+done
+if [ "$GATE_RC" -eq 0 ] || [ -n "$MISSING" ]; then
+    fail "the build gate exited $GATE_RC and never reached:$MISSING"
+else
+    pass
 fi
 
 printf '\nswift test\n'

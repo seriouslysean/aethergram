@@ -1,5 +1,10 @@
 # Contributing
 
+## Toolchain
+
+Xcode 26.6, which provides Swift 6.3. `.swift-version` pins 6.3, the manifest's tools version is
+6.3, and CI runs against `Xcode_26.6.app` and fails if that Xcode reports a Swift older than 6.3.
+
 ## Setup
 
 Point git at the committed hooks once per clone. Git will not let a repo commit this setting,
@@ -37,6 +42,11 @@ Scripts/run-checks.sh
 `Tests/` is SwiftPM's and is reached by `swift test`. `Scripts/` holds the repo-level checks that
 are not Swift, which is where a Swift package puts them.
 
+Besides the leak scan and the suite, `run-checks.sh` builds what `swift test` never compiles: the
+package for iOS in release as extension-safe (`-application-extension`), and the core alone for
+iOS in release with no adapter in reach. Each build gate is first watched refusing a copy of the
+package broken on purpose.
+
 ## Every change starts as an issue
 
 Open an issue before writing code, even for a one-line fix, so the reason survives longer than the
@@ -71,11 +81,19 @@ name, a bundle identifier, or an issue number into a public commit. Prose is the
 
 `Scripts/scan-for-leaks.sh` runs in the checks, in the pre-commit hook over the staged tree, and in
 the commit-msg hook over the message being written. It refuses absolute home paths, email
-addresses, cross-repo issue references, bare issue numbers, private record ids,
-and, in a message, agent-session trailers. It also refuses a numbered issue or pull request URL
+addresses, cross-repo issue references, bare issue numbers of three or more digits, private record
+ids, and, in a message, agent-session trailers. It also refuses a numbered issue or pull request URL
 (`github.com/.../issues|pull/N`) naming any repository, this one included, since a bare number is
 not a stable reference either. The file tier reads the index, so stage a file before expecting it
 to be scanned.
+
+Two exemptions, each as narrow as it can be. GitHub writes its own subject on a web merge, which
+runs no hook: `Merge pull request #N from seriouslysean/<branch>`. The history scan forgives that
+number, in that subject, on a merge commit only; the same shape anywhere else, a body included, is
+still refused. And the scanner and the runner carry leak-shaped fixtures on
+purpose, so they are scanned line by line like every other file, and only their exact fixture lines
+are allowed, listed in `Scripts/scan-for-leaks.sh`. A fixture that changes has to change there
+too.
 
 The scan is a handful of hand-written regexes rather than a secret scanner. What it refuses are
 identifying references, not credentials, so a scanner's entropy heuristics and maintained provider
@@ -105,9 +123,12 @@ failure, not the reporter.
 2. `Scripts/run-checks.sh` passes on a clean checkout.
 3. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
    reader copying one gets the release being cut rather than the previous one.
-4. Merge the pull request.
-5. Confirm local `main` matches `origin/main`.
-6. Tag `vX.Y.Z` and push the tag, then publish a release naming the issues it closes.
+4. Write the release's entry in `CHANGELOG.md`: every behaviour change a host can see, and any
+   trap a host could newly hit.
+5. Merge the pull request.
+6. Confirm local `main` matches `origin/main`.
+7. Tag `vX.Y.Z` with an annotation summarizing the release, and push the tag.
+8. Publish a GitHub release from the tag, naming the issues it closes.
 
 What a version number promises is in [STABILITY.md](STABILITY.md).
 

@@ -14,15 +14,24 @@ import Foundation
 ///
 /// The fix for both is to make the storage single-threaded and to take it off
 /// the caller. Intent is captured under the recorder's own lock, so the order
-/// of writes is the order of the mutations that produced them; the work happens
-/// on one serial queue.
+/// of writes is the order of the mutations that produced them; the encode and
+/// the write, the O(queue) work, happen on one serial queue. What stays on the
+/// caller is a copy: a snapshot shares the pending array's storage, so the
+/// next append or eviction while the writer still holds it copies the whole
+/// queue under the lock.
 ///
-/// **Coalescing is the point, not an optimization.** Only the newest intent is
-/// ever written: a burst of ten records produces one file write, because each
-/// snapshot supersedes the last. That is sound because a snapshot is the whole
-/// queue rather than a delta — there is nothing in an older one that a newer
-/// one lacks. A purge is modelled as an intent too, so a stale snapshot can
-/// never overtake it and resurrect what a decline erased.
+/// **Coalescing is the point, not an optimization.** Only the newest snapshot
+/// is ever written: a burst of ten records produces one file write, because
+/// each snapshot supersedes the last. That is sound because a snapshot is the
+/// whole queue rather than a delta — there is nothing in an older one that a
+/// newer one lacks.
+///
+/// A purge is not superseded by anything. It drops every snapshot submitted
+/// before it, so a stale one can never overtake it and resurrect what a decline
+/// erased, and it stays pending under any snapshot submitted after it, because
+/// a snapshot describes only what the recorder holds: a store can hold more
+/// than that — a file it could not read, one it could not reach — and only
+/// the erase says to drop it. The drain runs the purge, then the snapshot.
 ///
 /// **What this costs.** The write no longer completes before `record` returns,
 /// so a kill in the microseconds between them loses that signal where the
@@ -38,21 +47,28 @@ final class QueueWriter: @unchecked Sendable {
 
     // MARK: Internal
 
-    /// Records the intent to persist `signals`. Call from inside the lock that
+    /// Records the intent to persist `signals`, replacing any unwritten
+    /// snapshot but never an unwritten purge. Call from inside the lock that
     /// produced the snapshot: that is what makes write order match commit order.
     func persist(_ signals: [Signal]) {
-        submit(.contents(signals))
+        submit { $0.contents = signals }
     }
 
-    /// Records the intent to erase the queue. Supersedes any unwritten
-    /// snapshot, so a decline cannot be undone by a write already in flight.
+    /// Records the intent to erase the queue. Drops any unwritten snapshot, so
+    /// a decline cannot be undone by a write already in flight.
     func purge() {
-        submit(.purge)
+        submit {
+            $0.purge = true
+            $0.contents = nil
+        }
     }
 
-    /// Waits for any pending write to reach disk.
-    ///
-    /// Bounded by one encode and one atomic write. Two callers need that: the
+    /// Waits until the writer's current drain goes idle: every write
+    /// submitted before the call, and every one submitted while that drain
+    /// runs, because it keeps writing until nothing is left, so a caller
+    /// recording continuously from another thread extends the wait. A write
+    /// submitted after that drain goes idle can be scheduled behind this wait
+    /// and still be pending when it returns. Two callers need it: the
     /// consumer's deactivation path, where the process is about to stop being
     /// allowed to run, and an erase, which promises the file is gone rather
     /// than that a delete was asked for.
@@ -62,21 +78,28 @@ final class QueueWriter: @unchecked Sendable {
 
     // MARK: Private
 
-    private enum Intent {
-        case contents([Signal])
-        case purge
+    /// What is still owed to the store. A purge and a snapshot together mean
+    /// the snapshot was submitted after the purge, which is the only order
+    /// `purge()` leaves them in.
+    private struct Pending {
+        var purge = false
+        var contents: [Signal]?
+
+        var isEmpty: Bool {
+            !purge && contents == nil
+        }
     }
 
     private let storage: any SignalQueueStorage
     private let queue: DispatchQueue
     private let lock = NSLock()
-    private var pending: Intent?
+    private var pending = Pending()
     private var scheduled = false
 
-    private func submit(_ intent: Intent) {
+    private func submit(_ update: (inout Pending) -> Void) {
         lock.lock()
         defer { lock.unlock() }
-        pending = intent
+        update(&pending)
         guard !scheduled else { return }
         scheduled = true
         // Dispatched inside the lock: unlocking first leaves a window where a
@@ -88,22 +111,25 @@ final class QueueWriter: @unchecked Sendable {
         queue.async { self.drain() }
     }
 
-    /// Runs on `queue`. Keeps writing the newest pending intent until none is
-    /// left, so a burst submitted while a write is in flight still coalesces
-    /// into one dispatch rather than queuing one closure per submit.
+    /// Runs on `queue`. Keeps writing what is pending until nothing is left,
+    /// so a burst submitted while a write is in flight still coalesces into
+    /// one dispatch rather than queuing one closure per submit.
     private func drain() {
         while true {
             lock.lock()
-            guard let next = pending else {
+            let next = pending
+            guard !next.isEmpty else {
                 scheduled = false
                 lock.unlock()
                 return
             }
-            pending = nil
+            pending = Pending()
             lock.unlock()
-            switch next {
-            case let .contents(signals): storage.persist(signals)
-            case .purge: storage.purge()
+            if next.purge {
+                storage.purge()
+            }
+            if let signals = next.contents {
+                storage.persist(signals)
             }
         }
     }

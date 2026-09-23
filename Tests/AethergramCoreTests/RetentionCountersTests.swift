@@ -5,7 +5,7 @@ import Testing
 
 /// `RetentionCounters` reads no clock and touches no storage, so every counter
 /// is pinned to a fixed date here rather than to the machine's.
-@Suite("Retention counters")
+@Suite("Retention counters", .tags(.lifecycle))
 struct RetentionCountersTests {
     @Test("The first session sets the acquisition day and repeats do not double-count it")
     func sessionStartsCountDistinctDaysOnce() throws {
@@ -84,6 +84,29 @@ struct RetentionCountersTests {
         #expect(record.totalSessionsCount == 2)
     }
 
+    /// An extension is often killed within seconds of opening. A checkpoint
+    /// that waits out the whole interval before its first write leaves such a
+    /// session closing at zero seconds, which `folding` discards, so the
+    /// average only ever hears about the sessions long enough to survive it.
+    @Test("A session killed inside the checkpoint interval still closes with its measured duration")
+    func shortKilledSessionIsMeasured() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        var record = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        let touch = RetentionCounters.touching(record, at: start.addingTimeInterval(3))
+        #expect(touch.shouldPersist, "the first activity after a start is the one a kill would otherwise lose")
+        record = touch.record
+
+        record = RetentionCounters.recordingSessionStart(
+            in: record,
+            at: start.addingTimeInterval(3600),
+            calendar: testCalendar
+        )
+
+        #expect(record.completedSessionsCount == 1)
+        #expect(record.totalSessionSeconds == 3)
+        #expect(record.previousSessionSeconds == 3)
+    }
+
     /// The divisor is completed sessions, matching the vendor's `dropLast()`.
     /// Dividing by started sessions is low by `k/(k+1)` forever — half the
     /// truth at one completed session — because the in-flight session
@@ -147,6 +170,82 @@ struct RetentionCountersTests {
         #expect(record.previousSessionSeconds == nil)
     }
 
+    /// The negative case above routes through `touching`, which refuses to move
+    /// the checkpoint backwards, so it only ever proves the zero-length path.
+    /// An explicit end is the one caller that hands `folding` a negative
+    /// duration directly — a clock set back between start and end.
+    @Test("An explicit end before its own start is discarded and not counted")
+    func explicitEndBeforeStartIsDiscarded() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let opened = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+
+        let closed = RetentionCounters.recordingSessionEnd(in: opened, at: start.addingTimeInterval(-5))
+
+        #expect(closed.completedSessionsCount == 0)
+        #expect(closed.totalSessionSeconds == 0)
+        #expect(closed.previousSessionSeconds == nil)
+        #expect(closed.openSessionStartedAt == nil)
+    }
+
+    /// A record whose session has a start but no checkpoint has no measured
+    /// end. It is closed so the next session can open, and counted as nothing
+    /// rather than as a guess.
+    @Test("An open session with no recorded activity closes without being counted")
+    func openSessionWithoutActivityClosesUncounted() throws {
+        let start = try testDate(year: 2026, month: 1, day: 5)
+        let record = RetentionRecord(firstSessionDay: "2026-01-05", totalSessionsCount: 1, openSessionStartedAt: start)
+
+        let closed = RetentionCounters.closingOpenSession(in: record)
+
+        #expect(closed.openSessionStartedAt == nil)
+        #expect(closed.completedSessionsCount == 0)
+        #expect(closed.totalSessionSeconds == 0)
+        #expect(closed.previousSessionSeconds == nil)
+    }
+
+    /// The cap is what bounds the record's size; without eviction a daily user
+    /// grows it forever. Oldest days go first, and the acquisition day is not
+    /// part of the history, so it survives the eviction.
+    @Test("The day history keeps only the most recent days past its limit")
+    func dayHistoryEvictsOldestPastLimit() throws {
+        let first = try testDate(year: 2024, month: 1, day: 1)
+        var record: RetentionRecord?
+        for offset in 0 ... RetentionCounters.distinctDayLimit {
+            let day = try #require(testCalendar.date(byAdding: .day, value: offset, to: first))
+            record = RetentionCounters.recordingSessionStart(in: record, at: day, calendar: testCalendar)
+        }
+        let capped = try #require(record)
+        let last = try #require(testCalendar.date(byAdding: .day, value: RetentionCounters.distinctDayLimit, to: first))
+
+        #expect(capped.distinctDaysUsed.count == RetentionCounters.distinctDayLimit)
+        #expect(capped.distinctDaysUsed.first == "2024-01-02")
+        #expect(capped.distinctDaysUsed.last == RetentionCounters.dayString(for: last, calendar: testCalendar))
+        #expect(capped.firstSessionDay == "2024-01-01")
+    }
+
+    /// A day turns over at the device's midnight, not UTC's, and the window
+    /// is thirty calendar days even across the 23-hour day a spring-forward
+    /// makes. 2026-03-08 is that day in New York.
+    @Test("Days follow the device's midnight and the window spans a daylight-saving change")
+    func dayMathFollowsLocalMidnightAcrossDaylightSaving() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        func local(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) throws -> Date {
+            try #require(calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute)))
+        }
+
+        var record: RetentionRecord?
+        for date in try [local(2, 5, 23, 30), local(2, 6, 23, 30), local(3, 7, 23, 30), local(3, 8, 23, 30)] {
+            record = RetentionCounters.recordingSessionStart(in: record, at: date, calendar: calendar)
+        }
+        let parameters = RetentionCounters.parameters(from: record, at: try local(3, 8, 23, 45), calendar: calendar)
+
+        // 23:30 in New York is already the next day in UTC.
+        #expect(record?.distinctDaysUsed == ["2026-02-05", "2026-02-06", "2026-03-07", "2026-03-08"])
+        // 2026-02-06 is exactly thirty days before 2026-03-08; 2026-02-05 is not.
+        #expect(parameters[PayloadKey.retentionDistinctDaysUsedLastMonth] == "3")
+    }
+
     /// The deactivation hook is more precise than the checkpoint when it fires,
     /// and it is allowed to fire; it is simply not required to.
     @Test("An explicit end closes the session against its own instant")
@@ -162,14 +261,19 @@ struct RetentionCountersTests {
     }
 
     /// The checkpoint is the measurement, and persisting it on every signal
-    /// would put a `UserDefaults` write on the emit path.
-    @Test("The activity checkpoint asks for a write only once past the interval")
+    /// would put a `UserDefaults` write on the emit path. The first activity
+    /// after a start is written at once, so a kill cannot erase the session;
+    /// every later one waits out the interval.
+    @Test("The activity checkpoint writes the first activity, then only once past the interval")
     func checkpointCoalescesWrites() throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
-        let record = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        let opened = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
 
-        #expect(!RetentionCounters.touching(record, at: start.addingTimeInterval(1)).shouldPersist)
-        #expect(RetentionCounters.touching(record, at: start.addingTimeInterval(10)).shouldPersist)
+        #expect(!RetentionCounters.touching(opened, at: start).shouldPersist, "no time has passed")
+        let first = RetentionCounters.touching(opened, at: start.addingTimeInterval(1))
+        #expect(first.shouldPersist)
+        #expect(!RetentionCounters.touching(first.record, at: start.addingTimeInterval(2)).shouldPersist)
+        #expect(RetentionCounters.touching(first.record, at: start.addingTimeInterval(11)).shouldPersist)
     }
 
     /// `lastActivityAt` must only advance when the interval
@@ -181,14 +285,15 @@ struct RetentionCountersTests {
     @Test("Sub-interval activity still checkpoints once true elapsed time crosses the interval")
     func subIntervalActivityEventuallyCheckpoints() throws {
         let start = try testDate(year: 2026, month: 1, day: 5)
-        var record = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        let opened = RetentionCounters.recordingSessionStart(in: nil, at: start, calendar: testCalendar)
+        var record = RetentionCounters.touching(opened, at: start.addingTimeInterval(1)).record
 
-        for offset in [3, 6, 9] {
+        for offset in [4, 7, 10] {
             let touch = RetentionCounters.touching(record, at: start.addingTimeInterval(Double(offset)))
             #expect(!touch.shouldPersist, "offset \(offset)s must not cross the 10s interval yet")
             record = touch.record
         }
-        let final = RetentionCounters.touching(record, at: start.addingTimeInterval(11))
+        let final = RetentionCounters.touching(record, at: start.addingTimeInterval(12))
         #expect(final.shouldPersist, "11 real seconds since the last checkpoint must cross the interval")
     }
 

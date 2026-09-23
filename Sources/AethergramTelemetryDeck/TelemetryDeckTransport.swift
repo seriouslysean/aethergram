@@ -16,6 +16,12 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// - Parameter logSubsystem: The host's logging subsystem. Outcomes are the
     ///   core's to log; what this logs is the one fact only the adapter knows —
     ///   which ingest partition a build is posting to.
+    /// - Parameter session: Any session but a background one. Sends are async
+    ///   data tasks, which a background session refuses by raising an
+    ///   exception that aborts the host. A send over one fails a precondition
+    ///   first, at the same moment, with a message that names the session.
+    ///   Construction does not check it, so a host that never sends keeps
+    ///   running.
     public init(
         configuration: TelemetryDeckConfiguration,
         logSubsystem: String,
@@ -28,7 +34,27 @@ public struct TelemetryDeckTransport: SignalTransport {
 
     // MARK: Public
 
+    /// Posts the batch as one request and maps the reply:
+    ///
+    /// | Reply | Outcome |
+    /// |---|---|
+    /// | 2xx | `delivered` |
+    /// | 400, 401, 403, 404, 413, 422, 501, 505 | `permanent` |
+    /// | Any other status, including 429 and other 5xx | `retryable` |
+    /// | A response that is not HTTP | `retryable` |
+    /// | A thrown error, cancellation included | `retryable` |
+    /// | A batch that cannot be encoded | `permanent` |
+    ///
+    /// Cancellation reaches the request through `URLSession`, so an erase
+    /// that cancels the drain stops a send still in flight.
+    ///
+    /// - Precondition: `session` has no background identifier.
     public func send(_ batch: SignalBatch) async -> TransportOutcome {
+        // The data task below would abort the host anyway; this names why.
+        precondition(
+            session.configuration.identifier == nil,
+            "TelemetryDeckTransport cannot send over a background URLSession"
+        )
         let request: URLRequest
         do {
             request = try makeRequest(for: batch)

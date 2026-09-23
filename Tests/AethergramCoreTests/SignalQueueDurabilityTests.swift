@@ -202,6 +202,44 @@ struct SignalQueueDurabilityTests {
         #expect(fixture.transport.sentSignalNames == ["signal.2", "signal.3", "signal.4"])
     }
 
+    /// A queue file written under a higher limit, or by a store that carried
+    /// a rescued queue ahead of its snapshot, can hold more than the cap now
+    /// in force. The restore trims it oldest-first and writes the trimmed
+    /// queue back before anything is sent. The removal after a delivered batch
+    /// counts evictions since its claim, so it must take exactly the batch —
+    /// resending the oldest survivor or dropping the newest are the failures.
+    @Test("A restored queue past the cap loses its oldest, and a delivery after removes only what it sent")
+    func restoredQueuePastTheCapLosesItsOldest() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let names = (0 ..< 5).map { "old.\($0)" }
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+            .persist(names.map { Signal(name: $0, sessionID: "session-a", recordedAt: signalDate) })
+
+        let storage = RecordingQueueStorage(directory: directory)
+        let transport = MidSendTransport(outcome: .delivered)
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(batchSize: 2, queueLimit: 3, transmitInterval: 3600),
+            transport: transport,
+            queueStorage: storage,
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: fixedClock(at: signalDate)
+        )
+        storage.settle = { [weak recorder] in recorder?.writer.waitForPendingWrites() }
+        let onDiskDuringFirstSend = NamesSeen()
+        transport.duringFirstSend = { onDiskDuringFirstSend.names = storage.signalsOnDisk.map(\.name) }
+
+        recorder.updateConsent(.granted)
+        await recorder.drain()
+
+        #expect(onDiskDuringFirstSend.names == ["old.2", "old.3", "old.4"])
+        #expect(transport.batches.map { $0.signals.map(\.name) } == [["old.2", "old.3"], ["old.4"]])
+        #expect(storage.signalsOnDisk.isEmpty)
+    }
+
     /// A record landing mid-send can evict the front of a full queue, so the
     /// queue no longer starts with the batch in flight. Part of that batch is
     /// still there and part of it is gone, and no comparison of the signals
@@ -450,6 +488,72 @@ struct SignalQueueDurabilityTests {
         #expect(readable.load().map(\.name) == ["pending.a"])
     }
 
+    /// The recorder reads the queue once per grant, so a read that fails is
+    /// never asked again by the process that made it. Holding the writes off
+    /// the file until then holds them off for the rest of the process: every
+    /// signal it records has nothing on disk to survive a kill, long after the
+    /// file became readable again.
+    ///
+    /// The write is what finds out. Once the file reads, what it held goes
+    /// ahead of the snapshot, because the recorder never saw it and the next
+    /// process is the only one that can send it.
+    @Test(
+        "A queue file that becomes readable again takes the writes, and keeps what it held",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func queueFileReadableAgainTakesTheWritesAndKeepsWhatItHeld() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+        #expect(storage.load().isEmpty)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+
+        let next = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(next.load().map(\.name) == ["pending.a", "later.b"])
+    }
+
+    /// What a late read rescued belongs to no snapshot, so a snapshot cannot
+    /// empty it: the recorder's "everything delivered" is about what it holds,
+    /// and it never held these. Only an erase reaches them.
+    @Test(
+        "An empty snapshot keeps what a late read rescued, and an erase does not",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func emptySnapshotKeepsWhatALateReadRescued() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        storage.persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+        #expect(storage.load().isEmpty)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
+        storage.persist([])
+        let afterDelivery = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(afterDelivery.load().map(\.name) == ["pending.a"])
+
+        storage.purge()
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        storage.persist([Signal(name: "granted.c", sessionID: "session-c", recordedAt: signalDate)])
+        let afterErase = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+        #expect(afterErase.load().map(\.name) == ["granted.c"])
+    }
+
     /// The one purge failure the overwrite fallback cannot reach: a file the
     /// filesystem refuses to delete *and* to write over. The bytes stay, and
     /// the recorder's refusal to re-read them lasts exactly as long as its own
@@ -511,6 +615,38 @@ struct SignalQueueDurabilityTests {
         reborn.persist([Signal(name: "granted.b", sessionID: "granted-session", recordedAt: signalDate)])
         let next = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
         #expect(next.load().map(\.name) == ["granted.b"])
+    }
+
+    /// A purge is not consent: it runs on a decline at launch, before anything
+    /// was ever granted, so what it may leave behind is at most what was there.
+    /// A directory that refuses the delete but holds no queue has nothing for
+    /// the fallback to overwrite and nothing for a mark to stand in for.
+    @Test(
+        "A purge that cannot look inside the directory creates nothing there",
+        .enabled(if: getuid() != 0, "root reaches a directory whose permissions refuse everyone")
+    )
+    func purgeInARefusingDirectoryWithNoQueueCreatesNothing() throws {
+        let directory = try #require(TestTempDirectory.url)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        storage.purge()
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: originalPermissions],
+            ofItemAtPath: directory.path
+        )
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
     }
 
     /// An erase outranks the read failure that suspended the writes: a decline
@@ -611,8 +747,44 @@ struct SignalQueueDurabilityTests {
         )
         storage.persist([Signal(name: "later.b", sessionID: "session-b", recordedAt: signalDate)])
 
+        // The queue the unreachable directory hid is still first: read as
+        // absent, the write would have replaced it.
         let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
-        #expect(readable.load().map(\.name) == ["pending.a"])
+        #expect(readable.load().map(\.name) == ["pending.a", "later.b"])
+    }
+
+    /// "Nobody could look for the mark" is not "there is no mark". Read as
+    /// one, an empty write into a directory out of reach goes ahead as a
+    /// purge, the purge is refused, and the refusal is remembered as an erase
+    /// owed — which the next load then collects from a queue nobody declined.
+    @Test(
+        "A mark nobody could look for is not read as no mark",
+        .enabled(if: getuid() != 0, "root reaches a directory whose permissions refuse everyone")
+    )
+    func markNobodyCouldLookForIsNotReadAsNoMark() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+            .persist([Signal(name: "pending.a", sessionID: "session-a", recordedAt: signalDate)])
+        let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+
+        let originalPermissions = try FileManager.default
+            .attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int ?? 0o755
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        storage.persist([])
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: originalPermissions],
+            ofItemAtPath: directory.path
+        )
+        #expect(storage.load().map(\.name) == ["pending.a"])
     }
 
     /// Suspending the writes is a state, not a verdict. A store that reads the
@@ -640,4 +812,94 @@ struct SignalQueueDurabilityTests {
         let readable = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
         #expect(readable.load().map(\.name) == ["later.b"])
     }
+
+    /// A process whose load fails and whose later read succeeds writes what
+    /// the file held ahead of its own snapshot, so a run of such processes
+    /// adds a snapshot to the file each time and nothing trims it. What is
+    /// carried is bounded at the queue limit, oldest dropped first: here the
+    /// default, since no recorder has handed these stores one of its own.
+    @Test(
+        "A run of processes whose loads keep failing does not grow the queue file without bound",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func carriedSignalsStayBoundedAcrossFailedLoads() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let bound = AethergramConfiguration(logSubsystem: testLogSubsystem).queueLimit
+        let seeded = (0 ..< bound).map { Signal(name: "seeded.\($0)", sessionID: "session-a", recordedAt: signalDate) }
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem).persist(seeded)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        var largest = 0
+        for lifetime in 0 ..< 25 {
+            let storage = FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+            #expect(storage.load().isEmpty)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+            storage.persist([Signal(name: "lifetime.\(lifetime)", sessionID: "session-b", recordedAt: signalDate)])
+            largest = try max(largest, JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL)).count)
+        }
+
+        let onDisk = try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL))
+        #expect(largest <= bound + 1)
+        #expect(onDisk.last?.name == "lifetime.24")
+        #expect(!onDisk.contains { $0.name == "seeded.0" })
+    }
+
+    /// The bound on what a late read carries is the recorder's own limit, not
+    /// the default: a host that queues more than the default kept every
+    /// signal of a failed load for the next process under 0.3.1, and a bound
+    /// the store picked for itself would drop the oldest of them here.
+    @Test(
+        "A late read keeps everything a queue within the host's own limit held",
+        .enabled(if: getuid() != 0, "root reads a file whose permissions refuse everyone")
+    )
+    func lateReadKeepsAQueueWithinTheConfiguredLimit() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let signalDate = try testDate(year: 2026, month: 1, day: 5)
+        let fileURL = directory.appendingPathComponent("aethergram-signal-queue.json")
+        let limit = 5000
+        let seeded = (0 ..< limit).map { Signal(name: "seeded.\($0)", sessionID: "session-a", recordedAt: signalDate) }
+        FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem).persist(seeded)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(queueLimit: limit),
+            transport: SpyTransport(),
+            queueStorage: FileSignalQueueStorage(directory: directory, logSubsystem: testLogSubsystem),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: fixedClock(at: signalDate)
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        recorder.updateConsent(.granted)
+        recorder.record("during.a")
+        recorder.writer.waitForPendingWrites()
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        recorder.record("after.b")
+        recorder.writer.waitForPendingWrites()
+
+        let onDisk = try JSONDecoder().decode([Signal].self, from: Data(contentsOf: fileURL))
+        #expect(onDisk.count == limit + 2)
+        #expect(onDisk.first?.name == "seeded.0")
+        #expect(onDisk.suffix(2).map(\.name) == ["during.a", "after.b"])
+    }
+}
+
+/// What a closure on another thread saw, read back by the test body after it.
+private final class NamesSeen: @unchecked Sendable {
+    var names: [String] {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+
+    private let lock = NSLock()
+    private var stored: [String] = []
 }

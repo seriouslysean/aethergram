@@ -25,14 +25,15 @@ import Testing
 /// by driving `drain()` from the test's own task, and the latency of a
 /// scheduled task is left to a runtime walk against a live host process.
 ///
-/// **What the two scheduling tests do assert.** Whether the recorder schedules
-/// anything at all, and roughly how often, has no other observer: the drain
-/// slot is private, and a task that was never created looks exactly like one
-/// the pool has not reached. One polls to a deadline far longer than the
-/// interval it waits on; the other counts wake-ups inside a window and bounds
-/// them on both sides, because too few and too many are different defects. A
-/// pool busy enough to starve either would read as a failure, which is the
-/// price of asserting this at all.
+/// **What the two scheduling tests do assert.** Whether a scheduled drain
+/// actually runs, and roughly how often one wakes, has no other observer:
+/// `drainsScheduled` counts tasks created, not tasks the pool has reached, and
+/// a task that has not run yet looks exactly like one that never will. One
+/// polls to a deadline far longer than the interval it waits on; the other
+/// polls to a deadline for its second wake and then bounds the wakes inside a
+/// window, because too few and too many are different defects. A pool busy
+/// enough to starve either past its deadline would read as a failure, which is
+/// the price of asserting this at all.
 ///
 /// The time limit is the outer bound on those polls: a pool starved badly
 /// enough never to run the scheduled task must name the test rather than stall
@@ -58,6 +59,9 @@ struct DeliverySchedulingTests {
         // assertion: even handed the work, a withheld answer sends nothing.
         await fixture.recorder.drain()
 
+        // The transport and the providers cannot see a drain that was
+        // scheduled and then found the gate shut; this can.
+        #expect(fixture.recorder.drainsScheduled == 0)
         #expect(fixture.transport.sendCount == 0)
         #expect(!fixture.clientUserCalls.wasCalled)
         #expect(!fixture.environmentCalls.wasCalled)
@@ -181,12 +185,24 @@ struct DeliverySchedulingTests {
     ///
     /// Sixty attempts against that rate. On the unfixed code, five runs of
     /// forty attempts landed it five times out of five, the thinnest of them
-    /// once. A run that never lands passes for the wrong reason, which is the
-    /// price of asserting a race at all; what it cannot do is fail for one.
+    /// once.
+    ///
+    /// A run that never lands passes for the wrong reason, so the run counts
+    /// what it can see and fails below a floor. The handoff leaves no trace on
+    /// the fixed code, so what is counted is coarser: an attempt whose racer
+    /// had finished its record, and said so, before `reset()` returned. A
+    /// landing needs the racer on the lock inside the reset, so a run that
+    /// counts few of these landed few; the converse does not hold, which is
+    /// why the floor sits far above the landing rate. Six runs of sixty
+    /// against the unfixed code counted 58 to 60 and failed 4 to 14; forty is
+    /// where the thinnest rate either measurement has seen still expects a
+    /// landing.
     @Test("A signal recorded during a reset is not left with nobody coming for it")
     func signalRecordedDuringAResetIsStillDrained() async throws {
         let directory = try #require(TestTempDirectory.url)
         let start = try testDate(year: 2026, month: 3, day: 4)
+        let landingFloor = 40
+        var landings = 0
         for attempt in 0 ..< 60 {
             let retention = SpyRetentionStore()
             let fixture = makeFixture(
@@ -220,8 +236,12 @@ struct DeliverySchedulingTests {
             // it occupied and schedules nothing of its own.
             recorder.record("first")
             recorder.reset()
+            // Read before anything else can move it: a racer whose record
+            // finished only after the reset returned raced nothing.
+            let landedDuringReset = raced.isRaised
             await recorded.wait()
             guard raced.isRaised else { continue }
+            if landedDuringReset { landings += 1 }
             // Delivery is the only correct outcome, not one of two. The erase
             // is complete before the racer is released — clearing the
             // counters is the last thing it does — so this signal is always
@@ -233,6 +253,89 @@ struct DeliverySchedulingTests {
 
             #expect(fixture.transport.sentSignalNames.contains("late"))
         }
+        if landings < landingFloor {
+            Issue.record("raced the reset in \(landings) of 60 attempts, below the floor of \(landingFloor)")
+        }
+    }
+
+    /// An erase cancels the drain it supersedes, but a cancelled send does not
+    /// return the instant it is cancelled, and until it does that drain still
+    /// holds the claim. A flush after the erase finds the claim taken, sends
+    /// nothing, and hands its slot to a restart a whole interval out — an hour
+    /// here — so the first signal of the new grant waits on a request whose
+    /// verdict the erase has already discarded.
+    ///
+    /// The other half is that the erased drain never sends again once it
+    /// unwinds: freeing the claim early must not buy a second sender.
+    @Test(
+        "A flush after an erase is not held behind the send the erase cancelled",
+        arguments: ConsentEnforcementTests.Erasure.allCases
+    )
+    func flushAfterAnEraseIsNotHeldBehindTheCancelledSend(erasure: ConsentEnforcementTests.Erasure) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let transport = HeldFirstSendTransport()
+        defer { transport.release() }
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(transmitInterval: 3600),
+            transport: transport,
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: steppingClock(from: start)
+        )
+
+        recorder.updateConsent(.granted)
+        recorder.record("first")
+        recorder.flush()
+        await transport.firstSendHeld.wait()
+
+        erasure.apply(to: recorder)
+        recorder.record("second")
+        recorder.flush()
+        await waitUntil(within: 3) { transport.sentSignalNames.contains("second") }
+        #expect(transport.sentSignalNames == ["first", "second"])
+
+        // The erased drain unwinds now, onto a verdict it may not apply and a
+        // queue it may not claim from.
+        transport.release()
+        try await Task.sleep(for: .milliseconds(200))
+        withExtendedLifetime(recorder) {}
+
+        #expect(transport.sentSignalNames == ["first", "second"])
+    }
+
+    /// Most records come from the main actor, and a task created there
+    /// inherits its priority: the batch encode, the hash and the request
+    /// would compete with the host's UI for as long as they run. Delivery is
+    /// background work, and the writer queue already says so.
+    @Test("A drain kicked off from a high-priority caller does not run at that priority")
+    func drainDoesNotInheritTheCallersPriority() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let transport = PrioritySpyTransport()
+        let recorder = SignalRecorder(
+            configuration: testConfiguration(transmitInterval: 3600),
+            transport: transport,
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { "client-user" },
+            environmentProvider: { ["env.key": "env-value"] },
+            calendar: testCalendar,
+            now: steppingClock(from: start)
+        )
+
+        recorder.updateConsent(.granted)
+        await Task(priority: .high) {
+            recorder.record("Game.started")
+            recorder.flush()
+        }.value
+        await transport.firstSend.wait()
+        withExtendedLifetime(recorder) {}
+
+        #expect(transport.priorities == [.utility])
     }
 
     /// A backoff any flush can skip is not a backoff.
@@ -299,9 +402,15 @@ struct DeliverySchedulingTests {
     /// interval for the life of the process.
     ///
     /// Bounded on both sides, because from one sample the two defects look
-    /// alike: fewer than two wakes says the halt scheduled nothing at all,
-    /// more than ten says nothing damped it — flat retries across this window
-    /// would be roughly fifty, and the backoff makes five.
+    /// alike: never reaching a second wake says the halt scheduled nothing at
+    /// all, and more than ten by the end of a window after it says nothing
+    /// damped it — flat retries across that window would be roughly fifty,
+    /// and the backoff makes five.
+    ///
+    /// The halves are measured differently because a starved pool pushes them
+    /// the same way. The lower bound waits to a deadline rather than counting
+    /// inside a window, so a slow runner reaches it late instead of failing;
+    /// the upper bound counts inside one, where starvation only lowers it.
     @Test("A drain halted for want of an identifier backs off instead of waking at the interval")
     func haltedDrainBacksOffRatherThanWakingAtTheInterval() async throws {
         let directory = try #require(TestTempDirectory.url)
@@ -324,10 +433,11 @@ struct DeliverySchedulingTests {
 
         recorder.updateConsent(.granted)
         recorder.record("stranded")
+        await waitUntil { claims.count >= 2 }
+        #expect(claims.count >= 2)
         try await Task.sleep(for: .milliseconds(500))
         withExtendedLifetime(recorder) {}
 
-        #expect(claims.count >= 2)
         #expect(claims.count <= 10)
         // The identifier is what the halt is for: nothing may leave without it.
         #expect(transport.sendCount == 0)
@@ -439,6 +549,83 @@ struct DeliverySchedulingTests {
         let after = try #require(retention.record)
         #expect(after.completedSessionsCount == 1)
         #expect(after.totalSessionsCount == 2)
+    }
+
+    /// A record in the next process lands before its `beginSession()` often
+    /// enough — a launch emit, a restored queue — and it must not move the
+    /// dead session's checkpoint. Moved to now, the inference closes that
+    /// session across the whole gap it spent dead, and a gap past a day
+    /// discards it outright, losing the time it really ran.
+    @Test(
+        "A record before the next activation does not stretch a dead process's session",
+        arguments: [3.0, 25.0]
+    )
+    func recordBeforeActivationLeavesInheritedSessionAlone(hoursDead: Double) throws {
+        let directory = try #require(TestTempDirectory.url)
+        let retention = SpyRetentionStore()
+        let opened = try testDate(year: 2026, month: 3, day: 4, hour: 10)
+        let clock = SettableClock(opened)
+        try deadSession(directory: directory, retention: retention, clock: clock, opened: opened)
+
+        clock.set(opened.addingTimeInterval(hoursDead * 3600))
+        let reborn = makeFixture(directory: directory, retention: retention, now: clock.read)
+        reborn.recorder.updateConsent(.granted)
+        reborn.recorder.record("beta")
+        reborn.recorder.beginSession()
+
+        let after = try #require(retention.record)
+        #expect(after.completedSessionsCount == 1)
+        #expect(after.previousSessionSeconds == 300)
+        #expect(after.totalSessionSeconds == 300)
+    }
+
+    /// `endSession()` closes the session this instance opened. One it
+    /// inherited is left to the next `beginSession()`, which closes it
+    /// against its own checkpoint: the store may be shared with a process
+    /// that is still running it, and closing someone else's session against
+    /// this instance's clock is the error the inference exists to avoid.
+    @Test("An end call without a begin does not close a dead process's session against now")
+    func endWithoutBeginLeavesInheritedSessionToTheInference() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let retention = SpyRetentionStore()
+        let opened = try testDate(year: 2026, month: 3, day: 4, hour: 10)
+        let clock = SettableClock(opened)
+        try deadSession(directory: directory, retention: retention, clock: clock, opened: opened)
+
+        clock.set(opened.addingTimeInterval(3 * 3600))
+        let reborn = makeFixture(directory: directory, retention: retention, now: clock.read)
+        reborn.recorder.updateConsent(.granted)
+        // Loads the inherited record, so the end call has one to act on.
+        reborn.recorder.record("beta")
+        reborn.recorder.endSession()
+
+        let ended = try #require(retention.record)
+        #expect(ended.completedSessionsCount == 0)
+        #expect(ended.openSessionStartedAt == opened)
+
+        reborn.recorder.beginSession()
+        let after = try #require(retention.record)
+        #expect(after.completedSessionsCount == 1)
+        #expect(after.previousSessionSeconds == 300)
+    }
+
+    /// A process that opens a session at `opened`, records five minutes into
+    /// it, and dies without an end call.
+    private func deadSession(
+        directory: URL,
+        retention: SpyRetentionStore,
+        clock: SettableClock,
+        opened: Date
+    ) throws {
+        let dead = makeFixture(directory: directory, retention: retention, now: clock.read)
+        dead.recorder.updateConsent(.granted)
+        dead.recorder.beginSession()
+        clock.set(opened.addingTimeInterval(300))
+        dead.recorder.record("alpha")
+        dead.recorder.writer.waitForPendingWrites()
+        let afterKill = try #require(retention.record)
+        #expect(afterKill.openSessionStartedAt == opened)
+        #expect(afterKill.lastActivityAt == opened.addingTimeInterval(300))
     }
 }
 

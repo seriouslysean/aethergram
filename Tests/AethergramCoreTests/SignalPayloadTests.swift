@@ -6,7 +6,7 @@ import Testing
 /// What actually rides on a signal: the authored default payload, the
 /// clock-derived fields, the retention counters, and the consumer's own
 /// parameters on top of all three.
-@Suite("Signal payload", .tempDirectory)
+@Suite("Signal payload", .tempDirectory, .tags(.wireFormat))
 struct SignalPayloadTests {
     /// A named case rather than a tuple: four booleans-and-a-path in positional
     /// form is exactly the shape that gets silently transposed on edit.
@@ -23,6 +23,13 @@ struct SignalPayloadTests {
         let isSimulator: Bool
         let isMacOS: Bool
         let receiptPath: String
+    }
+
+    /// Stands in for `Bundle.appStoreReceiptURL`, which cannot be pointed at a
+    /// device layout from a macOS host. Distinct per bundle, so an assertion
+    /// can tell whose receipt was read.
+    static func fakeReceipt(_ bundle: URL) -> URL? {
+        bundle.appending(path: "StoreKit").appending(path: "receipt")
     }
 
     /// 2026-01-03 15:00 UTC is a Saturday, so the weekend flag has a value the
@@ -164,7 +171,7 @@ struct SignalPayloadTests {
         let start = try testDate(year: 2026, month: 1, day: 5)
         let fixture = makeFixture(
             directory: directory,
-            configuration: testConfiguration(signalPrefix: "sk."),
+            configuration: testConfiguration(signalPrefix: "prefix."),
             now: steppingClock(from: start)
         )
 
@@ -183,7 +190,7 @@ struct SignalPayloadTests {
         await fixture.recorder.drain()
 
         #expect(fixture.transport.sentSignalNames == [
-            "sk.thing.happened",
+            "prefix.thing.happened",
             PresetSignal.purchaseCompleted.rawValue,
             PresetSignal.errorOccurred.rawValue
         ])
@@ -339,6 +346,50 @@ struct SignalPayloadTests {
         )
         #expect(!missing.isTestFlight)
         #expect(!missing.isAppStore)
+    }
+
+    /// An extension's own bundle holds no receipt, so reading its receipt URL
+    /// reports every App Store install of an extension as `dev`, and
+    /// `testPartition(for:)` then files those users under test data. The
+    /// receipt that answers is the containing app's, two directories up.
+    /// ExtensionKit embeds under `Extensions/` rather than `PlugIns/`, so only
+    /// the grandparent is checked.
+    @Test("An app extension reads its containing app's receipt", arguments: ["PlugIns", "Extensions"])
+    func appExtensionReadsContainingAppReceipt(embeddedIn directory: String) {
+        let app = URL(filePath: "/private/var/containers/Bundle/Application/ABC/Host.app")
+        let extensionBundle = app.appending(path: directory).appending(path: "Widget.appex")
+
+        let resolved = EnvironmentSnapshot.receiptURL(forBundleAt: extensionBundle, receiptURL: Self.fakeReceipt)
+
+        #expect(resolved == Self.fakeReceipt(app))
+    }
+
+    @Test("An app bundle and an unrecognised layout both read their own receipt", arguments: [
+        "/private/var/containers/Bundle/Application/ABC/Host.app",
+        "/Widget.appex",
+        "/private/var/containers/Loose/PlugIns/Widget.appex",
+        "/private/var/containers/Bundle/Application/ABC/Host.app/Widget.appex"
+    ])
+    func unrecognisedLayoutsReadTheirOwnReceipt(path: String) {
+        let bundle = URL(filePath: path)
+
+        let resolved = EnvironmentSnapshot.receiptURL(forBundleAt: bundle, receiptURL: Self.fakeReceipt)
+
+        #expect(resolved == Self.fakeReceipt(bundle))
+    }
+
+    /// A containing app whose own receipt cannot be resolved falls back to the
+    /// extension's, which answers "neither channel" rather than nothing at all.
+    @Test("An extension whose containing app yields no receipt keeps its own")
+    func extensionFallsBackWhenContainingAppHasNoReceipt() {
+        let app = URL(filePath: "/private/var/containers/Bundle/Application/ABC/Host.app")
+        let extensionBundle = app.appending(path: "PlugIns").appending(path: "Widget.appex")
+
+        let resolved = EnvironmentSnapshot.receiptURL(forBundleAt: extensionBundle) { url in
+            url == extensionBundle ? Self.fakeReceipt(url) : nil
+        }
+
+        #expect(resolved == Self.fakeReceipt(extensionBundle))
     }
 
     /// The package's identity is not among them: it is stamped per signal by

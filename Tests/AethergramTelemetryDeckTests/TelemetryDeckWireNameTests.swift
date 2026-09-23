@@ -109,8 +109,8 @@ struct TelemetryDeckWireNameTests {
     }
 
     @Test("A consumer signal name passes through unchanged", arguments: [
-        "Example.Game.started",
-        "Example.Turn.sent",
+        "Example.Alpha.started",
+        "Example.Beta.sent",
         "purchase.attempted"
     ])
     func consumerSignalNamesPassThrough(name: String) {
@@ -119,9 +119,31 @@ struct TelemetryDeckWireNameTests {
 
     @Test("A consumer parameter key passes through unchanged")
     func consumerParameterKeysPassThrough() {
-        let mapped = TelemetryDeckWireNames.payload(from: ["packID": "starter", "roundIndex": "3"])
+        let mapped = TelemetryDeckWireNames.payload(from: ["itemID": "first", "stepIndex": "3"])
 
-        #expect(mapped == ["packID": "starter", "roundIndex": "3"])
+        #expect(mapped == ["itemID": "first", "stepIndex": "3"])
+    }
+
+    /// A caller key spelled as a wire name lands on the same wire key as the
+    /// package key mapped to it. Consumer parameters win the core's merge, so
+    /// they win here too. Dictionary order changes with capacity, so the filler
+    /// sizes put the two colliding keys in both iteration orders; a winner
+    /// chosen by iteration order fails at least one of them.
+    @Test("A caller key colliding with a mapped package key wins in every iteration order", arguments: [
+        ("TelemetryDeck.AppInfo.version", PayloadKey.appVersion, "1.0"),
+        ("TelemetryDeck.RunContext.isTestFlight", PayloadKey.runContextChannel, RunContextChannel.beta.rawValue)
+    ])
+    func callerKeyWinsAWireNameCollision(wireName: String, packageKey: String, packageValue: String) {
+        for fillerCount in 0 ..< 64 {
+            var parameters = [wireName: "from-caller", packageKey: packageValue]
+            for index in 0 ..< fillerCount {
+                parameters["filler.\(index)"] = "\(index)"
+            }
+
+            let mapped = TelemetryDeckWireNames.payload(from: parameters)
+
+            #expect(mapped[wireName] == "from-caller", "lost with \(fillerCount) filler keys")
+        }
     }
 
     @Test("A beta channel also emits the vendor's legacy isTestFlight flag")
@@ -173,6 +195,21 @@ struct TelemetryDeckWireNameTests {
         #expect(mapped["TelemetryDeck.Calendar.hourOfDay"] == "unknown")
     }
 
+    /// Consumer parameters win the merge, so `hourOfDay` can carry any integer
+    /// a caller wrote. `Int.max + 1` traps, and the signal is already durable
+    /// by then, so every relaunch would re-send it and crash again.
+    @Test("An hour outside 0-23 passes through rather than trapping the send", arguments: [
+        "9223372036854775807",
+        "-9223372036854775808",
+        "24",
+        "-1"
+    ])
+    func outOfRangeHourPassesThrough(value: String) {
+        let mapped = TelemetryDeckWireNames.payload(from: [PayloadKey.calendarHourOfDay: value])
+
+        #expect(mapped["TelemetryDeck.Calendar.hourOfDay"] == value)
+    }
+
     /// The shift is keyed on `hourOfDay` alone. A numeric value under any other
     /// key, including one that looks like an hour, must arrive untouched.
     @Test("No other field's value is transformed")
@@ -203,9 +240,9 @@ struct TelemetryDeckWireNameTests {
         let signal = TelemetryDeckFixture.signal(
             name: PresetSignal.purchaseCompleted.rawValue,
             parameters: [
-                PayloadKey.purchaseProductID: "com.example.app.pack.one",
+                PayloadKey.purchaseProductID: "com.example.app.product.one",
                 PayloadKey.calendarHourOfDay: "23",
-                "packID": "starter"
+                "itemID": "first"
             ],
             floatValue: 1.99
         )
@@ -214,9 +251,9 @@ struct TelemetryDeckWireNameTests {
 
         #expect(try TelemetryDeckFixture.string(element["type"], "type") == "TelemetryDeck.Purchase.completed")
         let payload = try #require(element["payload"] as? [String: String])
-        #expect(payload["TelemetryDeck.Purchase.productID"] == "com.example.app.pack.one")
+        #expect(payload["TelemetryDeck.Purchase.productID"] == "com.example.app.product.one")
         #expect(payload["TelemetryDeck.Calendar.hourOfDay"] == "24")
-        #expect(payload["packID"] == "starter")
+        #expect(payload["itemID"] == "first")
         #expect(payload["purchase.productID"] == nil)
     }
 

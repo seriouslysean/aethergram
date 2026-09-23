@@ -88,8 +88,8 @@ struct TelemetryDeckClientUserTests {
     func hashIsComputedOncePerBatch() throws {
         let signals = [
             TelemetryDeckFixture.signal(),
-            TelemetryDeckFixture.signal(name: "Example.Turn.sent"),
-            TelemetryDeckFixture.signal(name: "Example.Game.finished")
+            TelemetryDeckFixture.signal(name: "Example.Beta.sent"),
+            TelemetryDeckFixture.signal(name: "Example.Alpha.finished")
         ]
         let batch = TelemetryDeckFixture.batch(signals: signals, clientUser: "install-42")
 

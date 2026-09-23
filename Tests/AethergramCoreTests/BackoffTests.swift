@@ -5,7 +5,7 @@ import Testing
 
 /// The retry schedule is a pure function precisely so it can be asserted
 /// without waiting for it.
-@Suite("Transmission backoff")
+@Suite("Transmission backoff", .tags(.lifecycle))
 struct BackoffTests {
     /// `transmitInterval * 2^failures`, capped at `maxBackoffInterval`. With
     /// the shipped defaults of 10s and 300s the cap lands between the fourth

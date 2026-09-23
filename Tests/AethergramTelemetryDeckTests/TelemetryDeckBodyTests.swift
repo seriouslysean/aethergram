@@ -52,16 +52,16 @@ struct TelemetryDeckBodyTests {
     @Test("The body is a JSON array with one element per signal")
     func bodyIsAnArrayOfSignals() throws {
         let signals = [
-            TelemetryDeckFixture.signal(name: "Example.Game.started"),
-            TelemetryDeckFixture.signal(name: "Example.Game.finished"),
-            TelemetryDeckFixture.signal(name: "Example.Turn.sent")
+            TelemetryDeckFixture.signal(name: "Example.Alpha.started"),
+            TelemetryDeckFixture.signal(name: "Example.Alpha.finished"),
+            TelemetryDeckFixture.signal(name: "Example.Beta.sent")
         ]
 
         let elements = try TelemetryDeckFixture.elements(for: TelemetryDeckFixture.batch(signals: signals))
 
         #expect(elements.count == 3)
         let types = try elements.map { try TelemetryDeckFixture.string($0["type"], "type") }
-        #expect(types == ["Example.Game.started", "Example.Game.finished", "Example.Turn.sent"])
+        #expect(types == ["Example.Alpha.started", "Example.Alpha.finished", "Example.Beta.sent"])
     }
 
     @Test("An empty batch encodes as an empty array, not null")
@@ -82,7 +82,7 @@ struct TelemetryDeckBodyTests {
     @Test("The configured app identifier rides every element")
     func appIDRidesEveryElement() throws {
         let batch = TelemetryDeckFixture.batch(
-            signals: [TelemetryDeckFixture.signal(), TelemetryDeckFixture.signal(name: "Example.Turn.sent")]
+            signals: [TelemetryDeckFixture.signal(), TelemetryDeckFixture.signal(name: "Example.Beta.sent")]
         )
         let configuration = TelemetryDeckFixture.configuration(appID: "app-42")
 
@@ -109,8 +109,8 @@ struct TelemetryDeckBodyTests {
     @Test("Two signals from different sessions keep their own identifiers in one batch")
     func sessionsInOneBatchAreNotCollapsedToOne() throws {
         let batch = TelemetryDeckFixture.batch(signals: [
-            TelemetryDeckFixture.signal(name: "Example.Game.started", sessionID: "session-before"),
-            TelemetryDeckFixture.signal(name: "Example.Turn.sent", sessionID: "session-after")
+            TelemetryDeckFixture.signal(name: "Example.Alpha.started", sessionID: "session-before"),
+            TelemetryDeckFixture.signal(name: "Example.Beta.sent", sessionID: "session-after")
         ])
 
         let elements = try TelemetryDeckFixture.elements(for: batch)
@@ -135,7 +135,7 @@ struct TelemetryDeckBodyTests {
     @Test("receivedAt is the recording instant, not the encoding instant")
     func receivedAtIsPerSignal() throws {
         let earlier = TelemetryDeckFixture.signal(recordedAt: Date(timeIntervalSince1970: 1_000_000_000))
-        let later = TelemetryDeckFixture.signal(name: "Example.Turn.sent")
+        let later = TelemetryDeckFixture.signal(name: "Example.Beta.sent")
 
         let elements = try TelemetryDeckFixture.elements(for: TelemetryDeckFixture.batch(signals: [earlier, later]))
 

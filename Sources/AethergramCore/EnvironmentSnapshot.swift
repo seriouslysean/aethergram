@@ -4,8 +4,9 @@ import Foundation
 ///
 /// `dev` is anything that is neither a TestFlight nor an App Store install:
 /// a debug build, a simulator run, or a Release build sideloaded straight to
-/// a device. `EnvironmentSnapshot.buildChannel` stays the source of truth for
-/// telling the three apart.
+/// a device. `EnvironmentSnapshot.current()` is what tells the three apart;
+/// for an app extension it asks the containing app's bundle for the receipt
+/// location, falling back to the extension's own.
 public enum RunContextChannel: String, Sendable {
     case dev
     case beta
@@ -20,9 +21,10 @@ public enum RunContextChannel: String, Sendable {
 /// beyond what the consumer passed.
 ///
 /// Authored, not inherited. Each field maps to a chart someone reads; see
-/// `PayloadKey` for what was dropped and why. Values are captured once per
-/// process because none of them change inside one — the clock-derived fields
-/// are computed per signal instead, in `SignalRecorder`.
+/// `PayloadKey` for what was dropped and why. The recorder reads the default
+/// payload once per grant, on the first permitted record, and an erase drops
+/// that copy; none of these values change inside a process. The
+/// clock-derived fields are computed per signal instead.
 public struct EnvironmentSnapshot: Equatable, Sendable {
     // MARK: Lifecycle
 
@@ -50,14 +52,24 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
 
     // MARK: Public
 
+    /// `CFBundleShortVersionString`, or empty when the bundle has none.
     public let appVersion: String
+    /// `CFBundleVersion`, or empty when the bundle has none.
     public let appBuild: String
+    /// The machine identifier `uname` reports; on a simulator, the model the
+    /// simulator advertises.
     public let modelName: String
+    /// The OS family the package was compiled for, such as `iOS`.
     public let platform: String
+    /// `major.minor.patch`.
     public let systemVersion: String
+    /// `major.minor`.
     public let systemMajorMinorVersion: String
+    /// The distribution channel this run came down.
     public let channel: RunContextChannel
+    /// The locale's region identifier, or empty when it has none.
     public let region: String
+    /// The locale's language code, or empty when it has none.
     public let language: String
 
     /// The snapshot as payload parameters under canonical keys.
@@ -79,9 +91,17 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         ]
     }
 
-    /// Reads the running process. `bundle` and `locale` are parameters so the
-    /// snapshot is constructible in a test without the test's own bundle
-    /// leaking in as an expectation.
+    /// Reads the running process. Every parameter defaults to the running
+    /// process's own, and exists so the snapshot is constructible in a test
+    /// without the test's own bundle leaking in as an expectation.
+    ///
+    /// - Parameters:
+    ///   - bundle: Supplies the version, the build, and, outside macOS, the
+    ///     receipt the channel is read from.
+    ///   - locale: Supplies the region and the language.
+    ///   - processInfo: Supplies the OS version, and the simulator's model
+    ///     identifier, whose presence marks a simulator run.
+    ///   - fileManager: Answers whether the receipt file exists.
     public static func current(
         bundle: Bundle = .main,
         locale: Locale = .current,
@@ -140,8 +160,11 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// build Xcode installs straight to a device has no receipt file at all —
     /// `appStoreReceiptURL` still returns a path, but nothing exists there —
     /// so an absent file is neither channel rather than defaulting to App
-    /// Store by the same negation. `AppTransaction.shared.environment` is the
-    /// modern, async replacement for all of this, and it is async: this
+    /// Store by the same negation. For an app extension `receiptPath` is the
+    /// location its containing app's bundle gives, falling back to its own;
+    /// see `receiptURL(forBundleAt:receiptURL:)`.
+    /// `AppTransaction.shared.environment` is the modern, async replacement
+    /// for all of this, and it is async: this
     /// function is called from a synchronous snapshot, so adopting it would
     /// change the caller's shape and is deliberately not done here.
     static func buildChannel(
@@ -154,6 +177,21 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         guard !isDebug, !isSimulator, !isMacOS, receiptExists else { return (false, false) }
         let isTestFlight = receiptPath?.contains("sandboxReceipt") ?? false
         return (isTestFlight, !isTestFlight)
+    }
+
+    /// Where the receipt for the bundle at `bundleURL` lives, asking
+    /// `receiptURL` for a bundle's own answer. Pure over URLs so the
+    /// resolution is testable on a host that never reads a receipt.
+    ///
+    /// An `.appex` two directories under an `.app` — `PlugIns/`, or
+    /// `Extensions/` for ExtensionKit — asks the containing app's bundle for
+    /// the receipt location rather than its own. Any other layout, or a
+    /// containing app that gives no location, keeps the bundle's own.
+    static func receiptURL(forBundleAt bundleURL: URL, receiptURL: (URL) -> URL?) -> URL? {
+        guard bundleURL.pathExtension == "appex" else { return receiptURL(bundleURL) }
+        let containingApp = bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        guard containingApp.pathExtension == "app" else { return receiptURL(bundleURL) }
+        return receiptURL(containingApp) ?? receiptURL(bundleURL)
     }
 
     // MARK: Private
@@ -192,6 +230,10 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         #endif
     }
 
+    /// The receipt location for `bundle`: for an app extension, the
+    /// containing app bundle's `appStoreReceiptURL`, falling back to the
+    /// extension's own when that gives none.
+    ///
     /// Not read on macOS: `appStoreReceiptURL` is deprecated there in favour of
     /// an async StoreKit call a synchronous snapshot cannot make, and
     /// `buildChannel` answers false for that platform anyway.
@@ -199,7 +241,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         #if os(macOS)
             nil
         #else
-            bundle.appStoreReceiptURL?.path
+            receiptURL(forBundleAt: bundle.bundleURL) { url in
+                url == bundle.bundleURL ? bundle.appStoreReceiptURL : Bundle(url: url)?.appStoreReceiptURL
+            }?.path
         #endif
     }
 

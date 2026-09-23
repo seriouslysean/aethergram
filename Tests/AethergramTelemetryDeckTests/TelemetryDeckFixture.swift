@@ -45,7 +45,7 @@ enum TelemetryDeckFixture {
     }
 
     static func signal(
-        name: String = "Example.Game.started",
+        name: String = "Example.Alpha.started",
         parameters: [String: String] = [:],
         floatValue: Double? = nil,
         sessionID: String = "test-session",

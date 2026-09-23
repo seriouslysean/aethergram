@@ -50,7 +50,9 @@ public struct Signal: Codable, Equatable, Sendable {
     /// `floatValue`; every transport this package targets stringifies the rest.
     public let parameters: [String: String]
 
-    /// The one numeric field a dashboard can aggregate across signals. Never
+    /// The one numeric field a dashboard can aggregate across signals.
+    /// `floatValue` is the package's neutral name for a signal's measure;
+    /// an adapter maps it onto its backend's field. Never
     /// non-finite: a value no encoder can carry is dropped at init rather than
     /// left to fail at the one place every signal shares.
     public let floatValue: Double?

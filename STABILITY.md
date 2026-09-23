@@ -10,14 +10,21 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
 - `SignalRecorder`: its initializer's parameter list, `updateConsent`, `record`,
   `recordPurchaseCompleted`, `recordError`, `beginSession`, `endSession`, `flush`, and `reset`.
 - `AethergramConfiguration`: its stored properties, its initializer's defaults, and the two pure
-  policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`.
-- `ConsentState` and its `permitsCollection` verdict.
+  policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`. The
+  initializer traps on a `batchSize` or `queueLimit` that is not positive and on a
+  `transmitInterval` or `maxBackoffInterval` that is not finite and positive, so a bad value fails
+  at launch rather than at the first signal. It clamps both intervals, which then read back
+  clamped, to a ceiling far past any real schedule and below the size at which a sleep over it
+  traps, and does not cap `queueLimit`.
+- `ConsentState`, its raw values, and its `permitsCollection` verdict. The raw values are API
+  because a host persists them.
 - The host seams: `SignalQueueStorage`, `RetentionStore`, and `SignalTransport`, along with
   `SignalBatch`, `TransportOutcome`, `RetentionRecord`, and `PurchaseDetails`, including
   `PurchaseDetails.init(transaction:)` where StoreKit is available. A type conforming to one of
   these today keeps compiling across a minor release.
 - `Signal`, its stored properties and its initializer: a custom `SignalQueueStorage` constructs
-  one on `load()`, and a custom `SignalTransport` reads one out of every `SignalBatch`.
+  one on `load()`, and a custom `SignalTransport` reads one out of every `SignalBatch`. Its
+  `Codable` form is not: see below.
 - `FileSignalQueueStorage` as a supplied conformance, including its default filename.
 - `PayloadKey`'s constants and `PresetSignal`'s raw values, because a dashboard is built on those
   strings and renaming one is a data outage.
@@ -25,13 +32,21 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
   produces, and `calendarParameters(at:calendar:)`.
 - `RunContextChannel`'s cases and raw values, which `EnvironmentSnapshot.channel` carries.
 - `TelemetryDeckConfiguration`, including `defaultBaseURL` and `ingestURL`, `TelemetryDeckTransport`,
-  and `TelemetryDeckConfiguration.testPartition(for:)`.
+  and `TelemetryDeckConfiguration.testPartition(for:)`. `TelemetryDeckTransport` traps at the first
+  send over a background `URLSession`.
+
+A new case in a public enum — `PresetSignal`, `RunContextChannel`, `TransportOutcome`,
+`ConsentState` — is a minor addition. A host that switches over one of them must carry a `default`
+branch; an exhaustive switch without one stops compiling when a case arrives.
 
 ## What is not
 
 - Anything `internal`, including the package's own identity constants and the wire-name table's
   storage. The names it maps to are a vendor's contract, not this package's.
 - Log messages, their categories, and their format. Do not parse them.
+- `Signal`'s `Codable` form. A custom `SignalQueueStorage` that stores signals encoded must treat
+  a decode failure as an empty queue, as `FileSignalQueueStorage` does, because a release may
+  change the form.
 - The on-disk shape of the queue file, and anything else the store writes beside it.
   `FileSignalQueueStorage` is written and read by this package alone; an old file that fails to
   decode against the current `Signal` shape is purged and the process keeps recording, which is the
@@ -41,17 +56,23 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
 
   A file that cannot be *read* is the opposite answer, because a read fails for reasons the queue
   is not responsible for — a protected file while the device is locked, a container briefly out of
-  reach. It is left where it is, and writes over it stop until an erase or a process that can read
-  it settles what it holds: the queue keeps transmitting from memory in the meantime, and loses
-  only its durability against a kill. A purge that can neither delete nor overwrite the file leaves
-  an empty marker file beside it, which every later read takes as "restore nothing" until the
-  delete lands. Both the marker's name and its existence are implementation detail.
+  reach. It is left where it is, and every write retries the read. Until one succeeds the writes
+  stay off the file: the queue keeps transmitting from memory, and loses only its durability
+  against a kill. Once a read succeeds, what the file held, up to the recorder's `queueLimit` with
+  the oldest dropped first, is written ahead of the recorder's queue in every write, for the next
+  process to load and send. The recorder hands over that limit only when it is given the store
+  directly; one wrapped in another conformance keeps the limit it already has, 1,000 unless it or a
+  copy of it was also given to a recorder directly. A purge that can neither delete nor overwrite
+  the file leaves an empty marker file beside it, which every later read takes as "restore
+  nothing" until the delete lands. Both the marker's name and its existence are implementation detail.
 - The on-disk shape of the retention record beyond what `RetentionRecord`'s `Codable`
   conformance promises. Decoding follows that conformance wherever the host's `RetentionStore`
   persists the bytes — the protocol itself specifies no decoding, the storage is the host's.
   `firstSessionDay` is required, every other key decodes to a default when absent, so a host
   upgrading across a release keeps an install's acquisition date and day history. A record with no
-  `firstSessionDay` fails to decode and is treated as absent, not recovered.
+  `firstSessionDay` fails to decode. The decoding is the host's `RetentionStore`'s, whose `load()`
+  cannot throw: the package never sees the failure, so the store must return nil for it, and the
+  recorder then starts a new record rather than recovering the old one.
 - The precise timing of a transmission. `deliveryDelay` and `backoffInterval` are the contract;
   when the task actually runs is the scheduler's business.
 - Which exact `TransportOutcome` a given HTTP status maps to, beyond the retryable-versus-permanent
@@ -68,6 +89,17 @@ It follows semantic versioning against the field set, and the reader is who it p
 removed field breaks whoever keyed on it, so a removal is major, an addition is minor, and a
 changed form is whichever of the two a reader would have to react to.
 
+A fix to a field's value is none of those. 0.3.2 left the version at 2.0.0 while numbering
+`acquisition.firstSessionDate` in the Gregorian calendar. On a device set to Gregorian the string
+is unchanged. On any other device the old value was not a date in the form every other device
+sent, so the release corrects a defect in the value rather than changing the form a reader keys
+on. 0.3.1's doc comment on `RetentionRecord.firstSessionDay`, "`yyyy-MM-dd` in the device's
+calendar", described that defect. A stored day is converted when the recorder loads it, and one
+that no reading places between 2015-01-01 and tomorrow is kept as written. A day written under the
+Ethiopic calendar's Incarnation-era numbering that also reads as a Gregorian date in that range
+stays unconverted, and one in a Chinese or Dangi leap month converts a lunar month early, as the
+changelog describes.
+
 ## How versions move
 
 Semantic versioning, against the API list above.
@@ -80,26 +112,7 @@ Semantic versioning, against the API list above.
 
 While the package is 0.x the major position is not in play, so a change that would be major above
 1.0 is a minor release: `0.1.z` to `0.2.0`, never `0.1.1`. A patch on a 0.x line still promises
-what a patch promises, which is that nothing in the API list moved. This is the rule 0.1.1 was cut
-against and missed — it removed four `PayloadKey` constants and changed a signature in the API
-list, and shipped in the patch position.
-
-0.3.0 moved a signature in the API list the same way: `Signal` gained a stored `sessionID`
-property and `SignalBatch` lost one. While the package is 0.x that earns the minor position, not
-the major one it would occupy past 1.0 — and it is exactly the exception the host-seams promise
-above trades away: a custom `SignalTransport` that read `batch.sessionID` does not keep compiling
-across this release and must move the read to `signal.sessionID`. A queue file written under
-0.2.x decodes against the old `Signal` shape and fails against the new one —
-`FileSignalQueueStorage.load()` reads the bytes and cannot decode them, purges the file, and the
-signals in it are lost. The field set `sdk.version` promises is unchanged: the session identifier
-travels as a top-level wire field either way, never a `PayloadKey`, so moving where it is stamped
-does not move the payload version.
-
-0.3.1 is the patch that rule describes: nothing in the API list moved and no field changed, so the
-payload version stands still too. What moved is behaviour the contract already leaves open — a
-zero-delay request no longer skips the interval a failure earns, which is `backoffInterval` being
-honoured rather than redefined, and a queue file that cannot be decoded is told apart from one
-that merely cannot be read.
+what a patch promises, which is that nothing in the API list moved.
 
 That distinction is what a range depends on. `from:` is `upToNextMajor`, so every 0.x release a
 host has not pinned exactly is one it will resolve into. A release that changes the API list
@@ -108,7 +121,8 @@ promise rather than a label. The install snippets in README.md and ADOPTING.md p
 the same reason: a 0.x minor may change the API list, and a host should take that on its own
 schedule rather than inherit it on the next resolve.
 
-Depend on a release tag. `main` is a moving target.
+Depend on a release tag. `main` is a moving target. What each release changed is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Platforms and toolchain
 

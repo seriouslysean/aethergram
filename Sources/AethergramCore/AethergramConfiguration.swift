@@ -9,6 +9,12 @@ public struct AethergramConfiguration: Sendable {
     /// Defaults match the SDK this package replaces, so the swap does not
     /// silently change how often an install phones home: batch on a 10s
     /// interval, back off to at most 5 minutes.
+    ///
+    /// - Precondition: `batchSize` and `queueLimit` are positive;
+    ///   `transmitInterval` and `maxBackoffInterval` are finite and positive.
+    ///   Anything else traps here, at construction, rather than at the first
+    ///   signal. Both intervals are clamped to a ceiling far past any real
+    ///   schedule and below the size at which a sleep over it traps.
     public init(
         signalPrefix: String = "",
         logSubsystem: String,
@@ -44,8 +50,11 @@ public struct AethergramConfiguration: Sendable {
         self.logSubsystem = logSubsystem
         self.batchSize = batchSize
         self.queueLimit = queueLimit
-        self.transmitInterval = transmitInterval
-        self.maxBackoffInterval = maxBackoffInterval
+        // Clamped rather than trapped: every value that constructed before
+        // still constructs, and the ones that crashed the first sleep that ran
+        // on them, or the first `Duration` made from them, now run.
+        self.transmitInterval = min(transmitInterval, Self.maximumInterval)
+        self.maxBackoffInterval = min(maxBackoffInterval, Self.maximumInterval)
     }
 
     // MARK: Public
@@ -68,12 +77,14 @@ public struct AethergramConfiguration: Sendable {
     /// someone is actually running.
     public let queueLimit: Int
 
-    /// Delay between transmission attempts in the steady state.
+    /// Delay between transmission attempts in the steady state. A value
+    /// past the ceiling the initializer clamps to reads back clamped.
     public let transmitInterval: TimeInterval
 
     /// Ceiling on the exponential backoff after repeated failures. A value
     /// below `transmitInterval` means no growth rather than a retry faster
-    /// than the steady state it is meant to back off from.
+    /// than the steady state it is meant to back off from. A value past the
+    /// ceiling the initializer clamps to reads back clamped.
     public let maxBackoffInterval: TimeInterval
 
     /// How long delivery waits after a signal is recorded: nothing once the
@@ -94,4 +105,22 @@ public struct AethergramConfiguration: Sendable {
         let scaled = transmitInterval * pow(2, Double(consecutiveFailures))
         return min(scaled, max(maxBackoffInterval, transmitInterval))
     }
+
+    // MARK: Internal
+
+    /// What both intervals are clamped to. Not a policy ceiling: a sleep that
+    /// runs traps on a duration past `Int64.max` seconds, about 9.2e18, and
+    /// `Duration.seconds` itself traps past about 1.7e20. Under 0.3.1 an
+    /// interval past the first crashed the first sleep that ran on it — the
+    /// first record's coalescing sleep whenever `batchSize` is above 1, or a
+    /// backoff sleep — and one past the second crashed wherever it was first
+    /// made a `Duration`. This sits nearly four orders of magnitude below the
+    /// first and some thirty million years past any schedule.
+    static let maximumInterval: TimeInterval = 1e15
+
+    /// `queueLimit`'s default, and the bound on what a file store carries for
+    /// the next process until a recorder hands it its own. Read off the
+    /// initializer rather than named in it, so the two cannot drift and the
+    /// public signature shows a value rather than an internal name.
+    static let defaultQueueLimit = AethergramConfiguration(logSubsystem: "").queueLimit
 }

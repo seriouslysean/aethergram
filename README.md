@@ -23,7 +23,7 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.1")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.2")
 ```
 
 ```swift
@@ -63,11 +63,13 @@ let recorder = SignalRecorder(
     retentionStore: MyRetentionStore(),
     // Called only on a transmit consent already permits, so an implementation
     // that mints on first read cannot plant an identifier before the answer.
+    // Runs on the drain's thread under the recorder's lock: read thread-safe
+    // storage, never hop to the main actor, never call back into the recorder.
     clientUserProvider: { myAnalyticsIdentifier }
 )
 
-recorder.updateConsent(.granted)   // or .declined / .neverAsked
-recorder.beginSession()            // a session boundary is host-specific
+recorder.updateConsent(storedAnswer)   // on every activation, before anything records
+recorder.beginSession()                // a session boundary is host-specific
 recorder.record("Session.started", parameters: ["surface": "home"])
 ```
 
@@ -80,13 +82,15 @@ A recorded signal is appended to an in-memory queue and handed to a durable writ
 writer has reached disk with survives a process the OS kills without warning. The write happens on
 the writer's own queue, off the call that recorded it, so `flush()` waits for the writer to catch
 up on the way out — which is why the host calls it from its own deactivation path. Delivery is
-coalesced: nothing waits once a batch is full,
-`transmitInterval` otherwise. A retryable failure keeps the batch queued and backs off
-exponentially to `maxBackoffInterval`; a permanent rejection drops it rather than retrying against
-an endpoint that will keep refusing. Past `queueLimit` the oldest signals are dropped, because the
-recent ones describe the version someone is actually running.
+coalesced: a full batch goes without waiting for company, and anything less waits
+`transmitInterval`. A retryable failure keeps the batch queued and backs off exponentially,
+capped at `maxBackoffInterval` but never below `transmitInterval`, and a full batch or a
+`flush()` still waits out a backoff owed. A permanent rejection drops the batch rather than
+retrying against an endpoint that will keep refusing. Past `queueLimit` the oldest signals are
+dropped, because the recent ones describe the version someone is actually running.
 
-Recording is synchronous and never throws. Transmission is the async half, and it is the only half.
+Recording is synchronous and never throws. Queue persistence and transmission are deferred off the
+caller.
 
 ## Adopting it
 
@@ -99,7 +103,8 @@ are in [AGENTS.md](AGENTS.md).
 
 ## Stability
 
-What a version number promises is in [STABILITY.md](STABILITY.md).
+What a version number promises is in [STABILITY.md](STABILITY.md), and what each release changed
+is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
