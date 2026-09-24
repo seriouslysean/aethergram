@@ -42,13 +42,13 @@ Scripts/run-checks.sh
 `Tests/` is SwiftPM's and is reached by `swift test`. `Scripts/` holds the repo-level checks that
 are not Swift, which is where a Swift package puts them.
 
-It runs offline, and needs a full clone with the release tags: the leak scan reads the whole
-history and the api-break gate builds the tags. Deepen a shallow clone with
+It runs offline, and needs a full clone with the release tags: the leak scan reads every commit
+message in history and the api-break gate builds the tags. Deepen a shallow clone with
 `git fetch --unshallow --tags` first. The gates, in order:
 
 | Gate | What it holds |
 |---|---|
-| Leak scan | Nothing tracked or in history identifies a consumer, a person, or a machine; the commit-message tier refuses trailers and issue references |
+| Leak scan | No tracked file's name or staged content, and no commit message in history, identifies a consumer, a person, or a machine. File contents in earlier commits are not scanned |
 | iOS builds | The package for iOS in release as extension-safe (`-application-extension`), and the core alone with no adapter in reach |
 | Privacy manifest | `PrivacyInfo.xcprivacy` is a valid property list, and the iOS build ships it unchanged in the core's bundle |
 | watchOS build | The package builds for watchOS in release at its declared floor, watchOS 11 |
