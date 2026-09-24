@@ -16,7 +16,7 @@ why the adapter carries a canonical-to-vendor wire-name table rather than renami
 ## Phase 1: add the package, emit nothing
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.2")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.4.0")
 ```
 
 Depend on a release tag, never on `main`. Add the `Aethergram` product to the target that owns
@@ -72,9 +72,9 @@ recorder's lock held:
 |---|---|---|
 | `clientUserProvider` | The drain's, a utility-priority task | Yes |
 | `environmentProvider` | Whichever thread makes the first permitted record after a grant | Yes |
-| `RetentionStore` | Whichever thread calls `record`, `beginSession`, `endSession`, `updateConsent`, or `reset` | Yes |
-| `SignalQueueStorage.load()` | Whichever thread records or drains first | Yes |
-| `SignalQueueStorage.persist` and `purge` | The recorder's serial writer queue | No; `flush()`, `reset()`, and a decline wait on that queue |
+| `RetentionStore` | Whichever thread calls `record`, `beginSession`, `endSession`, `updateConsent`, `reset`, or `resetClosingCollection` | Yes |
+| `SignalQueueStorage.load()` | The thread that grants; after a grant made during `resetClosingCollection`, whichever thread records or drains first | Yes |
+| `SignalQueueStorage.persist` and `purge` | The recorder's serial writer queue | No; `flush()`, `flushAndWait()`, `reset()`, `resetClosingCollection`, and a decline wait on that queue |
 | `SignalTransport.send` | The drain's | No |
 
 So each of them:
@@ -86,8 +86,8 @@ So each of them:
 - Never uses `DispatchQueue.main.sync`, which deadlocks against a record the main thread is making
   while it waits for the lock.
 - Never calls back into the recorder. Under the lock that fails a precondition and terminates the
-  process; from `persist` or `purge`, a `flush()`, `reset()`, or decline waits on the queue it is
-  running on.
+  process; from `persist` or `purge`, a `flush()`, `reset()`, `resetClosingCollection`, or decline
+  waits on the queue it is running on.
 
 `UIDevice` is main-actor isolated, so an identifier read from it is read on the main actor and
 stored where the provider can reach it from any thread. Read it in the activation step, after the
@@ -111,15 +111,18 @@ clientUserProvider: { analyticsIdentifier.withLock { $0 } }
 ```
 
 **What blocks the caller.** A record does not wait for the queue write: the encode and the write
-happen on the writer queue. Three calls do wait on it, until the writer goes idle. That covers
-every write submitted before the call and any submitted while the writer is still busy; a write
-submitted after it goes idle may still be pending when the call returns.
+happen on the writer queue. The calls below do wait. A wait on the writer covers every queue write
+submitted before the call; a write submitted after it, from any thread, is not promised by the
+return, and lengthens the wait by at most one store call.
 
-| Call | Returns once | Extended by recording from another thread |
-|---|---|---|
-| `flush()` | Every queue write submitted before it has landed. It does not wait for the send. | Yes, while it keeps the writer busy |
-| `updateConsent` with anything but `.granted` | The erase has reached the queue store and the retention store. | No, unless another thread grants again while it waits: a record after a decline writes nothing |
-| `reset()` | The same. | Yes, while consent is granted: a reset leaves it as it was |
+| Call | Returns once |
+|---|---|
+| `flush()` | Every queue write submitted before it has landed. It does not wait for the send. |
+| `flushAndWait()` | One delivery pass has finished, then every queue write submitted by then, the pass's removal included, has landed. It suspends rather than blocks. It starts no pass, and waits only for the writes, when a retry is owed, consent is not granted, or collection is closed for a reset. Cancelling the caller returns it promptly, without the promise that the writes landed. |
+| `updateConsent(.granted)` | On the recorder's first grant, the queue a killed process left has been read and decoded, on the calling thread under the recorder's lock. A full queue at the default `queueLimit` of 1,000 measured about 38 ms on a simulator. |
+| `updateConsent` with anything but `.granted` | The erase has reached the queue store and the retention store. |
+| `reset()` | The same. |
+| `resetClosingCollection(during:)` | The same, then the closure has returned. |
 
 ## Phase 3: wire the adapter
 
@@ -134,8 +137,13 @@ let transport = TelemetryDeckTransport(
 )
 ```
 
-`TelemetryDeckTransport` takes an optional `session:`. Pass only a default or ephemeral
+`TelemetryDeckTransport` takes an optional `session:`. The default is an ephemeral session with no
+cookie, credential, or cache store, so nothing the host's `URLSession.shared` holds reaches the
+ingest; a session you pass brings whatever it carries. Pass only a default or ephemeral
 configuration: a background `URLSession` fails a precondition at the first send over it.
+
+`TelemetryDeckConfiguration` traps at construction on a `baseURL` whose scheme is not `https`. A
+development server reached over `http` has to move to `https`.
 
 `isTestMode` has no default on purpose. Deriving it from `DEBUG` alone is what sends Release
 simulator runs, developer-device builds, and every beta install to the live partition.
@@ -163,7 +171,8 @@ closes it and erases what was collected under it.
    how a decline made while this process was not running reaches what it collected.
 3. Call `beginSession()` on activation.
 4. Record.
-5. On deactivation, call `endSession()` and then `flush()`.
+5. On deactivation, call `endSession()`, then `flush()`, then `flushAndWait()` inside the
+   platform's expiring-time API, cancelled when the time expires.
 
 A session is host-specific: an extension's active cycle is not an app foreground, so the package
 counts and you decide when. Two shapes of the same order:
@@ -174,6 +183,76 @@ counts and you decide when. Two shapes of the same order:
 | A SwiftUI app | `scenePhase` becoming `.active` | `scenePhase` leaving `.active` |
 
 The view controller calls into the process-wide recorder; it does not own one.
+
+**Deliver on the way out.** `flush()` is synchronous and gets every queued signal to disk, so a
+process killed after it loses nothing. `flushAndWait()` then sends, and only runs as long as the
+OS grants the process time, so run it inside the API that grants it and cancel it when that time
+expires. Cancelling returns it at once without stopping the send; whatever the send has not
+delivered when the process is suspended or killed stays queued and on disk.
+
+An app extension asks with `ProcessInfo.performExpiringActivity`. Its block can be called with
+`expired == true` first, and again with `true` on another thread while the first call is still
+running; the activity ends when the `false` call returns, so that call waits.
+
+```swift
+import Aethergram
+import Foundation
+import os
+
+func flushOnResign(_ recorder: SignalRecorder) {
+    recorder.endSession()
+    recorder.flush()
+    let state = OSAllocatedUnfairLock(initialState: (work: Task<Void, Never>?.none, expired: false))
+    ProcessInfo.processInfo.performExpiringActivity(withReason: "Deliver analytics") { expired in
+        if expired {
+            state.withLock { $0.expired = true; return $0.work }?.cancel()
+            return
+        }
+        let done = DispatchSemaphore(value: 0)
+        let started = state.withLock { state -> Bool in
+            guard !state.expired else { return false }
+            state.work = Task.detached { await recorder.flushAndWait(); done.signal() }
+            return true
+        }
+        if started { done.wait() }
+    }
+}
+```
+
+An app asks with `UIApplication.beginBackgroundTask`. Its expiration handler runs on the main
+actor and has to end the task before it returns. The task is ended exactly once, by whichever of
+the handler and the flush gets there first, and never when no time was granted.
+
+```swift
+import Aethergram
+import UIKit
+
+@MainActor func flushOnBackground(_ recorder: SignalRecorder) {
+    recorder.endSession()
+    recorder.flush()
+    let run = BackgroundRun()
+    run.id = UIApplication.shared.beginBackgroundTask(withName: "Deliver analytics") {
+        run.expired = true
+        run.work?.cancel()
+        run.end()
+    }
+    guard run.id != .invalid else { return }
+    guard !run.expired else { return run.end() }
+    run.work = Task { await recorder.flushAndWait(); run.end() }
+}
+
+@MainActor final class BackgroundRun {
+    var id = UIBackgroundTaskIdentifier.invalid
+    var work: Task<Void, Never>?
+    var expired = false
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+```
 
 **Re-read the stored answer at every activation, not only at launch.** A process can be suspended
 and resumed across a change made elsewhere, and step 2 is what adopts it.
@@ -219,53 +298,42 @@ delete, the overwrite and the mark are all refused, the bytes are still there an
 with the process. Do not describe your reset to a user as physical deletion of the queue; what it
 reliably ends is the collection, the counters, and anything that would have been sent.
 
-Three things about the order around it, because none of them are the package's to do for you.
-
-**Keep the gate shut across the whole reset, not only during the erase.** A reset leaves consent
-alone, so the gate is open on either side of it and a signal recorded a microsecond later is a
-legitimate signal. If the reset also rotates your analytics identifier, that signal can leave under
-the identifier you are rotating away from, which is the linkage the rotation exists to break. Shut
-the gate, do both halves, then read the answer again and restore it:
+**A reset that also replaces the analytics identifier.** `reset()` leaves consent alone, so the
+gate is open on either side of it, and a signal recorded a moment later can leave under the
+identifier you are rotating away from, which is the linkage the rotation exists to break. Use
+`resetClosingCollection(during:)` instead of `reset()`, and rotate inside it:
 
 ```swift
-myConsentLock.withLock {                    // the same lock your consent writes take
-    recorder.updateConsent(.declined)       // shuts the gate and erases, in one call
-    rotateMyAnalyticsIdentifier()           // nothing recorded from here can carry the old one
-    let answer = myStoredConsentAnswer      // read back now, not captured before the reset
-    recorder.updateConsent(answer)
-    if answer.permitsCollection { recorder.beginSession() }
+recorder.resetClosingCollection {
+    rotateMyAnalyticsIdentifier()   // nothing is recorded, resolved, or sent until this returns
 }
 ```
 
-`updateConsent(.declined)` erases exactly what `reset()` erases, so that sequence replaces the
-`reset()` call rather than joining it. A signal recorded inside the window is dropped rather than
-misattributed, which is what a reset should do with it.
+It erases what `reset()` erases and waits for the erase to reach the store, then runs the closure
+on the calling thread with collection closed. Until the closure returns, `record`,
+`beginSession()`, and `endSession()` are dropped, no identifier is resolved, and nothing is sent;
+a decline erases and stands, and a grant takes effect when the closure returns. Collection then
+reopens and, if consent permits, opens a counted session, so do not follow it with
+`beginSession()`: the session is already open and the call is redundant. It replaces the decline,
+rotate, re-grant, `beginSession()` sequence 0.3.x called for.
 
-Read the answer back at the end rather than capturing it at the start, and take the whole sequence
-under the lock the last of these three points describes. A decline arriving mid-reset — the user's
-own, or one adopted from another device — is otherwise overwritten by the grant the reset captured
-before it, which turns collection back on for someone who has just turned it off.
+Consent is never touched, so there is no answer to read back and restore afterwards, and nothing
+that could overwrite a decline arriving mid-reset. Your consent lock does not need to span the
+erase. Calls may nest or overlap from several threads; collection reopens when the last one
+returns.
 
-That lock is yours and the recorder knows nothing about it, so keep it out of the closures you
-hand over. `clientUserProvider`, `environmentProvider`, every `RetentionStore` call, and
-`SignalQueueStorage.load()` run inside the recorder's own lock, and one of them taking a lock that
-a caller holds while calling in is the two orders that deadlock. `SignalQueueStorage.persist` and
-`purge` run outside it, on the writer queue that `flush()`, `reset()`, and a decline wait on, so
-one of them taking your lock deadlocks against a caller that holds it while making one of those
-calls.
+**After a plain `reset()`, reopen the counted session.** The erase takes the retention record with
+it and `reset()` opens no counted session, so until the next `beginSession()` every signal goes out
+with no acquisition or retention fields. Call it at the end of a reset that left collection
+enabled, as your activation path does.
 
-What shutting the gate cannot do is recall a request already handed to the transport. The erase
-cancels it, and the supplied adapter stops it through `URLSession`, but whatever the server had
+**A request already sent is not recalled.** The erase cancels a request already handed to the
+transport, and the supplied adapter stops it through `URLSession`, but whatever the server had
 already received stays received. That request carries the batch it claimed before the erase, under
 the identifier resolved for it, which is the correct attribution for signals recorded before the
 reset; nothing recorded after it can join that batch. If your reset has to complete with no request
 outstanding at all, that is a property of your own network stack rather than something the package
 promises.
-
-**Reopen the counted session.** The erase takes the retention record with it and the package opens
-no session on its own, so until the next `beginSession()` every signal goes out with no acquisition
-or retention fields at all. Call it at the end of a reset that left collection enabled — the last
-line of the snippet above, and the same call your activation path makes.
 
 **Serialize your own consent check with your own identifier read.** If an emit path checks the
 stored answer and then resolves an identifier that mints on first read, a decline landing between
@@ -273,6 +341,14 @@ those two lines leaves an identifier minted under an answer that is now "no". Th
 cannot undo that: the identifier is yours, and it was minted by your code before anything reached
 the recorder. Hold one lock across the check and the resolve, and take the same lock where the
 answer changes.
+
+That lock is yours and the recorder knows nothing about it, so keep it out of the closures you
+hand over. `clientUserProvider`, `environmentProvider`, every `RetentionStore` call, and
+`SignalQueueStorage.load()` run inside the recorder's own lock, and one of them taking a lock that
+a caller holds while calling in is the two orders that deadlock. `SignalQueueStorage.persist` and
+`purge` run outside it, on the writer queue that `flush()`, `reset()`, `resetClosingCollection`,
+and a decline wait on, so one of them taking your lock deadlocks against a caller that holds it
+while making one of those calls.
 
 ## Phase 6: delete the SDK
 
@@ -311,16 +387,19 @@ Then confirm, on a real run:
   so a parameter carrying a user's name publishes a user's name.
 - The consent UI and where the answer is stored. The package reads a verdict; it does not ask.
 - The analytics identifier and its disclosure.
-- The privacy manifest and the App Store privacy answers. The package ships no
-  `PrivacyInfo.xcprivacy` and calls none of the required-reason APIs directly, so declare what it
-  sends in the embedding app's manifest and privacy answers. By the data types Apple's App Privacy
-  Details use:
+- The app's own privacy manifest and the App Store privacy answers. The package ships a
+  `PrivacyInfo.xcprivacy` in its core bundle, `Aethergram_AethergramCore.bundle`: no tracking, no
+  tracking domains, no required-reason APIs, and the four data types below, each linked to the user,
+  not used for tracking, and collected for analytics. That declares what the package's payload
+  carries, not what your parameters put in it or what your identifier is, so the app's manifest and
+  answers must still reflect what the app sends. By the data types Apple's App Privacy Details use:
 
   | Data type | What in the payload |
   |---|---|
   | Product Interaction | Every signal: its name, parameters, and timestamps |
-  | User ID or Device ID | `clientUser`, hashed, as stable as the identifier you return |
+  | Device ID | `clientUser`, hashed, as stable as the identifier you return |
   | Purchase History | `recordPurchaseCompleted`, if you call it |
   | Other Diagnostic Data | `recordError`, device model, OS version, locale |
 
-  Whether each is linked to the user or used for tracking is your answer, not the package's.
+  If you return a user identifier rather than a device one, or use any of this for tracking, the
+  app's manifest and answers say so; the package's cannot.
