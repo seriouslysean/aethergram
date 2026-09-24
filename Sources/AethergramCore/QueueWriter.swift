@@ -34,11 +34,12 @@ import Synchronization
 /// than that — a file it could not read, one it could not reach — and only
 /// the erase says to drop it. The drain runs the purge, then the snapshot.
 ///
-/// **The barrier.** Every submit is counted, and a wait notes the count at
-/// its call. A waiter returns once a write has landed that covers every
-/// submission up to that count: the first drain step to start after the
-/// last of them has ended. Nothing submitted after the call is promised by
-/// the return, even when it happens to be on the store by then.
+/// **The barrier.** Every submit takes a ticket, in submit order, and a wait
+/// takes the newest at its call. A waiter returns once a write has landed
+/// that covers every submission up to its ticket: the first drain step to
+/// start after that submission has ended. Nothing submitted after the call
+/// is promised by the return, even when it happens to be on the store by
+/// then.
 ///
 /// A later submission can still lengthen the wait, within that one step and
 /// never by another. A step takes everything pending when it starts,
@@ -139,8 +140,8 @@ final class QueueWriter: Sendable {
 
     /// Everything the lock guards, read and written only inside `withLock`.
     ///
-    /// The counts are what make the barrier exact. Each submit takes the next
-    /// one, and a drain that takes `pending` takes the newest count with it,
+    /// Tickets are what make the barrier exact. Each submit takes the next
+    /// one, and a drain that takes `pending` takes the newest ticket with it,
     /// because what it takes is the merge of every intent up to that one. A
     /// wait for "nothing pending" instead lasts as long as anyone keeps
     /// submitting, and a wait for "the queue has run what it holds" can run
@@ -150,7 +151,7 @@ final class QueueWriter: Sendable {
         var scheduled = false
         var submitted: UInt64 = 0
         var completed: UInt64 = 0
-        /// In count order, because counts are taken in submit order.
+        /// In ticket order, because tickets are taken in submit order.
         var waiters: [Waiter] = []
     }
 
@@ -173,7 +174,7 @@ final class QueueWriter: Sendable {
     }
 
     /// Whether the caller has something to wait for. Asked and registered in
-    /// one critical section, so a drain cannot complete the count between
+    /// one critical section, so a drain cannot complete the ticket between
     /// the question and the registration and leave the waiter unreleased.
     private func enqueueWaiter(_ release: @escaping @Sendable () -> Void) -> Bool {
         state.withLock { state in

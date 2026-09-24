@@ -86,11 +86,15 @@ public final class SignalRecorder: Sendable {
 
     // MARK: Public
 
-    /// Adopts the consumer's consent answer. Granting only opens the gate;
+    /// Adopts the consumer's consent answer. Granting opens the gate;
     /// anything other than granted closes it *and* erases what was collected
     /// under it — the queue file, the retention counters, and the pending
     /// batch — because a toggle that leaves yesterday's signals on disk to be
     /// sent later is not an off switch.
+    ///
+    /// A grant also restores the queue a killed process left, reading the
+    /// store under the lock on the calling thread, and schedules its delivery,
+    /// since nothing else may record before the host is suspended again.
     ///
     /// A non-granted answer blocks the caller until the erase reaches the
     /// queue store. A send already handed to the transport is cancelled, not
@@ -211,8 +215,9 @@ public final class SignalRecorder: Sendable {
     /// when the queue empties or a send fails.
     ///
     /// It starts no pass, and waits only for the writes, when a retry is
-    /// already owed, which it never hurries, for the reason `flush()` does
-    /// not; when consent is not granted; and while collection is closed for
+    /// already owed, which it never hurries: a flush comes on the host's
+    /// cadence, and one that could hurry a retry would collapse the backoff;
+    /// when consent is not granted; and while collection is closed for
     /// `resetClosingCollection(during:)`. An erase while it waits — a
     /// decline or a reset — cancels the pass, and a transport that honours
     /// cancellation ends the send, so the wait ends with it.
