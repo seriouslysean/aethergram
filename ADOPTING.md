@@ -190,9 +190,10 @@ OS grants the process time, so run it inside the API that grants it and cancel i
 expires. Cancelling returns it at once without stopping the send; whatever the send has not
 delivered when the process is suspended or killed stays queued and on disk.
 
-An app extension asks with `ProcessInfo.performExpiringActivity`. Its block can be called with
-`expired == true` first, and again with `true` on another thread while the first call is still
-running; the activity ends when the `false` call returns, so that call waits.
+An app extension asks with `ProcessInfo.performExpiringActivity`. Its block is called once with
+`expired == true` when no time is granted. Otherwise it is called with `false`, and may be called
+again with `true`, on another thread, while the `false` call is still running. The activity ends
+when the `false` call returns, so that call waits.
 
 ```swift
 import Aethergram

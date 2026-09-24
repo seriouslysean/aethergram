@@ -72,8 +72,9 @@ recorder.updateConsent(storedAnswer)   // on every activation, before anything r
 recorder.beginSession()                // a session boundary is host-specific
 recorder.record("Session.started", parameters: ["surface": "home"])
 
-// On the way out: queued signals to disk now, then a send inside the
-// platform's expiring-time API, cancelled when the time runs out.
+// On the way out: queued signals to disk now, then a send. Run the await
+// inside the platform's expiring-time API and cancel it when the time runs
+// out; ADOPTING.md has the pattern for an app and for an app extension.
 recorder.flush()
 await recorder.flushAndWait()
 
@@ -81,9 +82,6 @@ await recorder.flushAndWait()
 // sent until the closure returns, and the counted session reopens after it.
 recorder.resetClosingCollection { rotateMyAnalyticsIdentifier() }
 ```
-
-Both expiring-time patterns, for an app and for an app extension, are in
-[ADOPTING.md](ADOPTING.md).
 
 Signal names are yours. The package prefixes them with `signalPrefix` and otherwise does not
 interpret them, because names are your domain vocabulary.

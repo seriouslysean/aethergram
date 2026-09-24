@@ -42,9 +42,9 @@ Scripts/run-checks.sh
 `Tests/` is SwiftPM's and is reached by `swift test`. `Scripts/` holds the repo-level checks that
 are not Swift, which is where a Swift package puts them.
 
-It runs offline, and needs the release tags: the api-break gate builds them, so a shallow clone or
-one without tags cannot run it. `git fetch --tags` first if the clone has none. The gates, in
-order:
+It runs offline, and needs a full clone with the release tags: the leak scan reads the whole
+history and the api-break gate builds the tags. Deepen a shallow clone with
+`git fetch --unshallow --tags` first. The gates, in order:
 
 | Gate | What it holds |
 |---|---|
