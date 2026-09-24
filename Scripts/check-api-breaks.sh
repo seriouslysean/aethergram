@@ -2,7 +2,6 @@
 # Refuse a change to the public API that the release being prepared is not allowed to make.
 #
 #   Scripts/check-api-breaks.sh [--base <tag>] [--head <ref>] [--release <X.Y.Z>] [--scratch <dir>]
-#                               [--print-additions]
 #
 # `swift package diagnose-api-breaking-changes` reports nothing here: the only product is an
 # umbrella that declares nothing, and the modules behind it get no baseline. So each module is
@@ -20,10 +19,6 @@
 #   --scratch  where builds and dumps go. A commit's dump is keyed by its hash, so runs sharing a
 #              directory build each commit once, and every build shares one build directory, so
 #              the SDK's module cache is built once. Default: a temp directory removed on exit.
-#   --print-additions
-#              also print every declaration the head adds (`+`) or drops (`-`) against the base,
-#              one per line, sorted, per module: what the digester cannot report, for the release
-#              notes. It changes nothing about what passes.
 #
 # A break passes only when the release moves the major, or on 0.x the minor, per STABILITY.md.
 # Exit 0: no break, or breaks the release may make. 1: a break the release may not make.
@@ -39,10 +34,8 @@ BASE=""
 HEAD=""
 RELEASE=""
 SCRATCH=""
-PRINT_ADDITIONS=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --print-additions) PRINT_ADDITIONS=1; shift ;;
         --base) BASE="${2:-}"; shift 2 || exit 2 ;;
         --head) HEAD="${2:-}"; shift 2 || exit 2 ;;
         --release) RELEASE="${2:-}"; shift 2 || exit 2 ;;
@@ -52,8 +45,6 @@ while [ $# -gt 0 ]; do
 done
 
 die() { printf 'api gate: %s\n' "$1" >&2; exit 2; }
-
-[ "$PRINT_ADDITIONS" -eq 0 ] || command -v jq >/dev/null 2>&1 || die "--print-additions needs jq, which macOS ships from 15"
 
 if [ -z "$SCRATCH" ]; then
     SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/aethergram-api.XXXXXX")" || die "no temp directory"
@@ -190,61 +181,6 @@ for M in $MODULES; do
         printf '%s\n' "$BREAKS" | sed 's/^/    /'
     fi
 done
-
-# One line per declaration: kind, qualified name, signature, then the flags and attributes a host
-# can see, so a changed declaration reads as one line dropped and one added. The dump carries no
-# async field; the mangled name's `Ya` before the function or initializer suffix is where it lives.
-DECLS_JQ='
-def types: [(.children // [])[] | select(.kind == "TypeNominal" or .kind == "TypeFunc" or .kind == "TypeNameAlias") | .printedName];
-def flags: [
-    (if .static then "static" else empty end),
-    (if .deprecated then "deprecated" else empty end),
-    (if .throwing then "throws" else empty end),
-    (if ((.mangledName // "") | test("YaK?(F|FZ|fC|fc)$")) then "async" else empty end),
-    (if .funcSelfKind == "Mutating" then "mutating" else empty end),
-    (if .isLet then "let" else empty end),
-    (if .protocolReq then "requirement" else empty end),
-    (if .init_kind then (.init_kind | ascii_downcase) else empty end),
-    ((.declAttributes // [])[] | ascii_downcase)
-  ] | unique;
-def sig: types as $t
-  | if ($t | length) == 0 then ""
-    elif (.declKind == "Func" or .declKind == "Constructor" or .declKind == "Subscript")
-      then " (" + ($t[1:] | join(", ")) + ") -> " + $t[0]
-    else ": " + ($t | join(", ")) end;
-def decls($prefix):
-  (.children // [])[]
-  | select(.declKind != null and .declKind != "Import")
-  | ($prefix + .printedName) as $p
-  | ( .declKind + " " + $p + sig
-        + (flags as $f | if ($f | length) > 0 then "  [" + ($f | join(", ")) + "]" else "" end)
-        + (if .genericSig then "  " + .genericSig else "" end),
-      ((.accessors // [])[] | "Accessor " + $p + "." + (.accessorKind // .name)),
-      ((.conformances // [])[] | "Conformance " + $p + ": " + .printedName),
-      decls($p + ".") );
-.ABIRoot | decls("")
-'
-# Through a file rather than a pipe, so a jq failure is not hidden behind sort's exit status.
-list_decls() { jq -r "$DECLS_JQ" "$1" > "$2.unsorted" && LC_ALL=C sort -u "$2.unsorted" > "$2"; }
-
-if [ "$PRINT_ADDITIONS" -eq 1 ]; then
-    printf 'declarations added (+) and dropped (-): %s -> %s\n' "$BASE" "$HEAD_NAME"
-    for M in $MODULES; do
-        list_decls "$BASE_API/$M.json" "$SCRATCH/decls-base-$M.txt" || die "could not list the declarations of $M at $BASE"
-        list_decls "$HEAD_API/$M.json" "$SCRATCH/decls-head-$M.txt" || die "could not list the declarations of $M at $HEAD_NAME"
-        # An empty listing is a filter that matched nothing, not an API with nothing in it.
-        [ -s "$SCRATCH/decls-base-$M.txt" ] && [ -s "$SCRATCH/decls-head-$M.txt" ] \
-            || die "the declaration listing of $M came out empty"
-        MOVED="$(LC_ALL=C comm -13 "$SCRATCH/decls-base-$M.txt" "$SCRATCH/decls-head-$M.txt" | sed 's/^/+ /'
-                 LC_ALL=C comm -23 "$SCRATCH/decls-base-$M.txt" "$SCRATCH/decls-head-$M.txt" | sed 's/^/- /')"
-        if [ -z "$MOVED" ]; then
-            printf '  %s: nothing added or dropped\n' "$M"
-        else
-            printf '  %s:\n' "$M"
-            printf '%s\n' "$MOVED" | sed 's/^/    /'
-        fi
-    done
-fi
 
 if [ "$TOTAL" -gt 0 ] && [ "$MAY_BREAK" -eq 0 ]; then
     printf 'api: %s breaks, and a %s release may not break the API. Declare the release in CHANGELOG.md or restore the API.\n' \

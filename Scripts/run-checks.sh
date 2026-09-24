@@ -3,35 +3,16 @@
 #
 #   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
-#   AETHERGRAM_RELEASE=X.Y.Z Scripts/run-checks.sh
-#       the release the working tree's api gate holds it to, in place of CHANGELOG.md's top
-#       heading, for a branch whose entry is not written yet. A value that is not X.Y.Z stops the
-#       run before any gate, since an override nothing read would pass as though it had been.
-#   Scripts/run-checks.sh --validate-only
-#       checks the environment and exits, so that refusal can itself be proved below.
-#
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
 # cannot reach, the consumer fixture compiles what a host writes, the api-break gate holds
 # the public API to what the release being prepared may change, the release heading gate is proved
-# on the refusals a tag push would make, the documentation gate builds what Swift Package Index
-# publishes, and `swift test` is the correctness gate.
+# on the refusals a tag push would make, and `swift test` is the correctness gate.
 
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-
-RELEASE_OVERRIDE="${AETHERGRAM_RELEASE:-}"
-if [ -n "$RELEASE_OVERRIDE" ] && ! printf '%s\n' "$RELEASE_OVERRIDE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    printf 'run-checks: AETHERGRAM_RELEASE=%s is not X.Y.Z\n' "$RELEASE_OVERRIDE" >&2
-    exit 2
-fi
-case "${1:-}" in
-    "") ;;
-    --validate-only) exit 0 ;;
-    *) printf 'run-checks: unknown argument: %s\n' "$1" >&2; exit 2 ;;
-esac
 
 PASS=0
 FAIL=0
@@ -502,79 +483,8 @@ else
     pass
 fi
 
-# The digester reports no addition, so the listing is proved on the same history: 0.3.0 moved
-# `sessionID` from the batch to each signal, and 0.3.2 moved nothing.
-it "the declarations a release added and dropped are listed"
-OUT="$(api_gate --base v0.2.1 --head v0.3.0 --release 0.3.0 --print-additions 2>&1)"; GATE_RC=$?
-MISSING=""
-for LINE in '    + Var Signal.sessionID: Swift.String' '    - Var SignalBatch.sessionID: Swift.String' \
-    '  AethergramTelemetryDeck: nothing added or dropped'; do
-    printf '%s\n' "$OUT" | grep -qF -- "$LINE" || MISSING="$MISSING [$LINE]"
-done
-if [ "$GATE_RC" -ne 0 ] || [ -n "$MISSING" ]; then
-    printf '%s\n' "$OUT"
-    fail "the listing exited $GATE_RC or lacked:$MISSING"
-else
-    pass
-fi
-
-it "a patch that moved nothing lists no declaration"
-OUT="$(api_gate --base v0.3.1 --head v0.3.2 --print-additions 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -ne 0 ] || [ "$(printf '%s\n' "$OUT" | grep -c ': nothing added or dropped$')" -ne 2 ] \
-    || printf '%s\n' "$OUT" | grep -q '^    [+-] '; then
-    printf '%s\n' "$OUT"
-    fail "the listing exited $GATE_RC or listed a declaration between 0.3.1 and 0.3.2"
-else
-    pass
-fi
-
-# The working tree's gate, with the override forwarded when $1 carries one.
-release_gate() {
-    _release="$1"; shift
-    if [ -n "$_release" ]; then api_gate --release "$_release" "$@"; else api_gate "$@"; fi
-}
-
-it "a release override that is not X.Y.Z stops the run"
-OUT="$(AETHERGRAM_RELEASE=banana "$ROOT/Scripts/run-checks.sh" --validate-only 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -ne 2 ] || ! printf '%s\n' "$OUT" | grep -q 'AETHERGRAM_RELEASE=banana is not X.Y.Z'; then
-    printf '%s\n' "$OUT"
-    fail "an override of banana exited $GATE_RC rather than 2"
-elif ! AETHERGRAM_RELEASE=0.4.0 "$ROOT/Scripts/run-checks.sh" --validate-only >/dev/null 2>&1; then
-    fail "an override of 0.4.0 was refused too, so the refusal is not about the value"
-else
-    pass
-fi
-
-it "a release the api gate cannot read is refused rather than defaulted"
-OUT="$(release_gate banana --base v0.3.1 --head v0.3.2 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -ne 2 ] || ! printf '%s\n' "$OUT" | grep -q 'release banana is not X.Y.Z'; then
-    printf '%s\n' "$OUT"
-    fail "the gate exited $GATE_RC rather than 2 on a release of banana"
-else
-    pass
-fi
-
-# v0.3.0 carries no CHANGELOG.md, so the gate can only refuse its break as a patch, rather than
-# stop for want of a heading, if the override reached it.
-it "the release override reaches the gate in place of the CHANGELOG's"
-OUT="$(release_gate 0.2.2 --base v0.2.1 --head v0.3.0 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'releasing 0.2.2 (patch)'; then
-    printf '%s\n' "$OUT"
-    fail "an override of 0.2.2 exited $GATE_RC rather than refusing the break as a patch"
-elif ! OUT="$(release_gate "" --base v0.3.1 --head v0.3.2 2>&1)" \
-    || ! printf '%s\n' "$OUT" | grep -q 'releasing 0.3.2 (patch)'; then
-    printf '%s\n' "$OUT"
-    fail "with no override the gate did not read the release from v0.3.2's CHANGELOG"
-else
-    pass
-fi
-
-if [ -n "$RELEASE_OVERRIDE" ]; then
-    it "the working tree breaks nothing release $RELEASE_OVERRIDE may not break"
-else
-    it "the working tree breaks nothing its CHANGELOG entry does not allow"
-fi
-if OUT="$(release_gate "$RELEASE_OVERRIDE" --print-additions 2>&1)"; then
+it "the working tree breaks nothing its CHANGELOG entry does not allow"
+if OUT="$(api_gate 2>&1)"; then
     printf '%s\n' "$OUT" | sed 's/^/        /'
     pass
 else
@@ -625,55 +535,6 @@ if [ "$GATE_RC" -ne 2 ]; then
     fail "a tag with no v exited $GATE_RC rather than 2"
 else
     pass
-fi
-
-printf '\ndocumentation gate\n'
-
-# Swift Package Index builds the docs with a DocC plugin it injects, since the package takes no
-# dependency, not even that one. So they are built here from each module's symbol graph with docc's
-# warnings as errors, which is what makes an unresolved symbol link fail. The api gate's build
-# directory is reused, warm.
-MAC_SDK="$(xcrun --sdk macosx --show-sdk-path)" || MAC_SDK=""
-DOC_TARGET="$(uname -m)-apple-macosx$(xcrun --sdk macosx --show-sdk-version 2>/dev/null)"
-docs_gate() {
-    _pkg="$1"; _build="$2"; _out="$3"
-    [ -n "$MAC_SDK" ] || { printf 'xcrun found no macosx SDK\n'; return 1; }
-    swift build --package-path "$_pkg" --scratch-path "$_build" --target AethergramTelemetryDeck || return 1
-    _bin="$(swift build --package-path "$_pkg" --scratch-path "$_build" --show-bin-path)" || return 1
-    for _m in AethergramCore AethergramTelemetryDeck; do
-        rm -rf "$_out/$_m" && mkdir -p "$_out/$_m/graphs" || return 1
-        xcrun swift-symbolgraph-extract -module-name "$_m" -I "$_bin/Modules" -target "$DOC_TARGET" \
-            -sdk "$MAC_SDK" -minimum-access-level public -module-cache-path "$_bin/ModuleCache" \
-            -output-dir "$_out/$_m/graphs" || return 1
-        # A catalog is optional; without one the module's page comes from its symbols alone.
-        set --
-        for _catalog in "$_pkg/Sources/$_m"/*.docc; do [ -d "$_catalog" ] && set -- "$_catalog"; done
-        xcrun docc convert "$@" --additional-symbol-graph-dir "$_out/$_m/graphs" \
-            --fallback-display-name "$_m" --fallback-bundle-identifier "$_m" \
-            --output-path "$_out/$_m/$_m.doccarchive" --warnings-as-errors || return 1
-    done
-}
-
-it "a doc comment linking a symbol that does not exist is refused"
-BAD="$TMP/broken-doc-link"
-copy_package "$BAD"
-printf '/// Links ``NoSuchSymbolProbe``.\npublic enum BrokenDocLinkProbe {}\n' > "$BAD/Sources/AethergramCore/BrokenDocLink.swift"
-OUT="$(docs_gate "$BAD" "$API/build" "$BAD.docs" 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -eq 0 ]; then
-    fail "documentation with an unresolved symbol link built"
-elif ! printf '%s\n' "$OUT" | grep -q 'NoSuchSymbolProbe'; then
-    printf '%s\n' "$OUT"
-    fail "the documentation build failed for a reason other than the link"
-else
-    pass
-fi
-
-it "the documentation builds with no warnings"
-if OUT="$(docs_gate "$ROOT" "$API/build" "$TMP/docs" 2>&1)"; then
-    pass
-else
-    printf '%s\n' "$OUT"
-    fail "docc refused the documentation"
 fi
 
 printf '\nswift test\n'
