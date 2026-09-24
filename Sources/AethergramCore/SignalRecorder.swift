@@ -203,8 +203,8 @@ public final class SignalRecorder: Sendable {
     }
 
     /// `flush()` for a caller that can wait for the send: starts one delivery
-    /// pass now and waits for that pass to finish, then for the queue writes
-    /// submitted before it returns to land.
+    /// pass now and waits for that pass to finish, then for every queue write
+    /// submitted by then, the pass's own removal included, to reach the store.
     ///
     /// A pass already sending is the one it waits for. It promises that
     /// pass's completion, not delivery of everything queued: a pass ends
