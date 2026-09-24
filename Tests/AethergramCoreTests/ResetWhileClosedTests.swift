@@ -285,7 +285,7 @@ struct ResetWhileClosedTests {
         }
         await resetDone.wait()
         recorder.record("after")
-        #expect(await flushReturns(recorder))
+        await recorder.drain()
 
         #expect(transport.sentSignalNames == ["before", "after"])
         #expect(storage.signalsOnDisk.isEmpty)
@@ -309,46 +309,6 @@ struct ResetWhileClosedTests {
 
         #expect(fixture.transport.sentSignalNames == ["after"])
         #expect(fixture.retention.record?.totalSessionsCount == 1)
-    }
-
-    /// A host that flushes from another thread during the rotation has
-    /// nothing it may send, and must not be held until the rotation ends.
-    @Test("An awaited flush during the callback returns at once and sends nothing")
-    func awaitedFlushDuringTheCallbackReturnsAtOnce() async throws {
-        let directory = try #require(TestTempDirectory.url)
-        let transport = HeldFirstSendTransport()
-        defer { transport.release() }
-        let recorder = try SignalRecorder(
-            configuration: testConfiguration(transmitInterval: 3600),
-            transport: transport,
-            queueStorage: RecordingQueueStorage(directory: directory),
-            retentionStore: SpyRetentionStore(),
-            clientUserProvider: { "client-user" },
-            environmentProvider: { [:] },
-            calendar: testCalendar,
-            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
-        )
-        recorder.updateConsent(.granted)
-        let returnedPromptly = SharedFlag()
-
-        let resetDone = Gate()
-        DispatchQueue.global().async {
-            recorder.resetClosingCollection {
-                Self.onAnotherThread { recorder.record("during") }
-                recorder.flush()
-                let returned = DispatchSemaphore(value: 0)
-                Task {
-                    await recorder.flushAndWait()
-                    returned.signal()
-                }
-                if returned.wait(timeout: .now() + 1) == .success { returnedPromptly.raise() }
-            }
-            resetDone.open()
-        }
-        await resetDone.wait()
-
-        #expect(returnedPromptly.isRaised)
-        #expect(transport.sendCount == 0)
     }
 
     // MARK: Private

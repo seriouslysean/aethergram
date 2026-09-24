@@ -609,21 +609,6 @@ final class PrioritySpyTransport: SignalTransport, @unchecked Sendable {
     private var observed: [TaskPriority] = []
 }
 
-/// SplitMix64: a seeded generator, so a draw the recorder makes can be
-/// replayed by the test from the same seed. A constant generator will not do:
-/// a bounded draw rejects and redraws, and one that never changes never ends.
-struct ReplayableGenerator: RandomNumberGenerator {
-    var state: UInt64
-
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-}
-
 /// Answers every send after a pause, and counts the answers apart from the
 /// arrivals, so a test can tell a send that was started from one that was
 /// answered. Suspends rather than blocks, so the pause costs the pool nothing.
@@ -799,42 +784,4 @@ final class HeldClientUser: @unchecked Sendable {
     private let lock = NSLock()
     private let semaphore = DispatchSemaphore(value: 0)
     private var held = false
-}
-
-/// A drain's delay that the test can watch: how many started, and whether
-/// one was cancelled rather than served.
-final class ObservedSleep: @unchecked Sendable {
-    /// Opened when a sleep is cancelled.
-    let cancelled = Gate()
-
-    var startedCount: Int {
-        lock.withLock { started }
-    }
-
-    /// The closure the recorder's `sleep:` parameter takes.
-    var sleep: @Sendable (TimeInterval) async throws -> Void {
-        { [self] seconds in
-            lock.withLock { started += 1 }
-            do {
-                try await Task.sleep(for: .seconds(seconds))
-            } catch {
-                cancelled.open()
-                throw error
-            }
-        }
-    }
-
-    private let lock = NSLock()
-    private var started = 0
-}
-
-/// A weak reference a polling closure can read from another task.
-final class WeakReference<Object: AnyObject>: @unchecked Sendable {
-    var value: Object? {
-        get { lock.withLock { object } }
-        set { lock.withLock { object = newValue } }
-    }
-
-    private let lock = NSLock()
-    private weak var object: Object?
 }

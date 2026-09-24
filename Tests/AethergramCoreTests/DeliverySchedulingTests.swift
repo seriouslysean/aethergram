@@ -443,15 +443,16 @@ struct DeliverySchedulingTests {
         #expect(transport.sendCount == 0)
     }
 
-    /// Installs that failed together must not come back together. The draw is
-    /// replayed here from the seed the recorder was handed, so a recorder that
-    /// owes the fixed ceiling rather than the draw reads as the wrong number,
-    /// on both paths that owe a retry: a refused send and a missing identifier.
-    @Test("A retry after a failure is owed at the jittered draw, not the fixed ceiling", arguments: [true, false])
+    /// Installs that failed together must not come back together. A recorder
+    /// that owes the fixed ceiling owes it on every failure, so three
+    /// failures in a row each owing within a second of their ceiling is what
+    /// that recorder shows; a uniform draw does so about once in ten million
+    /// runs. Both paths that owe a retry: a refused send and a missing
+    /// identifier.
+    @Test("A retry after a failure is owed at a jittered draw, not the fixed ceiling", arguments: [true, false])
     func retryAfterAFailureIsJittered(identifierResolves: Bool) async throws {
         let directory = try #require(TestTempDirectory.url)
         let configuration = testConfiguration(transmitInterval: 100, maxBackoffInterval: 7200)
-        let seed: UInt64 = 7
         let recorder = try SignalRecorder(
             configuration: configuration,
             transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
@@ -460,22 +461,20 @@ struct DeliverySchedulingTests {
             clientUserProvider: { identifierResolves ? "client-user" : nil },
             environmentProvider: { [:] },
             calendar: testCalendar,
-            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
-            retryDelay: { failures in
-                var generator = ReplayableGenerator(state: seed)
-                return configuration.backoffInterval(consecutiveFailures: failures, using: &generator)
-            }
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
         )
         recorder.updateConsent(.granted)
         recorder.record("Game.started")
-        await recorder.drain()
 
-        var replay = ReplayableGenerator(state: seed)
-        let drawn = configuration.backoffInterval(consecutiveFailures: 1, using: &replay)
-        // The seed has to land clear of the ceiling, or the two readings agree.
-        #expect(drawn >= 100 && drawn < 190)
-        let owed = recorder.secondsUntilRetry
-        #expect(owed > drawn - 5 && owed <= drawn)
+        var nearTheCeiling = 0
+        for failures in 1 ... 3 {
+            await recorder.drain()
+            let ceiling = configuration.backoffInterval(consecutiveFailures: failures)
+            let owed = recorder.secondsUntilRetry
+            #expect(owed > max(100, ceiling / 2) - 5 && owed <= ceiling, "failures=\(failures)")
+            if owed > ceiling - 1 { nearTheCeiling += 1 }
+        }
+        #expect(nearTheCeiling < 3)
     }
 
     /// The invariant through the recorder rather than the pure
@@ -661,122 +660,6 @@ struct DeliverySchedulingTests {
         let afterKill = try #require(retention.record)
         #expect(afterKill.openSessionStartedAt == opened)
         #expect(afterKill.lastActivityAt == opened.addingTimeInterval(300))
-    }
-
-    // MARK: Releasing the recorder
-
-    /// A sleeping drain holds the recorder weakly and has nothing to send
-    /// once it is gone. Left running it would sleep out its interval, up to
-    /// the backoff ceiling, for nothing.
-    @Test("Releasing the recorder cancels a drain sleeping out its delay")
-    func releasingTheRecorderCancelsASleepingDrain() async throws {
-        let directory = try #require(TestTempDirectory.url)
-        let sleep = ObservedSleep()
-        let released = WeakReference<SignalRecorder>()
-        do {
-            let recorder = try SignalRecorder(
-                configuration: testConfiguration(transmitInterval: 3600),
-                transport: SpyTransport(),
-                queueStorage: RecordingQueueStorage(directory: directory),
-                retentionStore: SpyRetentionStore(),
-                clientUserProvider: { "client-user" },
-                environmentProvider: { [:] },
-                calendar: testCalendar,
-                now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
-                retryDelay: { _ in 3600 },
-                sleep: sleep.sleep
-            )
-            released.value = recorder
-            recorder.updateConsent(.granted)
-            recorder.record("Game.started")
-            await recorder.writer.awaitPendingWrites()
-            await waitUntil { sleep.startedCount == 1 }
-        }
-        await waitUntil { sleep.cancelled.isOpen }
-
-        #expect(released.value == nil)
-        #expect(sleep.cancelled.isOpen)
-    }
-
-    /// A drain that is sending keeps the recorder alive for the rest of its
-    /// pass, so the batches it had queued still go. What it schedules after
-    /// the pass is a sleeping drain, which the release then cancels.
-    @Test("Releasing the recorder mid-send finishes that pass's batches and schedules nothing after")
-    func releasingTheRecorderMidSendFinishesThePassOnly() async throws {
-        let directory = try #require(TestTempDirectory.url)
-        let sleep = ObservedSleep()
-        let transport = NamedHoldTransport(holding: ["a"], failing: ["c"])
-        defer { transport.releaseAll() }
-        let released = WeakReference<SignalRecorder>()
-        do {
-            let recorder = try SignalRecorder(
-                configuration: testConfiguration(batchSize: 1, transmitInterval: 3600),
-                transport: transport,
-                queueStorage: RecordingQueueStorage(directory: directory),
-                retentionStore: SpyRetentionStore(),
-                clientUserProvider: { "client-user" },
-                environmentProvider: { [:] },
-                calendar: testCalendar,
-                now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
-                retryDelay: { _ in 3600 },
-                sleep: sleep.sleep
-            )
-            released.value = recorder
-            recorder.updateConsent(.granted)
-            // A full batch of one sends at once, so "a" is in flight before
-            // the other two are recorded.
-            recorder.record("a")
-            await transport.held("a").wait()
-            recorder.record("b")
-            recorder.record("c")
-            await recorder.writer.awaitPendingWrites()
-        }
-        transport.release("a")
-        await waitUntil { released.value == nil }
-        await waitUntil { sleep.cancelled.isOpen }
-
-        #expect(released.value == nil)
-        #expect(transport.sentSignalNames == ["a", "b", "c"])
-        #expect(sleep.startedCount == 1)
-        #expect(sleep.cancelled.isOpen)
-    }
-
-    /// With no delay owed, the drain a pass schedules on its way out could
-    /// start while that pass still holds the recorder, take it strongly
-    /// itself, and send again after the host let go — and each such pass
-    /// hands the recorder on to the next.
-    @Test("Releasing the recorder mid-send sends nothing after that pass, even with no delay owed")
-    func releasingTheRecorderMidSendSendsNothingAfterAtZeroDelay() async throws {
-        let directory = try #require(TestTempDirectory.url)
-        let transport = NamedHoldTransport(holding: ["a"], failing: ["c"])
-        defer { transport.releaseAll() }
-        let released = WeakReference<SignalRecorder>()
-        do {
-            let recorder = try SignalRecorder(
-                configuration: testConfiguration(batchSize: 1, transmitInterval: 3600),
-                transport: transport,
-                queueStorage: RecordingQueueStorage(directory: directory),
-                retentionStore: SpyRetentionStore(),
-                clientUserProvider: { "client-user" },
-                environmentProvider: { [:] },
-                calendar: testCalendar,
-                now: steppingClock(from: testDate(year: 2026, month: 3, day: 4)),
-                retryDelay: { _ in 0 }
-            )
-            released.value = recorder
-            recorder.updateConsent(.granted)
-            recorder.record("a")
-            await transport.held("a").wait()
-            recorder.record("b")
-            recorder.record("c")
-            await recorder.writer.awaitPendingWrites()
-        }
-        transport.release("a")
-        await waitUntil { released.value == nil }
-        try await Task.sleep(for: .milliseconds(200))
-
-        #expect(released.value == nil)
-        #expect(transport.sentSignalNames == ["a", "b", "c"])
     }
 }
 
