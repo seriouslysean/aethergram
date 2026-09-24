@@ -404,7 +404,7 @@ Then confirm, on a real run:
   | Purchase History | `recordPurchaseCompleted` | Your app, if you call it |
   | Other Diagnostic Data | `recordError` | Your app, if you call it |
 
-  Every signal also carries the app version, device model, OS version, region, and language, as
-  every signal from the vendor's SDK does, and its manifest declares no further type for them. If
-  you return a user identifier rather than a device one, or use any of this for tracking, the app's
-  manifest and answers say so; the package's cannot.
+  With the default `environmentProvider`, every signal also carries the app version, device model,
+  OS version, region, and language, as every signal from the vendor's SDK does, and its manifest
+  declares no further type for them. If you return a user identifier rather than a device one, or
+  use any of this for tracking, the app's manifest and answers say so; the package's cannot.
