@@ -10,80 +10,60 @@ import Testing
 /// (`removeFirst(pending.count - queueLimit)` requests more elements than
 /// the array holds). Both fail at construction instead.
 ///
-/// Serialized: each trapping test re-execs the whole test binary, and fifteen of
+/// Serialized: each trapping test re-execs the whole test binary, and ten of
 /// them racing the async suites elsewhere in the target crashes the runner
 /// before any test reports — a gate that cannot run looks exactly like one
 /// that passed.
 @Suite("AethergramConfiguration", .serialized, .tags(.lifecycle))
 struct AethergramConfigurationTests {
-    /// The ceilings are inclusive: a host that sets exactly one year or
-    /// exactly 1,250 keeps its value rather than trapping at the boundary.
-    @Test("An interval of exactly one year and a queueLimit of exactly 1,250 construct and keep their values")
-    func valuesAtTheCeilingConstruct() {
-        let oneYear: TimeInterval = 365 * 24 * 60 * 60
+    /// A patch release keeps every configuration that ran under the last one
+    /// running: a long interval or a large queue is the host's policy to set.
+    @Test("A two-year interval and a queueLimit of 200,000 construct and keep their values")
+    func largeValuesThatRanBeforeStillConstruct() {
+        let twoYears: TimeInterval = 2 * 365 * 24 * 60 * 60
         let configuration = AethergramConfiguration(
             logSubsystem: "test",
-            queueLimit: 1250,
-            transmitInterval: oneYear,
-            maxBackoffInterval: oneYear
+            queueLimit: 200_000,
+            transmitInterval: twoYears,
+            maxBackoffInterval: twoYears
         )
-        #expect(configuration.queueLimit == 1250)
-        #expect(configuration.transmitInterval == oneYear)
-        #expect(configuration.maxBackoffInterval == oneYear)
+        #expect(configuration.queueLimit == 200_000)
+        #expect(configuration.transmitInterval == twoYears)
+        #expect(configuration.maxBackoffInterval == twoYears)
     }
 
     /// A sleep that runs traps on a duration past `Int64.max` seconds, about
-    /// 9.2e18, and `Duration.seconds` itself past about 1.7e20. The largest
-    /// interval that constructs must sit below both, and the `#require` is
-    /// the only guard for the running sleep: the cancelled sleep below never
-    /// runs, so it proves the conversion to a `Duration` and nothing more.
-    @Test("The largest interval that constructs converts to a Duration without trapping")
-    func largestIntervalConvertsToADuration() async throws {
+    /// 9.2e18, and `Duration.seconds` itself past about 1.7e20, so under 0.3.1
+    /// an interval that large constructed and then crashed its host at the
+    /// first sleep that ran on it. The `#require` is the only guard for the
+    /// running sleep: the rest of the test would pass a ceiling past
+    /// `Int64.max` silently, because the cancelled sleep never runs, and would
+    /// trap the runner only past about 1.7e20. The cancelled sleep and the
+    /// retry deadline below are built from the clamped values, which covers
+    /// only the conversion to a `Duration`.
+    @Test("An interval too large for a Duration is clamped rather than trapping the first record's sleep")
+    func intervalTooLargeForADurationIsClamped() async throws {
         try #require(AethergramConfiguration.maximumInterval < Double(Int64.max))
         let configuration = AethergramConfiguration(
             logSubsystem: "test",
-            transmitInterval: AethergramConfiguration.maximumInterval,
-            maxBackoffInterval: AethergramConfiguration.maximumInterval
+            transmitInterval: 1e21,
+            maxBackoffInterval: 1e21
         )
         let delay = configuration.deliveryDelay(queued: 1)
         let backoff = configuration.backoffInterval(consecutiveFailures: 64)
 
-        #expect(backoff == AethergramConfiguration.maximumInterval)
+        #expect(configuration.transmitInterval <= AethergramConfiguration.maximumInterval)
+        #expect(configuration.maxBackoffInterval <= AethergramConfiguration.maximumInterval)
+        #expect(backoff <= AethergramConfiguration.maximumInterval)
+        // Cancelled at once, so nothing waits out the interval and the sleep
+        // never runs: `.seconds` converts it before the sleep looks at
+        // cancellation, which proves the conversion and nothing about the
+        // running sleep's limit.
         let sleep = Task { try await Task.sleep(for: .seconds(delay)) }
         sleep.cancel()
         _ = await sleep.result
         let now = ContinuousClock.now
         #expect(now.advanced(by: .seconds(backoff)) > now)
-    }
-
-    /// Restore decodes the whole queue file at consent grant on the caller's
-    /// thread, so a queue past 1,250 signals is a grant that blocks past the
-    /// budget; 0.3.x accepted any positive value and let the host find that
-    /// out on a device.
-    @Test("A queueLimit past 1,250 traps at construction")
-    func queueLimitPastTheCeilingTraps() async {
-        await #expect(processExitsWith: .failure) {
-            _ = AethergramConfiguration(logSubsystem: "test", queueLimit: 1251)
-        }
-    }
-
-    /// 0.3.2 clamped an interval only past about 1e15 seconds, so a typo of a
-    /// few orders of magnitude constructed and silently never delivered.
-    @Test("An interval past one year traps at construction", arguments: [
-        InvalidInterval(property: .transmitInterval, value: .pastOneYear),
-        InvalidInterval(property: .maxBackoffInterval, value: .pastOneYear),
-        InvalidInterval(property: .transmitInterval, value: .huge),
-        InvalidInterval(property: .maxBackoffInterval, value: .huge)
-    ])
-    private func intervalPastTheCeilingTraps(_ invalid: InvalidInterval) async {
-        await #expect(processExitsWith: .failure) { [invalid] in
-            switch invalid.property {
-            case .transmitInterval:
-                _ = AethergramConfiguration(logSubsystem: "test", transmitInterval: invalid.value.interval)
-            case .maxBackoffInterval:
-                _ = AethergramConfiguration(logSubsystem: "test", maxBackoffInterval: invalid.value.interval)
-            }
-        }
     }
 
     @Test("Positive batchSize and queueLimit construct without trapping")
@@ -124,8 +104,6 @@ struct AethergramConfigurationTests {
             case negative
             case nan
             case infinite
-            case pastOneYear
-            case huge
 
             var interval: TimeInterval {
                 switch self {
@@ -133,8 +111,6 @@ struct AethergramConfigurationTests {
                 case .negative: -1
                 case .nan: .nan
                 case .infinite: .infinity
-                case .pastOneYear: 365 * 24 * 60 * 60 + 1
-                case .huge: 1e21
                 }
             }
         }
