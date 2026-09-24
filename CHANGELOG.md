@@ -3,6 +3,29 @@
 What each release changed that a host can see. What a version number promises is in
 [STABILITY.md](STABILITY.md); this file is the history that contract was applied to.
 
+## 0.4.1 — 2026-09-24
+
+A patch: nothing in the API list moved, and the payload version stays 2.0.0.
+
+### Privacy manifest
+
+- `PrivacyInfo.xcprivacy` moved from the core's bundle to the TelemetryDeck adapter's,
+  `Aethergram_AethergramTelemetryDeck.bundle`. The core ships no manifest: Apple counts data as
+  collected when it is transmitted off the device, and the core never transmits.
+- It declares Product Interaction and Device ID, not linked to the user, not used for tracking, and
+  collected for analytics, as TelemetryDeck's SDK declares them at 2.14.1. 0.4.0 declared both
+  linked. The adapter hashes the identifier on the device exactly as the vendor's SDK hashes it, so
+  the vendor's not-linked declaration holds here too. No tracking, tracking domains, or
+  required-reason APIs, as in 0.4.0.
+- Purchase History and Other Diagnostic Data are no longer declared. A host that calls
+  `recordPurchaseCompleted` or `recordError` declares those types in its own manifest and App Store
+  answers.
+
+### Tooling
+
+- The privacy-manifest check pins the manifest's content and its place in the adapter's bundle,
+  and is proved refusing a manifest with a linked or an extra type.
+
 ## 0.4.0 — 2026-09-23
 
 A 0.x minor with no API break: two methods added to `SignalRecorder`, a platform and a privacy
