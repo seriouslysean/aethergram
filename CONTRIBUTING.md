@@ -42,10 +42,25 @@ Scripts/run-checks.sh
 `Tests/` is SwiftPM's and is reached by `swift test`. `Scripts/` holds the repo-level checks that
 are not Swift, which is where a Swift package puts them.
 
-Besides the leak scan and the suite, `run-checks.sh` builds what `swift test` never compiles: the
-package for iOS in release as extension-safe (`-application-extension`), and the core alone for
-iOS in release with no adapter in reach. Each build gate is first watched refusing a copy of the
-package broken on purpose.
+It runs offline, and needs the release tags: the api-break gate builds them, so a shallow clone or
+one without tags cannot run it. `git fetch --tags` first if the clone has none. The gates, in
+order:
+
+| Gate | What it holds |
+|---|---|
+| Leak scan | Nothing tracked or in history identifies a consumer, a person, or a machine; the commit-message tier refuses trailers and issue references |
+| iOS builds | The package for iOS in release as extension-safe (`-application-extension`), and the core alone with no adapter in reach |
+| Privacy manifest | `PrivacyInfo.xcprivacy` is a valid property list, and the iOS build ships it unchanged in the core's bundle |
+| watchOS build | The package builds for watchOS in release at its declared floor, watchOS 11 |
+| Consumer fixture | `Tests/Fixtures/ConsumerHost`, a package that imports the umbrella alone with no upcoming-feature flag, builds for iOS as extension-safe, and the root package takes nothing from it |
+| API break | The working tree's public API, diffed against the last release tag, breaks nothing the release in `CHANGELOG.md`'s top heading may break: nothing in a patch, anything in a 0.x minor |
+| Release heading | `Scripts/check-release-heading.sh` refuses a heading that names another release, has no date, or uses a hyphen for the dash |
+| Suite | `swift test` passes and runs at least `ROOT_TESTS_FLOOR` tests |
+
+Each gate is first watched refusing known-bad input — a copy of the package broken on purpose, a
+malformed manifest, a break from the package's own history — so a gate that never fires cannot
+pass as one that passes. `ROOT_TESTS_FLOOR` in `run-checks.sh` catches tests that go missing; raise
+it in the change that adds tests, and lower it only with the tests it lost named.
 
 ## Every change starts as an issue
 
@@ -123,11 +138,13 @@ failure, not the reporter.
 2. `Scripts/run-checks.sh` passes on a clean checkout.
 3. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
    reader copying one gets the release being cut rather than the previous one.
-4. Write the release's entry in `CHANGELOG.md`: every behaviour change a host can see, and any
-   trap a host could newly hit.
+4. Write the release's entry in `CHANGELOG.md` under `## X.Y.Z — YYYY-MM-DD`: every behaviour
+   change a host can see, and any trap a host could newly hit. The api-break gate reads the
+   release from that heading.
 5. Merge the pull request.
 6. Confirm local `main` matches `origin/main`.
-7. Tag `vX.Y.Z` with an annotation summarizing the release, and push the tag.
+7. Run `Scripts/check-release-heading.sh vX.Y.Z`; CI runs the same check on the tag push. Then tag
+   `vX.Y.Z` with an annotation summarizing the release, and push the tag.
 8. Publish a GitHub release from the tag, naming the issues it closes.
 
 What a version number promises is in [STABILITY.md](STABILITY.md).
