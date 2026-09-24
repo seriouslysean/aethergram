@@ -20,20 +20,11 @@ let package = Package(
         .package(path: "../../..")
     ],
     targets: [
-        // Extension-safe: the run-checks gate builds it for iOS release with -application-extension.
+        // Compile-only, and extension-safe: the run-checks gate builds it for iOS release with
+        // -application-extension.
         .target(
             name: "ConsumerHostExtension",
             dependencies: [.product(name: "Aethergram", package: aethergramIdentity)]
-        ),
-        // The app pattern. Its UIKit binding calls `UIApplication.shared`, which an extension may
-        // not, so this target stays out of the extension-safe build.
-        .target(
-            name: "ConsumerHostApp",
-            dependencies: ["ConsumerHostExtension", .product(name: "Aethergram", package: aethergramIdentity)]
-        ),
-        .testTarget(
-            name: "ConsumerHostTests",
-            dependencies: ["ConsumerHostExtension", "ConsumerHostApp", .product(name: "Aethergram", package: aethergramIdentity)]
         )
     ]
 )

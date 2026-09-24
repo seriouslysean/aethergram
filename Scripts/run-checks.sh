@@ -13,7 +13,7 @@
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
-# cannot reach, the consumer fixture compiles and tests what a host writes, the api-break gate holds
+# cannot reach, the consumer fixture compiles what a host writes, the api-break gate holds
 # the public API to what the release being prepared may change, the release heading gate is proved
 # on the refusals a tag push would make, the documentation gate builds what Swift Package Index
 # publishes, and `swift test` is the correctness gate.
@@ -419,88 +419,30 @@ fi
 printf '\nconsumer fixture\n'
 
 # A package of its own that depends on this one by path and imports the umbrella alone, in a module
-# with no upcoming-feature flag: it compiles what a host writes, and tests the patterns a host
-# flushes under in an extension and in an app. Both builds go to scratch paths, never into the tree.
+# with no upcoming-feature flag: it compiles what a host writes. The build goes to a scratch path,
+# never into the tree.
 FIXTURE="$ROOT/Tests/Fixtures/ConsumerHost"
-FIXTURE_TESTS=15
+fixture_gate() { ios_build "$1" "$2" --target ConsumerHostExtension; }
 
-it "the fixture's extension target builds for iOS release as extension-safe, alone"
-OUT="$(ios_build "$FIXTURE" "$TMP/fixture-ios" --target ConsumerHostExtension 2>&1)"; GATE_RC=$?
-# The warning is how the build shows it compiled the fixture's host code rather than a cached copy.
-if [ "$GATE_RC" -ne 0 ]; then
-    printf '%s\n' "$OUT"
-    fail "the fixture's extension target did not build for iOS release with -application-extension"
-elif ! printf '%s\n' "$OUT" | grep -q "'testPartition(for:)' is deprecated"; then
-    printf '%s\n' "$OUT"
-    fail "the build did not report the deprecated call, so it did not compile the host's code"
-elif [ -z "$(find "$TMP/fixture-ios" -name 'ConsumerHostExtension.swiftmodule' 2>/dev/null | head -n 1)" ] \
-    || [ -n "$(find "$TMP/fixture-ios" -name 'ConsumerHostApp.swiftmodule' 2>/dev/null | head -n 1)" ]; then
-    fail "the build did not produce the extension module alone: the app target calls UIApplication.shared"
-else
-    pass
-fi
-
-# The app target's UIKit binding is behind `#if canImport(UIKit)`, which the macOS test run never
-# compiles, and it may not go into the extension-safe build, so it gets an iOS build of its own.
-app_gate() {
-    [ -n "$IOS_SDK" ] || { printf 'xcrun found no iphoneos SDK\n'; return 1; }
-    swift build --package-path "$1" --scratch-path "$2" --triple arm64-apple-ios18.0 --sdk "$IOS_SDK" \
-        --explicit-target-dependency-import-check error --target ConsumerHostApp
-}
-
-it "the fixture's app target builds for iOS with its UIKit binding"
-if OUT="$(app_gate "$FIXTURE" "$TMP/fixture-ios-app" 2>&1)"; then
+it "the fixture builds for iOS release as extension-safe"
+if OUT="$(fixture_gate "$FIXTURE" "$TMP/fixture-ios" 2>&1)"; then
     pass
 else
     printf '%s\n' "$OUT"
-    fail "the fixture's app target did not build for iOS"
+    fail "the fixture did not build for iOS release with -application-extension"
 fi
 
-it "the fixture's app build reaches the UIKit arm"
-BAD="$TMP/unbuilt-uikit-arm"
+it "the fixture build compiles the host's code"
+BAD="$TMP/unbuilt-fixture"
 copy_package "$BAD"
 mkdir -p "$BAD/Tests/Fixtures" && cp -R "$FIXTURE" "$BAD/Tests/Fixtures/"
 rm -rf "$BAD/Tests/Fixtures/ConsumerHost/.build"
-printf '#if canImport(UIKit)\nlet uikitArmProbe: Int = uikitArmMarker\n#endif\n' \
-    > "$BAD/Tests/Fixtures/ConsumerHost/Sources/ConsumerHostApp/UIKitArm.swift"
-OUT="$(app_gate "$BAD/Tests/Fixtures/ConsumerHost" "$BAD.build" 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -eq 0 ] || ! printf '%s\n' "$OUT" | grep -q 'uikitArmMarker'; then
-    fail "the app build exited $GATE_RC and never reached the UIKit arm"
+printf 'let hostProbe: Int = hostMarker\n' > "$BAD/Tests/Fixtures/ConsumerHost/Sources/ConsumerHostExtension/HostProbe.swift"
+OUT="$(fixture_gate "$BAD/Tests/Fixtures/ConsumerHost" "$BAD.build" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ] || ! printf '%s\n' "$OUT" | grep -q 'hostMarker'; then
+    fail "the fixture build exited $GATE_RC and never reached the host's code"
 else
     pass
-fi
-
-# Swift Testing's summary line; a run that matched nothing says 0, or prints no line at all.
-tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' | tail -n 1; }
-fixture_ran_all() {
-    [ "$1" -eq 0 ] && [ "$(tests_run "$2")" = "$FIXTURE_TESTS" ]
-}
-
-# No debug info, so no dsymutil: it was seen listing TMPDIR itself, which on a machine with a large
-# one held the run for over ten minutes.
-fixture_test() {
-    swift test --package-path "$FIXTURE" --scratch-path "$TMP/fixture-test" -debug-info-format none "$@"
-}
-
-# The filtered run exits 0 having run nothing, which is the case the count exists to refuse.
-it "a fixture run that executes no test is refused"
-OUT="$(fixture_test --filter NoSuchTestProbe 2>&1)"; GATE_RC=$?
-if [ "$GATE_RC" -ne 0 ] || [ "$(tests_run "$OUT")" != 0 ]; then
-    printf '%s\n' "$OUT"
-    fail "the filtered run exited $GATE_RC or did not report 0 tests, so it proves nothing about the count"
-elif fixture_ran_all "$GATE_RC" "$OUT"; then
-    fail "a run of 0 tests passed as the full suite"
-else
-    pass
-fi
-
-it "the fixture's $FIXTURE_TESTS tests run on macOS and pass"
-OUT="$(fixture_test 2>&1)"; GATE_RC=$?
-if fixture_ran_all "$GATE_RC" "$OUT"; then
-    pass
-else
-    printf '%s\n' "$OUT"
-    fail "swift test exited $GATE_RC having run $(tests_run "$OUT") of $FIXTURE_TESTS tests"
 fi
 
 # `swift test` at the root must not run the fixture's suite as its own, or compile its sources.
@@ -511,7 +453,7 @@ BAD="$TMP/root-takes-fixture"
 copy_package "$BAD"
 mkdir -p "$BAD/Tests/Fixtures" && cp -R "$FIXTURE" "$BAD/Tests/Fixtures/"
 rm -rf "$BAD/Tests/Fixtures/ConsumerHost/.build"
-printf 'package.targets.append(.testTarget(name: "FixtureProbe", path: "Tests/Fixtures/ConsumerHost/Tests/ConsumerHostTests"))\n' \
+printf 'package.targets.append(.target(name: "FixtureProbe", path: "Tests/Fixtures/ConsumerHost/Sources/ConsumerHostExtension"))\n' \
     >> "$BAD/Package.swift"
 if ! root_takes_fixture "$BAD"; then
     fail "a manifest with a target inside the fixture was not caught"

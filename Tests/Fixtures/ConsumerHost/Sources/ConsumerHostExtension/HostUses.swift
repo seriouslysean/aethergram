@@ -28,3 +28,14 @@ struct HostTransport: SignalTransport {
 func legacyTestPartition(_ snapshot: EnvironmentSnapshot) -> Bool {
     TelemetryDeckConfiguration.testPartition(for: snapshot)
 }
+
+/// The two calls a host's lifecycle makes: an awaited flush on the way out, and a data reset that
+/// replaces the identifier with collection closed.
+func onResign(_ recorder: SignalRecorder) async {
+    recorder.endSession()
+    await recorder.flushAndWait()
+}
+
+func onDataReset(_ recorder: SignalRecorder, rotateIdentifier: () throws -> Void) rethrows {
+    try recorder.resetClosingCollection(during: rotateIdentifier)
+}
