@@ -400,7 +400,7 @@ Then confirm, on a real run:
   | Data type | What in the payload | Declared by |
   |---|---|---|
   | Product Interaction | Every signal: its name, parameters, and timestamps | The adapter |
-  | Device ID | `clientUser`, hashed as the vendor's SDK hashes it | The adapter |
+  | Device ID | `clientUser`, hashed as the vendor's SDK hashes it, as stable as the identifier you return | The adapter |
   | Purchase History | `recordPurchaseCompleted` | Your app, if you call it |
   | Other Diagnostic Data | `recordError` | Your app, if you call it |
 
