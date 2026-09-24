@@ -73,7 +73,7 @@ Open a pull request that closes it with `Closes #7`. Merge with a merge commit r
 squash, so each commit on `main` stays individually revertable.
 
 An agent commits and opens the pull request; the owner reviews the diff and merges. Commit
-messages and pull request bodies carry no session link, agent trailer, or co-author line.
+messages, issues, and pull request bodies carry no session link, agent trailer, or co-author line.
 
 ## Writing the test
 
