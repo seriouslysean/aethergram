@@ -295,9 +295,8 @@ public final class SignalRecorder: Sendable {
     ///
     /// - Parameter body: The host's own reset work, typically replacing the
     ///   identifier `clientUserProvider` returns.
-    /// - Returns: What `body` returns.
     /// - Throws: What `body` throws, once collection has reopened.
-    public func resetClosingCollection<R, E: Error>(during body: () throws(E) -> R) throws(E) -> R {
+    public func resetClosingCollection(during body: () throws -> Void) rethrows {
         requireNoReentry()
         let detached: Task<Void, Never>? = lock.withLock { current in
             current.closedForReset += 1
@@ -318,7 +317,7 @@ public final class SignalRecorder: Sendable {
             }
             if reopened { logger.info("collection reopened") }
         }
-        return try body()
+        try body()
     }
 
     // MARK: Internal

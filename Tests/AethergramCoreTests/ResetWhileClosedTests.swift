@@ -299,7 +299,7 @@ struct ResetWhileClosedTests {
         fixture.recorder.updateConsent(.granted)
 
         #expect(throws: RotationFailed.self) {
-            try fixture.recorder.resetClosingCollection { () throws(RotationFailed) in
+            try fixture.recorder.resetClosingCollection {
                 Self.onAnotherThread { fixture.recorder.record("during") }
                 throw RotationFailed()
             }
