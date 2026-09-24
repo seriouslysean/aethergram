@@ -28,8 +28,7 @@ public protocol SignalQueueStorage: Sendable {
     func load() -> [Signal]
 
     /// Replaces the persisted queue wholesale. Callers pass the full pending
-    /// set rather than a change to it, so the newest call is the whole queue
-    /// and a store that loses one write is put right by the next.
+    /// set, so a partial write can never leave the queue half-updated.
     func persist(_ signals: [Signal])
 
     /// Deletes the persisted queue. Called on every non-granted
@@ -38,29 +37,15 @@ public protocol SignalQueueStorage: Sendable {
     func purge()
 }
 
-/// File queue storage, one encoded signal per line.
+/// Atomic-file queue storage.
 ///
-/// A write that only adds signals after what the file holds appends their
-/// lines; every other write — a delivery taking signals off the front, an
-/// eviction, a late read carried ahead — replaces the file through
-/// `Data.write(to:options:[.atomic])`, which writes an auxiliary file and
-/// renames it over the queue, so a reader finds the old queue or the new one.
-/// Appending is what keeps filling the queue linear: a rewrite per record
-/// costs the square of the queue in bytes written, worst exactly when the
-/// device is offline and the queue is longest.
-///
-/// An append a kill interrupts leaves every line before it whole and at most
-/// one line cut off at the end, which a load drops, and the next write
-/// replaces the file rather than continuing after the fragment. A line that
-/// fails to decode anywhere else is a corrupt file, and is purged. A file an
-/// earlier release wrote as one JSON array still loads, and the next write
-/// replaces it with lines.
-///
-/// Once a write returns the bytes are the kernel's, not the process's, which
-/// is what survives the SIGKILL the OS hands a suspended extension without
-/// warning; a write still buffered in the process would lose the queue at
-/// exactly the moment the queue exists to survive. That is the whole claim:
-/// it is not a promise the bytes reached the storage device.
+/// `Data.write(to:options:[.atomic])` writes an auxiliary file and then
+/// replaces the queue file with it, so a reader finds the old queue or the new
+/// one, never part of either. Once it returns the bytes are the kernel's, not
+/// the process's, which is what survives the SIGKILL the OS hands a suspended
+/// extension without warning; a write still buffered in the process would lose
+/// the queue at exactly the moment the queue exists to survive. That is the
+/// whole claim: it is not a promise the bytes reached the storage device.
 ///
 /// It owns its file, in the sense the protocol describes. Three things it can
 /// be carrying are the instance's own — a queue it could not read, what a
@@ -189,7 +174,6 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // hands them back, erases them, or cannot read them — and then a late
         // read takes them from the file again.
         file.carried = []
-        file.onDisk = nil
         // An erase that never landed outranks whatever the file holds: those
         // signals were collected under an answer that has since been
         // withdrawn, and restoring them is the one thing this store must never
@@ -225,9 +209,8 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             logger.error("queue decode fail \(error.localizedDescription, privacy: .public)")
             purgeLocked(&file)
             return []
-        case let .signals(signals, appendable):
+        case let .signals(signals):
             file.isUnread = false
-            file.onDisk = appendable ? signals : nil
             return signals
         }
     }
@@ -246,55 +229,10 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             return .unreadable(error)
         }
         do {
-            return try Self.decodeQueue(data)
+            return try .signals(JSONDecoder().decode([Signal].self, from: data))
         } catch {
             return .undecodable(error)
         }
-    }
-
-    /// Lines, or the one array a file from before 0.4.0 holds. Told apart by
-    /// the first byte, because a line is an object and an array is not.
-    ///
-    /// A last line that does not decode and has no newline after it is an
-    /// append a kill cut off, and dropping it keeps every signal before it.
-    /// Not when it is the only line: every file this store starts is a
-    /// replacement written whole, so a first line cut off is not a kill's
-    /// signature, and the file is as corrupt as one that fails anywhere else.
-    private static func decodeQueue(_ data: Data) throws -> QueueRead {
-        let decoder = JSONDecoder()
-        if data.first(where: { !isWhitespace($0) }) == UInt8(ascii: "[") {
-            return try .signals(decoder.decode([Signal].self, from: data), appendable: false)
-        }
-        let lines = data.split(separator: newline)
-        let endsWhole = data.last == newline
-        var signals: [Signal] = []
-        signals.reserveCapacity(lines.count)
-        for (index, line) in lines.enumerated() {
-            do {
-                try signals.append(decoder.decode(Signal.self, from: Data(line)))
-            } catch where index == lines.count - 1 && index > 0 && !endsWhole {
-                return .signals(signals, appendable: false)
-            }
-        }
-        // A last line that decodes without its newline is whole, but an
-        // append after it would run into it.
-        return .signals(signals, appendable: endsWhole)
-    }
-
-    private static let newline = UInt8(ascii: "\n")
-
-    private static func isWhitespace(_ byte: UInt8) -> Bool {
-        byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t") || byte == UInt8(ascii: "\r") || byte == newline
-    }
-
-    private static func encodeLines(_ signals: some Sequence<Signal>) throws -> Data {
-        let encoder = JSONEncoder()
-        var data = Data()
-        for signal in signals {
-            try data.append(encoder.encode(signal))
-            data.append(newline)
-        }
-        return data
     }
 
     /// Whether the writes may go over the queue file, retrying the read a
@@ -324,9 +262,8 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             // A corrupt file the purge could not reach is under a mark now,
             // and a write under a mark is one the next load erases.
             return !file.erasureOutstanding
-        case let .signals(signals, appendable):
+        case let .signals(signals):
             file.isUnread = false
-            file.onDisk = appendable ? signals : nil
             // Newest kept, matching the recorder's own eviction: these are
             // the oldest signals the file holds, and a run of processes that
             // each carry everything before them would otherwise grow the file
@@ -385,40 +322,13 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
             purgeLocked(&file)
             return
         }
-        if let onDisk = file.onDisk, queue.count >= onDisk.count, queue.starts(with: onDisk) {
-            guard queue.count > onDisk.count else { return }
-            if append(queue[onDisk.count...]) {
-                file.onDisk = queue
-                return
-            }
-        }
-        // Cleared before the replacement rather than after it fails: a write
-        // that fails partway leaves a file this store no longer knows.
-        file.onDisk = nil
         do {
             try operations.createDirectory(fileURL.deletingLastPathComponent())
-            let data = try Self.encodeLines(queue)
+            let data = try JSONEncoder().encode(queue)
             try operations.replaceAtomically(data, at: fileURL)
-            file.onDisk = queue
             logger.debug("queue persist ok count=\(queue.count)")
         } catch {
             logger.error("queue persist fail \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    /// Whether `signals` now follow what the file held. Opened without
-    /// creating, because a file that has gone is not one this store knows the
-    /// contents of, and a failure here falls back to the replacement, which
-    /// also covers lines an append wrote before it failed.
-    private func append(_ signals: ArraySlice<Signal>) -> Bool {
-        do {
-            let lines = try Self.encodeLines(signals)
-            try operations.append(lines, to: fileURL)
-            logger.debug("queue append ok count=\(signals.count)")
-            return true
-        } catch {
-            logger.error("queue append fail \(error.localizedDescription, privacy: .public)")
-            return false
         }
     }
 
@@ -446,7 +356,6 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
         // it, having been collected under the same answer.
         file.isUnread = false
         file.carried = []
-        file.onDisk = nil
         guard emptyTheQueueFile() else {
             // A file is there, or cannot be ruled out, and nothing this store
             // can do reaches its bytes. What it can do is
@@ -525,16 +434,13 @@ public struct FileSignalQueueStorage: SignalQueueStorage {
 }
 
 /// Every file operation the file store performs, so a test can fail one
-/// partway and watch what the store recovers and what it writes.
+/// and watch what the store recovers and what it writes.
 ///
 /// A conformance performs and rethrows; it never classifies. What a failure
 /// means — nothing there, out of reach, erased — is the store's to decide,
 /// because that decision is what a scripted fault exists to exercise.
 protocol QueueFileOperations: Sendable {
     func read(_ url: URL) throws -> Data
-    /// Adds `data` after what the file holds. Must not create the file: one
-    /// that has gone is not one whose contents the store knows.
-    func append(_ data: Data, to url: URL) throws
     /// Leaves the old contents or the new, never a mixture.
     func replaceAtomically(_ data: Data, at url: URL) throws
     func remove(_ url: URL) throws
@@ -554,13 +460,6 @@ protocol QueueFileOperations: Sendable {
 struct FoundationQueueFileOperations: QueueFileOperations {
     func read(_ url: URL) throws -> Data {
         try Data(contentsOf: url)
-    }
-
-    func append(_ data: Data, to url: URL) throws {
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
     }
 
     func replaceAtomically(_ data: Data, at url: URL) throws {
@@ -604,9 +503,7 @@ private enum QueueRead {
     case absent
     case unreadable(Error)
     case undecodable(Error)
-    /// `appendable` when the file is lines ending on a whole one, which is
-    /// what a write needs to add after them.
-    case signals([Signal], appendable: Bool)
+    case signals([Signal])
 }
 
 /// Why a write did not reach the file.
@@ -674,9 +571,4 @@ private struct FileState {
     /// the mark is failing.
     var persistSkip: PersistSkip?
     var markLookFailing = false
-    /// What the file holds, when this store knows it exactly and the file
-    /// ends on a whole line: set by a read or a write, cleared by anything
-    /// that leaves the file's contents in doubt. A write that only adds
-    /// signals after these appends them; any other replaces the file.
-    var onDisk: [Signal]?
 }

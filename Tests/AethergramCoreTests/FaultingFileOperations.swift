@@ -6,14 +6,12 @@ import Foundation
 /// it.
 ///
 /// Every call a fault does not stop goes to the production conformance, so a
-/// partial append lands through the same handle a device uses and a guard
-/// broken in production code fails the test that relies on it.
+/// guard broken in production code fails the test that relies on it.
 final class FaultingFileOperations: QueueFileOperations, @unchecked Sendable {
     // MARK: Internal
 
     enum Operation: Equatable {
         case read
-        case append
         case replace
         case remove
         case overwrite
@@ -34,9 +32,6 @@ final class FaultingFileOperations: QueueFileOperations, @unchecked Sendable {
     enum Fault {
         /// Throws before touching the file.
         case refuse(Error)
-        /// Writes the first `bytes` of what it was given for real, then
-        /// throws: the shape a kill or a full disk leaves.
-        case partial(bytes: Int, then: Error)
     }
 
     /// Every call that can change the disk, in order, since the last `clear`.
@@ -54,47 +49,42 @@ final class FaultingFileOperations: QueueFileOperations, @unchecked Sendable {
     }
 
     func read(_ url: URL) throws -> Data {
-        try enter(.read) { _ in }
+        try enter(.read)
         return try real.read(url)
     }
 
-    func append(_ data: Data, to url: URL) throws {
-        try enter(.append) { try real.append(data.prefix($0), to: url) }
-        try real.append(data, to: url)
-    }
-
     func replaceAtomically(_ data: Data, at url: URL) throws {
-        try enter(.replace) { _ in }
+        try enter(.replace)
         try real.replaceAtomically(data, at: url)
     }
 
     func remove(_ url: URL) throws {
-        try enter(.remove) { _ in }
+        try enter(.remove)
         try real.remove(url)
     }
 
     func overwriteInPlace(_ data: Data, at url: URL) throws {
-        try enter(.overwrite) { try real.overwriteInPlace(data.prefix($0), at: url) }
+        try enter(.overwrite)
         try real.overwriteInPlace(data, at: url)
     }
 
     func markerReachable(_ url: URL) throws -> Bool {
-        try enter(.markerReachable) { _ in }
+        try enter(.markerReachable)
         return try real.markerReachable(url)
     }
 
     func writeMarker(_ url: URL) throws {
-        try enter(.writeMarker) { _ in }
+        try enter(.writeMarker)
         try real.writeMarker(url)
     }
 
     func removeMarker(_ url: URL) throws {
-        try enter(.removeMarker) { _ in }
+        try enter(.removeMarker)
         try real.removeMarker(url)
     }
 
     func createDirectory(_ url: URL) throws {
-        try enter(.createDirectory) { _ in }
+        try enter(.createDirectory)
         try real.createDirectory(url)
     }
 
@@ -105,9 +95,8 @@ final class FaultingFileOperations: QueueFileOperations, @unchecked Sendable {
     private var log: [Operation] = []
     private var faults: [Operation: [Fault]] = [:]
 
-    /// Logs the call and applies its next scripted fault, if any. `partial`
-    /// writes the prefix it is handed the byte count for.
-    private func enter(_ operation: Operation, partial: (Int) throws -> Void) throws {
+    /// Logs the call and applies its next scripted fault, if any.
+    private func enter(_ operation: Operation) throws {
         let fault: Fault? = lock.withLock {
             log.append(operation)
             guard var queued = faults[operation], !queued.isEmpty else { return nil }
@@ -115,14 +104,6 @@ final class FaultingFileOperations: QueueFileOperations, @unchecked Sendable {
             faults[operation] = queued
             return next
         }
-        switch fault {
-        case nil:
-            return
-        case let .refuse(error):
-            throw error
-        case let .partial(bytes, error):
-            try partial(bytes)
-            throw error
-        }
+        if case let .refuse(error) = fault { throw error }
     }
 }
