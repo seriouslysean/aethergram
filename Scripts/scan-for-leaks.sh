@@ -52,49 +52,11 @@ MESSAGE_RE="/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.
 # the history tier adds.
 MERGE_SUBJECT_SED='s/^\([0-9a-f]\{40,64\} \)Merge pull request #[0-9][0-9]* \(from seriouslysean\/[^ ][^ ]*\)$/\1Merge pull request \2/'
 
-# The runner's fixtures and this file's own entries below carry the shapes on purpose. Each is
-# allowed as its exact `path:line`, not by file, so any other line staged into either is still
-# refused. A fixture that changes has to change here too.
-fixture_lines() {
-    cat <<'EOF'
-Scripts/run-checks.sh:    && printf 'see /Users/example\n' > leak.txt \
-Scripts/run-checks.sh:    printf '# see /Users/somebody\n' >> "$RUNNER/Scripts/run-checks.sh"
-Scripts/run-checks.sh:    elif ! printf '%s\n' "$OUT" | grep -q 'Scripts/run-checks.sh:.*/Users/somebody'; then
-Scripts/run-checks.sh:printf 'fix: a thing\n\nSee github.com/foo/bar/issues/42\n' > "$TMP/issueurl"
-Scripts/run-checks.sh:printf 'fix: a thing\n\n# see github.com/foo/bar/issues/42\n' > "$TMP/hashline"
-Scripts/run-checks.sh:printf 'Merge pull request #4812 from seriouslysean/x\n' > "$TMP/mergesubject"
-Scripts/run-checks.sh:printf 'fix: crash when the widget reloads (#4812)\n' > "$TMP/squashsubject"
-Scripts/run-checks.sh:printf 'fix: a thing\n\nSee #100 for why.\n' > "$TMP/bodynumber"
-Scripts/run-checks.sh:    && fixture_git merge -q --no-ff -m 'Merge pull request #101 from seriouslysean/101-a-branch' side
-Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'fix: crash when the widget reloads (#4812)'
-Scripts/run-checks.sh:elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
-Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'Merge pull request #4812 from seriouslysean/x'
-Scripts/run-checks.sh:    && fixture_git commit -q --allow-empty -m 'fix: a thing' -m 'Merge pull request #102 from seriouslysean/102-a-branch'
-Scripts/run-checks.sh:elif ! printf '%s\n' "$OUT" | grep -q '#102'; then
-Scripts/run-checks.sh:printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #404\n' > "$TMP/verbose"
-EOF
-}
-
-# Drops `path:n:line` hits whose `path:line` is a fixture line, and this file's lines that are
-# themselves entries. A path holding a colon never matches, so it fails closed.
-drop_fixture_lines() {
-    FIXTURE_LINES="$(fixture_lines)" awk '
-        BEGIN { n = split(ENVIRON["FIXTURE_LINES"], a, "\n"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
-        {
-            p = index($0, ":"); path = substr($0, 1, p - 1); rest = substr($0, p + 1)
-            q = index(rest, ":"); line = substr(rest, q + 1)
-            if ((path ":" line) in ok) next
-            if (path == "Scripts/scan-for-leaks.sh" && (line in ok)) next
-            print
-        }'
-}
-
 scan() {
     _what="$1"; _re="$2"
     # git grep exits 1 for no match; anything past that is git failing, which is not a clean tree.
     _hits="$(git grep --cached -nE "$_re" -- .)"
     [ $? -le 1 ] || die "git grep failed"
-    _hits="$(printf '%s\n' "$_hits" | drop_fixture_lines)" || die "could not apply the fixture lines"
     [ -n "$_hits" ] && printf '%s\n' "$_hits" | while IFS= read -r _l; do printf '  %s: %s\n' "$_what" "$_l"; done
     # A leak can live entirely in a tracked filename with clean content, invisible to git grep above.
     _files="$(git ls-files -- .)" || die "git ls-files failed"
