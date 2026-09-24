@@ -785,3 +785,16 @@ final class HeldClientUser: @unchecked Sendable {
     private let semaphore = DispatchSemaphore(value: 0)
     private var held = false
 }
+
+/// Holds every send until its task is cancelled, as `URLSession` ends a
+/// request whose task is, and answers it retryable.
+final class HeldUntilCancelledTransport: SignalTransport, @unchecked Sendable {
+    /// Opened once a send is holding.
+    let entered = Gate()
+
+    func send(_: SignalBatch) async -> TransportOutcome {
+        entered.open()
+        try? await Task.sleep(for: .seconds(3600))
+        return .retryable(reason: "cancelled")
+    }
+}
