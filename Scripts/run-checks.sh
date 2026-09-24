@@ -299,9 +299,67 @@ else
     fail "the package did not build for iOS release with -application-extension"
 fi
 
-# Apple reads the manifest out of the SDK's bundle, so it is checked where the build put it rather
-# than only where it is committed. `plutil -lint` is first watched refusing a malformed one.
-MANIFEST="Sources/AethergramCore/PrivacyInfo.xcprivacy"
+# Apple reads an SDK's manifest out of the bundle it ships in, so it is checked where the build put
+# it rather than only where it is committed. Apple's "collect" is transmitting off the device: the
+# adapter transmits and the core never does, so the declaration ships in the adapter's bundle alone.
+MANIFEST="Sources/AethergramTelemetryDeck/PrivacyInfo.xcprivacy"
+ADAPTER_BUNDLE="Aethergram_AethergramTelemetryDeck.bundle"
+
+# `raw` prints a bool as true or false, an array as its count, and a dictionary as its keys sorted,
+# one a line; `-expect` refuses a value of another type, so a string "false" is not a bool.
+plist_raw() { plutil -extract "$2" raw -expect "$3" -o - "$1" 2>/dev/null; }
+
+# Every reason a manifest is not the adapter's declaration, one a line; nothing when it is. The
+# declaration is TelemetryDeck's SDK's at 2.14.1, which sends the same hashed identifier. That SDK's
+# UserDefaults reason covers its own reads; this package calls no required-reason API.
+manifest_refusals() {
+    _m="$1"
+    [ -f "$_m" ] || { printf 'no file\n'; return; }
+    plutil -lint "$_m" >/dev/null 2>&1 || { printf 'not a valid property list\n'; return; }
+    # A key path cannot name the root, so its keys are read from a copy nested one level down.
+    _root="$TMP/manifest-root.plist"
+    rm -f "$_root"
+    _keys="$(plutil -create xml1 "$_root" \
+        && plutil -insert m -json "$(plutil -convert json -o - "$_m")" "$_root" \
+        && plist_raw "$_root" m dictionary)"
+    [ "$_keys" = "$(printf '%s\n' NSPrivacyAccessedAPITypes NSPrivacyCollectedDataTypes \
+        NSPrivacyTracking NSPrivacyTrackingDomains)" ] \
+        || printf 'the top-level keys are [%s]\n' "$(printf '%s' "$_keys" | tr '\n' ' ')"
+    [ "$(plist_raw "$_m" NSPrivacyTracking bool)" = false ] || printf 'NSPrivacyTracking is not false\n'
+    [ "$(plist_raw "$_m" NSPrivacyTrackingDomains array)" = 0 ] \
+        || printf 'NSPrivacyTrackingDomains is not an empty array\n'
+    [ "$(plist_raw "$_m" NSPrivacyAccessedAPITypes array)" = 0 ] \
+        || printf 'NSPrivacyAccessedAPITypes is not an empty array\n'
+    _count="$(plist_raw "$_m" NSPrivacyCollectedDataTypes array)"
+    [ "$_count" = 2 ] \
+        || printf 'NSPrivacyCollectedDataTypes holds %s types rather than 2\n' "${_count:-no array of}"
+    _i=0
+    _types=""
+    while [ "$_i" -lt "${_count:-0}" ]; do
+        _e="NSPrivacyCollectedDataTypes.$_i"
+        _t="$(plist_raw "$_m" "$_e.NSPrivacyCollectedDataType" string)"
+        [ -n "$_t" ] || _t="entry $_i"
+        [ "$(plist_raw "$_m" "$_e" dictionary)" = "$(printf '%s\n' NSPrivacyCollectedDataType \
+            NSPrivacyCollectedDataTypeLinked NSPrivacyCollectedDataTypePurposes \
+            NSPrivacyCollectedDataTypeTracking)" ] \
+            || printf '%s: the keys are not exactly the four a collected type declares\n' "$_t"
+        [ "$(plist_raw "$_m" "$_e.NSPrivacyCollectedDataTypeLinked" bool)" = false ] \
+            || printf '%s: NSPrivacyCollectedDataTypeLinked is not false\n' "$_t"
+        [ "$(plist_raw "$_m" "$_e.NSPrivacyCollectedDataTypeTracking" bool)" = false ] \
+            || printf '%s: NSPrivacyCollectedDataTypeTracking is not false\n' "$_t"
+        { [ "$(plist_raw "$_m" "$_e.NSPrivacyCollectedDataTypePurposes" array)" = 1 ] \
+            && [ "$(plist_raw "$_m" "$_e.NSPrivacyCollectedDataTypePurposes.0" string)" \
+                = NSPrivacyCollectedDataTypePurposeAnalytics ]; } \
+            || printf '%s: NSPrivacyCollectedDataTypePurposes is not analytics alone\n' "$_t"
+        _types="$_types$_t
+"
+        _i=$((_i + 1))
+    done
+    [ "$(printf '%s' "$_types" | LC_ALL=C sort)" = "$(printf '%s\n' NSPrivacyCollectedDataTypeDeviceID \
+        NSPrivacyCollectedDataTypeProductInteraction)" ] \
+        || printf 'the types are [%s] rather than Device ID and Product Interaction once each\n' \
+            "$(printf '%s' "$_types" | paste -s -d ' ' -)"
+}
 
 it "a malformed privacy manifest is refused"
 printf '<?xml version="1.0"?>\n<plist version="1.0"><dict><key>NSPrivacyTracking</key></dict>\n' > "$TMP/bad.xcprivacy"
@@ -311,15 +369,51 @@ else
     pass
 fi
 
-it "the privacy manifest is a valid property list and ships in the core's iOS bundle"
-BUNDLED="$(find "$TMP/ios" -path '*AethergramCore.bundle/PrivacyInfo.xcprivacy' 2>/dev/null | head -n 1)"
-if ! OUT="$(plutil -lint "$ROOT/$MANIFEST" 2>&1)"; then
-    printf '%s\n' "$OUT"
-    fail "$MANIFEST is not a valid property list"
+it "a manifest declaring a linked type, or a type beyond the two, is refused"
+# Copies of the committed manifest, each broken one way, so each refusal is read for its own reason.
+if [ -n "$(manifest_refusals "$ROOT/$MANIFEST")" ]; then
+    fail "$MANIFEST is itself refused, so refusing a copy of it proves nothing"
+else
+    cp "$ROOT/$MANIFEST" "$TMP/linked.xcprivacy"
+    plutil -replace NSPrivacyCollectedDataTypes.0.NSPrivacyCollectedDataTypeLinked -bool YES "$TMP/linked.xcprivacy"
+    cp "$ROOT/$MANIFEST" "$TMP/extra.xcprivacy"
+    plutil -insert NSPrivacyCollectedDataTypes -json '{"NSPrivacyCollectedDataType":
+        "NSPrivacyCollectedDataTypePurchaseHistory", "NSPrivacyCollectedDataTypeLinked": false,
+        "NSPrivacyCollectedDataTypeTracking": false,
+        "NSPrivacyCollectedDataTypePurposes": ["NSPrivacyCollectedDataTypePurposeAnalytics"]}' \
+        -append "$TMP/extra.xcprivacy"
+    LINKED="$(manifest_refusals "$TMP/linked.xcprivacy")"
+    EXTRA="$(manifest_refusals "$TMP/extra.xcprivacy")"
+    if ! printf '%s\n' "$LINKED" | grep -q 'NSPrivacyCollectedDataTypeLinked is not false'; then
+        fail "a type marked linked was not refused as linked: [${LINKED:-accepted}]"
+    elif ! printf '%s\n' "$EXTRA" | grep -q 'holds 3 types rather than 2'; then
+        fail "a third type was not refused as one beyond the two: [${EXTRA:-accepted}]"
+    else
+        pass
+    fi
+fi
+
+it "the privacy manifest declares no linked, tracking, or extra type, and no tracking or required-reason API"
+REFUSALS="$(manifest_refusals "$ROOT/$MANIFEST")"
+if [ -n "$REFUSALS" ]; then
+    fail "$MANIFEST is not the declaration the adapter makes:
+$(printf '%s\n' "$REFUSALS" | sed 's/^/           /')"
+else
+    pass
+fi
+
+it "the privacy manifest ships in the adapter's iOS bundle, and no other bundle carries one"
+SOURCED="$(cd "$ROOT" && find Sources -name '*.xcprivacy')"
+BUNDLED="$(find "$TMP/ios" -path "*/$ADAPTER_BUNDLE/PrivacyInfo.xcprivacy" 2>/dev/null | head -n 1)"
+ELSEWHERE="$(find "$TMP/ios" -name '*.xcprivacy' ! -path "*/$ADAPTER_BUNDLE/*" 2>/dev/null)"
+if [ "$SOURCED" != "$MANIFEST" ]; then
+    fail "Sources holds [$(printf '%s' "$SOURCED" | tr '\n' ' ')] rather than $MANIFEST alone"
 elif [ -z "$BUNDLED" ]; then
-    fail "the iOS build produced no AethergramCore bundle carrying PrivacyInfo.xcprivacy"
+    fail "the iOS build produced no $ADAPTER_BUNDLE carrying PrivacyInfo.xcprivacy"
 elif ! cmp -s "$ROOT/$MANIFEST" "$BUNDLED"; then
     fail "the bundled manifest differs from $MANIFEST"
+elif [ -n "$ELSEWHERE" ]; then
+    fail "the iOS build carries a manifest outside $ADAPTER_BUNDLE: [$(printf '%s' "$ELSEWHERE" | tr '\n' ' ')]"
 else
     pass
 fi

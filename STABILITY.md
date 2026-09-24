@@ -142,12 +142,12 @@ and a macOS host that ships must supply `isTestMode` itself.
 
 ## Privacy manifest
 
-The core's resource bundle, `Aethergram_AethergramCore.bundle`, carries a `PrivacyInfo.xcprivacy`.
-It declares no tracking, no tracking domains, and no required-reason APIs, and four collected data
-types, Product Interaction, Device ID, Purchase History, and Other Diagnostic Data, each linked to
-the user, not used for tracking, and collected for analytics. It describes the package's payload,
-not what a host puts in it: the host's own manifest and App Store answers must still reflect what
-the host sends.
+The TelemetryDeck adapter's resource bundle, `Aethergram_AethergramTelemetryDeck.bundle`, carries a
+`PrivacyInfo.xcprivacy` declaring the data types TelemetryDeck's SDK declares at 2.14.1, Product
+Interaction and Device ID, not linked to the user, not used for tracking, and collected for
+analytics, with no tracking, no tracking domains, and no required-reason APIs. The core ships no
+manifest, because it never transmits. A host that records purchases or errors declares those types
+in its own manifest, and its App Store answers cover everything the app sends.
 
 ## Dependencies
 

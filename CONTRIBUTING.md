@@ -50,7 +50,7 @@ message in history and the api-break gate builds the tags. Deepen a shallow clon
 |---|---|
 | Leak scan | No tracked file's name or staged content, and no commit message in history, identifies a consumer, a person, or a machine. File contents in earlier commits are not scanned |
 | iOS builds | The package for iOS in release as extension-safe (`-application-extension`), and the core alone with no adapter in reach |
-| Privacy manifest | `PrivacyInfo.xcprivacy` is a valid property list, and the iOS build ships it unchanged in the core's bundle |
+| Privacy manifest | `PrivacyInfo.xcprivacy` declares Product Interaction and Device ID, neither linked nor used for tracking, for analytics alone, and no tracking, tracking domain, or required-reason API. The iOS build ships it unchanged in the adapter's bundle, and no other bundle carries one |
 | watchOS build | The package builds for watchOS in release at its declared floor, watchOS 11 |
 | Consumer fixture | `Tests/Fixtures/ConsumerHost`, a package that imports the umbrella alone with no upcoming-feature flag, builds for iOS as extension-safe, and the root package takes nothing from it |
 | API break | The working tree's public API, diffed against the last release tag, breaks nothing the release in `CHANGELOG.md`'s top heading may break: nothing in a patch, anything in a 0.x minor |
@@ -58,9 +58,10 @@ message in history and the api-break gate builds the tags. Deepen a shallow clon
 | Suite | `swift test` passes and runs at least `ROOT_TESTS_FLOOR` tests |
 
 Each gate is first watched refusing known-bad input — a copy of the package broken on purpose, a
-malformed manifest, a break from the package's own history — so a gate that never fires cannot
-pass as one that passes. `ROOT_TESTS_FLOOR` in `run-checks.sh` catches tests that go missing; raise
-it in the change that adds tests, and lower it only with the tests it lost named.
+malformed manifest, a manifest declaring a linked or an extra type, a break from the package's own
+history — so a gate that never fires cannot pass as one that passes. `ROOT_TESTS_FLOOR` in
+`run-checks.sh` catches tests that go missing; raise it in the change that adds tests, and lower it
+only with the tests it lost named.
 
 ## Every change starts as an issue
 
