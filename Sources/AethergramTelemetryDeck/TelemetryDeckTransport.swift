@@ -43,7 +43,6 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// |---|---|
     /// | 2xx | `delivered` |
     /// | 400, 401, 403, 404, 413, 422, 501, 505 | `permanent` |
-    /// | 429 or 503 with a Retry-After that parses | `retryableAfter` |
     /// | Any other status, including 429 and other 5xx | `retryable` |
     /// | A response that is not HTTP | `retryable` |
     /// | A thrown error, cancellation included | `retryable` |
@@ -77,7 +76,7 @@ public struct TelemetryDeckTransport: SignalTransport {
         )
         do {
             let (_, response) = try await session.data(for: request)
-            return Self.outcome(for: response, now: .now)
+            return Self.outcome(for: response)
         } catch let error as URLError {
             return .retryable(reason: "urlerror-\(error.code.rawValue)")
         } catch {
@@ -111,48 +110,15 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// because the SDK's own `disposition()` treats them as permanent —
     /// everything else, including 429, other 5xx, and no response, stays
     /// queued for the core's backoff.
-    ///
-    /// A 429 or 503 with a Retry-After that parses says when instead: those
-    /// are the two throttles the header is defined on (RFC 6585 §4, RFC 9110
-    /// §10.2.3), and any other status carrying it keeps its own outcome. A
-    /// 3xx's Retry-After governs the redirected request, which `URLSession`
-    /// issues itself.
-    static func outcome(for response: URLResponse, now: Date = .now) -> TransportOutcome {
+    static func outcome(for response: URLResponse) -> TransportOutcome {
         guard let http = response as? HTTPURLResponse else { return .retryable(reason: "non-http-response") }
         if (200 ... 299).contains(http.statusCode) { return .delivered }
-        let reason = "http-\(http.statusCode)"
         switch http.statusCode {
         case 400, 401, 403, 404, 413, 422, 501, 505:
-            return .permanent(reason: reason)
-        case 429, 503:
-            guard
-                let header = http.value(forHTTPHeaderField: "Retry-After"),
-                let delay = retryAfter(header, now: now)
-            else { return .retryable(reason: reason) }
-            return .retryableAfter(reason: reason, delay: delay)
+            return .permanent(reason: "http-\(http.statusCode)")
         default:
-            return .retryable(reason: reason)
+            return .retryable(reason: "http-\(http.statusCode)")
         }
-    }
-
-    /// Seconds a Retry-After value asks for, or nil for one outside RFC 9110's
-    /// grammar: `delay-seconds` (`1*DIGIT`) or an `HTTP-date` in any of the
-    /// three forms §5.6.7 obliges a recipient to accept. A date already past
-    /// is zero. A count too large for a finite `Double` saturates to the
-    /// largest finite one, never infinity; any finite size is the core's to
-    /// bound at its interval ceiling.
-    static func retryAfter(_ value: String, now: Date) -> TimeInterval? {
-        // OWS around a field value is not part of it (RFC 9110 §5.5).
-        let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.utf8.allSatisfy({ (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains($0) }) {
-            // Refusing an overflowing count would retry on the core's schedule,
-            // sooner than asked. RFC 9111 §1.2.2 saturates a cache's
-            // delta-seconds likewise; it is an analogy, not Retry-After's rule.
-            return min(Double(trimmed) ?? .infinity, .greatestFiniteMagnitude)
-        }
-        guard let date = httpDate(trimmed, now: now) else { return nil }
-        return max(0, date.timeIntervalSince(now))
     }
 
     func makeRequest(for batch: SignalBatch) throws -> URLRequest {
@@ -200,14 +166,6 @@ public struct TelemetryDeckTransport: SignalTransport {
     /// Internal rather than private so a test can see which one the default is.
     let session: URLSession
     private let logger: Logger
-
-    /// An `HTTP-date` in IMF-fixdate, rfc850-date, or asctime-date form, or
-    /// nil for anything else. See `HTTPDate` for what each form admits.
-    /// Internal so a test can assert the century a two-digit year lands in,
-    /// which a past date's zero delay hides.
-    static func httpDate(_ value: String, now: Date) -> Date? {
-        HTTPDate.parse(value, now: now)
-    }
 
     private static func sha256(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))

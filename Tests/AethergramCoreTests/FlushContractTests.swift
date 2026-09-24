@@ -18,7 +18,6 @@ struct FlushContractTests {
         case delivered
         case permanent
         case retryable
-        case retryableAfter
         case noIdentity
 
         var testDescription: String {
@@ -26,7 +25,6 @@ struct FlushContractTests {
             case .delivered: "delivered"
             case .permanent: "permanently rejected"
             case .retryable: "retryable"
-            case .retryableAfter: "retryable after a delay"
             case .noIdentity: "no identity resolves"
             }
         }
@@ -36,7 +34,6 @@ struct FlushContractTests {
             case .delivered, .noIdentity: .delivered
             case .permanent: .permanent(reason: "rejected")
             case .retryable: .retryable(reason: "offline")
-            case .retryableAfter: .retryableAfter(reason: "throttled", delay: 60)
             }
         }
 

@@ -100,13 +100,15 @@ public struct AethergramConfiguration: Sendable {
     }
 
     /// `transmitInterval * 2^failures`, capped. Pure so the schedule is
-    /// testable without waiting for it, and deterministic: it is the ceiling
-    /// `backoffInterval(consecutiveFailures:using:)` draws a retry under.
+    /// testable without waiting for it. The recorder owes a retry at a draw
+    /// under this ceiling rather than at it.
     public func backoffInterval(consecutiveFailures: Int) -> TimeInterval {
         guard consecutiveFailures > 0 else { return transmitInterval }
         let scaled = transmitInterval * pow(2, Double(consecutiveFailures))
         return min(scaled, max(maxBackoffInterval, transmitInterval))
     }
+
+    // MARK: Internal
 
     /// A retry delay drawn uniformly from `[max(transmitInterval, c / 2), c]`,
     /// where `c` is `backoffInterval(consecutiveFailures:)`; with no failure,
@@ -117,7 +119,7 @@ public struct AethergramConfiguration: Sendable {
     /// than zero is the floor because the schedule promises no retry faster
     /// than the steady state, and a draw near zero would be exactly that.
     /// Pure over `generator`, so a seeded one makes the draw assertable.
-    public func backoffInterval(
+    func backoffInterval(
         consecutiveFailures: Int,
         using generator: inout some RandomNumberGenerator
     ) -> TimeInterval {
@@ -126,8 +128,6 @@ public struct AethergramConfiguration: Sendable {
         guard consecutiveFailures > 0, floor < ceiling else { return ceiling }
         return TimeInterval.random(in: floor ... ceiling, using: &generator)
     }
-
-    // MARK: Internal
 
     /// The largest either interval may be: one year of 365 days. A sleep
     /// that runs traps on a duration past `Int64.max` seconds, about 9.2e18,

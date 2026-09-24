@@ -838,15 +838,6 @@ public final class SignalRecorder: Sendable {
                 Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
                 settleWaiters(current, removal: nil)
                 return (false, 0)
-            case let .retryableAfter(_, delay):
-                current.consecutiveFailures += 1
-                current.failedAttempts &+= 1
-                Self.oweRetry(&current, after: max(
-                    retryDelay(current.consecutiveFailures),
-                    Self.servableDelay(delay)
-                ))
-                settleWaiters(current, removal: nil)
-                return (false, 0)
             }
         }
         guard let applied else {
@@ -862,7 +853,7 @@ public final class SignalRecorder: Sendable {
             logger.info("send ok count=\(sent.count)")
         case let .permanent(reason):
             logger.error("send dropped count=\(sent.count) reason=\(reason, privacy: .public)")
-        case let .retryable(reason), let .retryableAfter(reason, _):
+        case let .retryable(reason):
             logger.info("send retry count=\(sent.count) reason=\(reason, privacy: .public)")
         }
         return keepDraining
@@ -1005,15 +996,6 @@ public final class SignalRecorder: Sendable {
         )
     }
 
-    /// A backend's delay as one a sleep can serve. Bounded at the interval
-    /// ceiling, because a sleep traps past about 9.2e18 seconds and one
-    /// header is all it takes; a NaN or a past delay asks for no wait, so it
-    /// owes what the backoff owes.
-    private static func servableDelay(_ delay: TimeInterval) -> TimeInterval {
-        guard delay > 0 else { return 0 }
-        return min(delay, AethergramConfiguration.maximumInterval)
-    }
-
     /// Records what the next attempt owes the endpoint. Call from inside the
     /// lock.
     private static func oweRetry(_ state: inout State, after interval: TimeInterval) {
@@ -1108,9 +1090,8 @@ public final class SignalRecorder: Sendable {
             guard let finishing = current.drain.owned, finishing.id == id else { return }
             current.drain = .idle
             guard current.gateOpen, !current.pending.isEmpty else { return }
-            // The steady interval when nothing failed, and what the failure
-            // owes when something did: the jittered draw, or the backend's
-            // own delay where that is later. Recomputing a backoff here would
+            // The steady interval when nothing failed, and the jittered draw
+            // the failure owes when something did. Recomputing a backoff here would
             // hand every install the same deterministic ceiling again.
             //
             // A registered flush waits on this drain, so it is not held a
