@@ -224,20 +224,12 @@ final class MidSendTransport: SignalTransport, @unchecked Sendable {
 /// called `purge()`; the announcement is a gate, because what acts on it is a
 /// test body the cooperative pool has to be free to resume.
 final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
-    // MARK: Lifecycle
-
-    init(seed: [Signal] = []) {
-        stored = seed
-    }
-
     // MARK: Internal
 
     /// Opened as `purge()` is entered, before it is held or takes effect.
     let purgeEntered = Gate()
     /// Opened as a held `persist` is entered, before it is held.
     let persistEntered = Gate()
-    /// Opened as a held `load()` is entered, before it is held.
-    let loadEntered = Gate()
 
     var isPurged: Bool {
         lock.withLock { purged }
@@ -271,27 +263,8 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
         if wasHeld { persistRelease.signal() }
     }
 
-    /// Makes the next `load()` wait until `releaseLoad()`. The recorder calls
-    /// it under its lock, so a held load is a held recorder.
-    func holdLoad() {
-        lock.withLock { loadHeld = true }
-    }
-
-    /// Idempotent, and safe before the load arrives.
-    func releaseLoad() {
-        let wasHeld: Bool = lock.withLock {
-            defer { loadHeld = false }
-            return loadHeld
-        }
-        if wasHeld { loadRelease.signal() }
-    }
-
     func load() -> [Signal] {
-        if lock.withLock({ loadHeld }) {
-            loadEntered.open()
-            loadRelease.wait()
-        }
-        return lock.withLock { stored }
+        lock.withLock { stored }
     }
 
     func persist(_ signals: [Signal]) {
@@ -317,13 +290,11 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
 
     private let release = DispatchSemaphore(value: 0)
     private let persistRelease = DispatchSemaphore(value: 0)
-    private let loadRelease = DispatchSemaphore(value: 0)
     private let lock = NSLock()
-    private var stored: [Signal]
+    private var stored: [Signal] = []
     private var purged = false
     private var held = false
     private var persistHeld = false
-    private var loadHeld = false
 }
 
 /// A `RetentionStore` that holds every `save` open until the test releases it,
@@ -644,94 +615,6 @@ final class SlowTransport: SignalTransport, @unchecked Sendable {
     private var answered = 0
 }
 
-/// Holds every send that carries one of the named signals until the test
-/// releases that name, deaf to cancellation for the reason
-/// `HeldFirstSendTransport` gives; every other send answers at once. A send
-/// carrying one of the `failing` names is answered retryable.
-final class NamedHoldTransport: SignalTransport, @unchecked Sendable {
-    // MARK: Lifecycle
-
-    init(holding names: Set<String>, failing: Set<String> = [], outcome: TransportOutcome = .delivered) {
-        self.outcome = outcome
-        self.failing = failing
-        for name in names {
-            holds[name] = Hold()
-        }
-    }
-
-    // MARK: Internal
-
-    var sentSignalNames: [String] {
-        lock.withLock { received.flatMap { $0.signals.map(\.name) } }
-    }
-
-    var sendCount: Int {
-        lock.withLock { received.count }
-    }
-
-    var answeredCount: Int {
-        lock.withLock { answered }
-    }
-
-    /// Opened once a send carrying `name` is holding.
-    func held(_ name: String) -> Gate {
-        lock.withLock { holds[name]!.entered }
-    }
-
-    /// Idempotent, and safe before the send arrives.
-    func release(_ name: String) {
-        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
-            holds[name]?.released = true
-            let next = holds[name]?.continuation
-            holds[name]?.continuation = nil
-            return next
-        }
-        waiting?.resume()
-    }
-
-    func releaseAll() {
-        for name in lock.withLock({ Array(holds.keys) }) {
-            release(name)
-        }
-    }
-
-    func send(_ batch: SignalBatch) async -> TransportOutcome {
-        let name: String? = lock.withLock {
-            received.append(batch)
-            return batch.signals.map(\.name).first { holds[$0] != nil }
-        }
-        if let name {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let resumeNow: Bool = lock.withLock {
-                    guard holds[name]?.released != true else { return true }
-                    holds[name]?.continuation = continuation
-                    return false
-                }
-                lock.withLock { holds[name]!.entered }.open()
-                if resumeNow { continuation.resume() }
-            }
-        }
-        lock.withLock { answered += 1 }
-        let fails = batch.signals.contains { failing.contains($0.name) }
-        return fails ? .retryable(reason: "offline") : outcome
-    }
-
-    // MARK: Private
-
-    private struct Hold {
-        let entered = Gate()
-        var released = false
-        var continuation: CheckedContinuation<Void, Never>?
-    }
-
-    private let outcome: TransportOutcome
-    private let failing: Set<String>
-    private let lock = NSLock()
-    private var holds: [String: Hold] = [:]
-    private var received: [SignalBatch] = []
-    private var answered = 0
-}
-
 /// A flag set on one thread and read on another, from a provider closure or
 /// a recording loop.
 final class SharedFlag: @unchecked Sendable {
@@ -749,41 +632,6 @@ final class SharedFlag: @unchecked Sendable {
 
     private let lock = NSLock()
     private var raised = false
-}
-
-/// A `clientUserProvider` that can be held open under the recorder's lock
-/// until the test releases it.
-final class HeldClientUser: @unchecked Sendable {
-    /// Opened as a held call is entered.
-    let entered = Gate()
-
-    var provider: @Sendable () -> String? {
-        { [self] in
-            if lock.withLock({ held }) {
-                entered.open()
-                semaphore.wait()
-                semaphore.signal()
-            }
-            return "client-user"
-        }
-    }
-
-    func hold() {
-        lock.withLock { held = true }
-    }
-
-    /// Idempotent; lets through every call held or still to come.
-    func release() {
-        let wasHeld: Bool = lock.withLock {
-            defer { held = false }
-            return held
-        }
-        if wasHeld { semaphore.signal() }
-    }
-
-    private let lock = NSLock()
-    private let semaphore = DispatchSemaphore(value: 0)
-    private var held = false
 }
 
 /// Holds every send until its task is cancelled, as `URLSession` ends a
