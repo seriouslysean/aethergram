@@ -390,19 +390,21 @@ Then confirm, on a real run:
   so a parameter carrying a user's name publishes a user's name.
 - The consent UI and where the answer is stored. The package reads a verdict; it does not ask.
 - The analytics identifier and its disclosure.
-- The app's own privacy manifest and the App Store privacy answers. The package ships a
-  `PrivacyInfo.xcprivacy` in its core bundle, `Aethergram_AethergramCore.bundle`: no tracking, no
-  tracking domains, no required-reason APIs, and the four data types below, each linked to the user,
-  not used for tracking, and collected for analytics. That declares what the package's payload
-  carries, not what your parameters put in it or what your identifier is, so the app's manifest and
-  answers must still reflect what the app sends. By the data types Apple's App Privacy Details use:
+- The app's own privacy manifest and the App Store privacy answers. The adapter's bundle,
+  `Aethergram_AethergramTelemetryDeck.bundle`, ships a `PrivacyInfo.xcprivacy` declaring the data
+  types TelemetryDeck's SDK declares at 2.14.1, Product Interaction and Device ID, each not linked
+  to the user, not used for tracking, and collected for analytics, with no tracking, no tracking
+  domains, and no required-reason APIs. The core ships no manifest, because it never transmits. By
+  the data types Apple's App Privacy Details use:
 
-  | Data type | What in the payload |
-  |---|---|
-  | Product Interaction | Every signal: its name, parameters, and timestamps |
-  | Device ID | `clientUser`, hashed, as stable as the identifier you return |
-  | Purchase History | `recordPurchaseCompleted`, if you call it |
-  | Other Diagnostic Data | `recordError`, device model, OS version, locale |
+  | Data type | What in the payload | Declared by |
+  |---|---|---|
+  | Product Interaction | Every signal: its name, parameters, and timestamps | The adapter |
+  | Device ID | `clientUser`, hashed as the vendor's SDK hashes it | The adapter |
+  | Purchase History | `recordPurchaseCompleted` | Your app, if you call it |
+  | Other Diagnostic Data | `recordError` | Your app, if you call it |
 
-  If you return a user identifier rather than a device one, or use any of this for tracking, the
-  app's manifest and answers say so; the package's cannot.
+  Every signal also carries the app version, device model, OS version, region, and language, as
+  every signal from the vendor's SDK does, and its manifest declares no further type for them. If
+  you return a user identifier rather than a device one, or use any of this for tracking, the app's
+  manifest and answers say so; the package's cannot.
