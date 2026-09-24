@@ -539,11 +539,34 @@ fi
 
 printf '\nswift test\n'
 
-it "the package suite passes"
-if swift test --package-path "$ROOT"; then
+# Swift Testing's summary line; a run that matched nothing says 0, or prints no line at all.
+tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' | tail -n 1; }
+
+# A floor rather than an exact count: suites grow in parallel lanes, and a floor only fails when
+# tests go missing. Raise it when the suite grows; lower it only with the tests it lost named.
+ROOT_TESTS_FLOOR=211
+root_ran_enough() { [ "$1" -eq 0 ] && [ "$(tests_run "$2")" -ge "$ROOT_TESTS_FLOOR" ] 2>/dev/null; }
+
+it "the package suite passes, running at least $ROOT_TESTS_FLOOR tests"
+swift test --package-path "$ROOT" > "$TMP/root-tests.log" 2>&1; GATE_RC=$?
+cat "$TMP/root-tests.log"
+OUT="$(cat "$TMP/root-tests.log")"
+if root_ran_enough "$GATE_RC" "$OUT"; then
     pass
 else
-    fail "swift test exited non-zero"
+    fail "swift test exited $GATE_RC having run $(tests_run "$OUT") tests; ROOT_TESTS_FLOOR is $ROOT_TESTS_FLOOR"
+fi
+
+# After the full run, so the build is warm. It exits 0 having run nothing.
+it "a package run that executes no test is refused"
+OUT="$(swift test --package-path "$ROOT" --filter NoSuchTestProbe 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || [ "$(tests_run "$OUT")" != 0 ]; then
+    printf '%s\n' "$OUT"
+    fail "the filtered run exited $GATE_RC or did not report 0 tests, so it proves nothing about the floor"
+elif root_ran_enough "$GATE_RC" "$OUT"; then
+    fail "a run of 0 tests passed the package suite's floor"
+else
+    pass
 fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
