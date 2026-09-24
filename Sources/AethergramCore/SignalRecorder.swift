@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Synchronization
 
 /// The package's one entry point: consent gate, durable queue, batching,
 /// backoff, and the retention counters, over a transport it knows nothing
@@ -201,10 +202,50 @@ public final class SignalRecorder: Sendable {
         startDrain(after: 0)
     }
 
-    /// `flush()` for a caller that can wait for the send.
+    /// `flush()` for a caller that can wait for the send: starts one delivery
+    /// pass now and waits for that pass to finish, then for the queue writes
+    /// submitted before it returns to land.
+    ///
+    /// A pass already sending is the one it waits for. It promises that
+    /// pass's completion, not delivery of everything queued: a pass ends
+    /// when the queue empties or a send fails.
+    ///
+    /// It starts no pass, and waits only for the writes, when a retry is
+    /// already owed, which it never hurries, for the reason `flush()` does
+    /// not; when consent is not granted; and while collection is closed for
+    /// `resetClosingCollection(during:)`. An erase while it waits — a
+    /// decline or a reset — cancels the pass, and a transport that honours
+    /// cancellation ends the send, so the wait ends with it.
+    ///
+    /// Cancelling the calling task returns it promptly from either wait, and
+    /// forfeits the promise that the writes have landed. The pass and the
+    /// writes carry on. It still takes the recorder's lock first, so a
+    /// restore or an identifier resolution holding that lock delays even a
+    /// cancelled call.
+    ///
+    /// Named apart from `flush()` because an async overload of one name wins
+    /// in every async context, which would turn each existing unawaited call
+    /// there into a compile error.
     public func flushAndWait() async {
         requireNoReentry()
-        startDrain(after: 0)
+        let (pass, preempted): (Task<Void, Never>?, Task<Void, Never>?) = lock.withLock { current in
+            guard current.gateOpen, Self.secondsOwed(current.retryNotBefore) == 0 else { return (nil, nil) }
+            let preempted = decideDrain(&current, after: 0)
+            return (current.drain.owned?.task, preempted)
+        }
+        preempted?.cancel()
+        let finished = OneShot()
+        // Unstructured, so a cancelled caller need not wait for it to end.
+        Task { [writer] in
+            await pass?.value
+            await writer.awaitPendingWrites()
+            finished.fire()
+        }
+        await withTaskCancellationHandler {
+            await finished.wait()
+        } onCancel: {
+            finished.fire()
+        }
     }
 
     /// Erases everything the package persists. Wire it into the host's
@@ -249,7 +290,7 @@ public final class SignalRecorder: Sendable {
     /// - a decline erases as usual, and stands after the reopen;
     /// - a grant takes effect at the reopen, not before;
     /// - `flush()` still waits for the queue writes and starts no drain;
-    /// - `flushAndWait()` returns at once;
+    /// - `flushAndWait()` starts no pass and waits only for the queue writes;
     /// - `reset()` erases and leaves collection closed.
     ///
     /// - Parameter body: The host's own reset work, typically replacing the
@@ -914,4 +955,40 @@ public final class SignalRecorder: Sendable {
         state.drain = .idle
         return owned?.task
     }
+}
+
+/// A wait that ends once, on the first `fire()`, whether that lands before
+/// the wait begins or after.
+private final class OneShot: Sendable {
+    // MARK: Internal
+
+    func fire() {
+        let waiting: CheckedContinuation<Void, Never>? = state.withLock { state in
+            defer { state = .fired }
+            guard case let .waiting(continuation) = state else { return nil }
+            return continuation
+        }
+        waiting?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let fired: Bool = state.withLock { state in
+                guard case .idle = state else { return true }
+                state = .waiting(continuation)
+                return false
+            }
+            if fired { continuation.resume() }
+        }
+    }
+
+    // MARK: Private
+
+    private enum State {
+        case idle
+        case waiting(CheckedContinuation<Void, Never>)
+        case fired
+    }
+
+    private let state = Mutex(State.idle)
 }
