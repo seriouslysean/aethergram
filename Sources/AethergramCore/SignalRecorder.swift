@@ -931,10 +931,10 @@ public final class SignalRecorder: Sendable {
             guard current.drain.owned?.id == id else { return }
             current.drain = .idle
             guard !current.pending.isEmpty else { return }
-            // The steady interval when nothing failed; after a failure, the
-            // jittered draw it owes, which recomputing a backoff here would
-            // replace with the ceiling every install shares.
-            _ = decideDrain(&current, after: current.consecutiveFailures == 0 ? configuration.transmitInterval : 0)
+            // The steady interval, or the later retry a failure owes: its
+            // jittered draw, which recomputing a backoff here would replace
+            // with the ceiling every install shares.
+            _ = decideDrain(&current, after: configuration.transmitInterval)
         }
     }
 
