@@ -350,7 +350,7 @@ struct SignalPayloadTests {
 
     /// An extension's own bundle holds no receipt, so reading its receipt URL
     /// reports every App Store install of an extension as `dev`, and
-    /// `isTestPartition(for:)` then files those users under test data. The
+    /// `testPartition(for:)` then files those users under test data. The
     /// receipt that answers is the containing app's, two directories up.
     /// ExtensionKit embeds under `Extensions/` rather than `PlugIns/`, so only
     /// the grandparent is checked.

@@ -24,11 +24,6 @@ struct HostTransport: SignalTransport {
     }
 }
 
-/// The 0.3.x name, deprecated in 0.4.0: it must still compile, with a warning.
-func legacyTestPartition(_ snapshot: EnvironmentSnapshot) -> Bool {
-    TelemetryDeckConfiguration.testPartition(for: snapshot)
-}
-
 /// The two calls a host's lifecycle makes: an awaited flush on the way out, and a data reset that
 /// replaces the identifier with collection closed.
 func onResign(_ recorder: SignalRecorder) async {
