@@ -23,6 +23,10 @@ public struct TelemetryDeckConfiguration: Sendable {
     ///     defect this replaced (Release simulator and TestFlight builds posted
     ///     to the live partition); every caller derives this explicitly, from
     ///     `testPartition(for:)`.
+    ///
+    /// - Precondition: `baseURL`'s scheme is `https`, in any case. Anything
+    ///   else traps here, at construction: an `http` base would post every
+    ///   signal, the hashed user included, in cleartext.
     public init(
         appID: String,
         salt: String = "",
@@ -30,6 +34,10 @@ public struct TelemetryDeckConfiguration: Sendable {
         baseURL: URL = TelemetryDeckConfiguration.defaultBaseURL,
         isTestMode: Bool
     ) {
+        precondition(
+            baseURL.scheme?.lowercased() == "https",
+            "TelemetryDeckConfiguration.baseURL must use https"
+        )
         self.appID = appID
         self.salt = salt
         self.namespace = namespace

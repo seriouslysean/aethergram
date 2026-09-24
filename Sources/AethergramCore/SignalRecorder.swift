@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Synchronization
 
 /// The package's one entry point: consent gate, durable queue, batching,
 /// backoff, and the retention counters, over a transport it knows nothing
@@ -85,28 +86,40 @@ public final class SignalRecorder: Sendable {
 
     // MARK: Public
 
-    /// Adopts the consumer's consent answer. Granting only opens the gate;
+    /// Adopts the consumer's consent answer. Granting opens the gate;
     /// anything other than granted closes it *and* erases what was collected
     /// under it — the queue file, the retention counters, and the pending
     /// batch — because a toggle that leaves yesterday's signals on disk to be
     /// sent later is not an off switch.
+    ///
+    /// A grant also restores the queue a killed process left, reading the
+    /// store under the lock on the calling thread, and schedules its delivery,
+    /// since nothing else may record before the host is suspended again.
     ///
     /// A non-granted answer blocks the caller until the erase reaches the
     /// queue store. A send already handed to the transport is cancelled, not
     /// recalled: a transport that honours cancellation stops it.
     public func updateConsent(_ state: ConsentState) {
         requireNoReentry()
-        let erased: (happened: Bool, drain: Task<Void, Never>?) = lock.withLock { current in
+        let erased: (happened: Bool, drain: Task<Void, Never>?, queued: Int) = lock.withLock { current in
             current.consent = state
             guard !state.permitsCollection else {
+                // A grant during a closing reset takes effect at its reopen.
+                guard current.gateOpen else { return (false, nil, 0) }
                 Self.openSessionIfNeeded(&current)
-                return (false, nil)
+                restoreQueueIfNeeded(&current)
+                return (false, nil, current.pending.count)
             }
             eraseCollected(&current)
-            return (true, Self.detachOwnedDrain(&current))
+            return (true, Self.detachOwnedDrain(&current), 0)
         }
         guard erased.happened else {
             logger.info("consent granted")
+            // A queue a killed process left has nobody else coming for it:
+            // the host may record nothing before it is suspended again.
+            if erased.queued > 0 {
+                startDrain(after: configuration.deliveryDelay(queued: erased.queued))
+            }
             return
         }
         erased.drain?.cancel()
@@ -152,29 +165,8 @@ public final class SignalRecorder: Sendable {
     public func beginSession() {
         requireNoReentry()
         lock.withLock { current in
-            guard current.consent.permitsCollection else { return }
-            let started = now()
-            loadRetentionIfNeeded(&current, at: started)
-            // A session this instance already opened stays open. Two calls land
-            // in one activation whenever consent is adopted from another device
-            // — the host grants on that arrival, before the cycle's own session
-            // emit — and without this the second call would close the first at
-            // a near-zero duration and count the cycle twice.
-            //
-            // The comparison is against our own stamp, not merely against a
-            // non-nil `openSessionStartedAt`: a session left open by a process
-            // that died is also open, and closing that one is the entire point
-            // of the inference path.
-            if current.ownsOpenSession { return }
-            current.openedSessionAt = started
-            current.sessionID = UUID().uuidString
-            let record = RetentionCounters.recordingSessionStart(
-                in: current.retention,
-                at: started,
-                calendar: calendar
-            )
-            current.retention = record
-            retentionStore.save(record)
+            guard current.gateOpen else { return }
+            openCountedSession(&current)
         }
     }
 
@@ -188,7 +180,7 @@ public final class SignalRecorder: Sendable {
     public func endSession() {
         requireNoReentry()
         lock.withLock { current in
-            guard current.consent.permitsCollection, current.ownsOpenSession,
+            guard current.gateOpen, current.ownsOpenSession,
                   let existing = current.retention else { return }
             current.openedSessionAt = nil
             let record = RetentionCounters.recordingSessionEnd(in: existing, at: now())
@@ -201,11 +193,10 @@ public final class SignalRecorder: Sendable {
     /// the process may not survive long enough to finish — which is why the
     /// queue is durable rather than why this call blocks.
     ///
-    /// Blocks the caller until the queue writer's current drain goes idle:
-    /// every write submitted before the call, and any submitted while that
-    /// drain runs, so recording continuously from another thread extends the
-    /// wait. A write submitted after the drain goes idle may still be pending
-    /// when it returns. It does not wait for the send.
+    /// Blocks the caller until every queue write submitted before the call
+    /// has reached the store. A write submitted after the call, from any
+    /// thread, is not promised by the return, and lengthens the wait by at
+    /// most one store call. It does not wait for the send.
     public func flush() {
         requireNoReentry()
         // The consumer calls this on its way out of an active cycle, which is
@@ -213,6 +204,53 @@ public final class SignalRecorder: Sendable {
         // merely late.
         writer.waitForPendingWrites()
         startDrain(after: 0)
+    }
+
+    /// `flush()` for a caller that can wait for the send: starts one delivery
+    /// pass now and waits for that pass to finish, then for every queue write
+    /// submitted by then, the pass's own removal included, to reach the store.
+    ///
+    /// A pass already sending is the one it waits for. It promises that
+    /// pass's completion, not delivery of everything queued: a pass ends
+    /// when the queue empties or a send fails.
+    ///
+    /// It starts no pass, and waits only for the writes, when a retry is
+    /// already owed, which it never hurries: a flush comes on the host's
+    /// cadence, and one that could hurry a retry would collapse the backoff;
+    /// when consent is not granted; and while collection is closed for
+    /// `resetClosingCollection(during:)`. An erase while it waits — a
+    /// decline or a reset — cancels the pass, and a transport that honours
+    /// cancellation ends the send, so the wait ends with it.
+    ///
+    /// Cancelling the calling task returns it promptly from either wait, and
+    /// forfeits the promise that the writes have landed. The pass and the
+    /// writes carry on. It still takes the recorder's lock first, so a
+    /// restore or an identifier resolution holding that lock delays even a
+    /// cancelled call.
+    ///
+    /// Named apart from `flush()` because an async overload of one name wins
+    /// in every async context, which would turn each existing unawaited call
+    /// there into a compile error.
+    public func flushAndWait() async {
+        requireNoReentry()
+        let (pass, preempted): (Task<Void, Never>?, Task<Void, Never>?) = lock.withLock { current in
+            guard current.gateOpen, Self.secondsOwed(current.retryNotBefore) == 0 else { return (nil, nil) }
+            let preempted = decideDrain(&current, after: 0)
+            return (current.drain.owned?.task, preempted)
+        }
+        preempted?.cancel()
+        let finished = OneShot()
+        // Unstructured, so a cancelled caller need not wait for it to end.
+        Task { [writer] in
+            await pass?.value
+            await writer.awaitPendingWrites()
+            finished.fire()
+        }
+        await withTaskCancellationHandler {
+            await finished.wait()
+        } onCancel: {
+            finished.fire()
+        }
     }
 
     /// Erases everything the package persists. Wire it into the host's
@@ -235,10 +273,64 @@ public final class SignalRecorder: Sendable {
         logger.info("reset ok")
     }
 
+    /// `reset()` with collection closed for the length of `body`, for a host
+    /// whose data reset also replaces what `clientUserProvider` returns.
+    ///
+    /// Erases what `reset()` erases and waits for the erase to reach the
+    /// queue store, then runs `body` on the calling thread, outside the
+    /// recorder's lock, with the gate shut. Until it returns, `record`,
+    /// `beginSession()`, and `endSession()` are dropped, no identifier is
+    /// resolved, and nothing is sent, as before a grant. A send already
+    /// handed to the transport is cancelled and its verdict discarded, as
+    /// for `reset()`.
+    ///
+    /// Collection reopens when `body` returns or throws; an error it throws
+    /// reaches the caller after the reopen. Calls nest, and may overlap from
+    /// several threads: collection reopens only when the last of them
+    /// returns, in whatever order they finish. If consent permits then, the
+    /// reopen opens a counted session, as `beginSession()` does, where
+    /// `reset()` only mints an uncounted session identifier.
+    ///
+    /// During `body`:
+    /// - a decline erases as usual, and stands after the reopen;
+    /// - a grant takes effect at the reopen, not before;
+    /// - `flush()` still waits for the queue writes and starts no drain;
+    /// - `flushAndWait()` starts no pass and waits only for the queue writes;
+    /// - `reset()` erases and leaves collection closed.
+    ///
+    /// - Parameter body: The host's own reset work, typically replacing the
+    ///   identifier `clientUserProvider` returns.
+    /// - Throws: What `body` throws, once collection has reopened.
+    public func resetClosingCollection(during body: () throws -> Void) rethrows {
+        requireNoReentry()
+        let detached: Task<Void, Never>? = lock.withLock { current in
+            current.closedForReset += 1
+            eraseCollected(&current)
+            return Self.detachOwnedDrain(&current)
+        }
+        detached?.cancel()
+        awaitErasure()
+        logger.info("reset ok collection=closed")
+        defer {
+            let reopened: Bool = lock.withLock { current in
+                current.closedForReset -= 1
+                // In the same section as the last decrement, so no record
+                // lands between the reopen and its session.
+                guard current.gateOpen else { return false }
+                openCountedSession(&current)
+                return true
+            }
+            if reopened { logger.info("collection reopened") }
+        }
+        try body()
+    }
+
     // MARK: Internal
 
     /// Every mutation of the durable queue goes through here, never through
     /// `queueStorage` directly; `load()` is the one read and stays direct.
+    /// Its barrier waits for the writes submitted before the wait began, and
+    /// a later write lengthens it by at most one store call.
     ///
     /// Internal rather than private so a test can wait on the same writes
     /// `flush()` waits on. Both the property and `waitForPendingWrites()` have
@@ -253,9 +345,14 @@ public final class SignalRecorder: Sendable {
         lock.withLock { $0.lastDrainID }
     }
 
+    /// Seconds until the retry the last failure owes, and zero when none is.
+    var secondsUntilRetry: TimeInterval {
+        lock.withLock { Self.secondsOwed($0.retryNotBefore) }
+    }
+
     /// Sends queued signals until the queue empties or a send fails. Internal
-    /// rather than public so tests can await a transmission the consumer only
-    /// ever kicks off; `flush()` is the consumer's door.
+    /// rather than public so tests can await a drain directly; `flush()` and
+    /// `flushAndWait()` are the consumer's doors.
     func drain() async {
         let claim: Int? = lock.withLock { current in
             guard current.drainClaim == nil else { return nil }
@@ -339,6 +436,11 @@ public final class SignalRecorder: Sendable {
         /// from one that inherits a dead process's open session.
         var openedSessionAt: Date?
 
+        /// Whether anything may be collected, queued, or sent now.
+        var gateOpen: Bool {
+            consent.permitsCollection && closedForReset == 0
+        }
+
         /// Whether the open session is the one this instance stamped, rather
         /// than one left by a dead process or a live one sharing the store.
         var ownsOpenSession: Bool {
@@ -349,6 +451,9 @@ public final class SignalRecorder: Sendable {
         /// value it was claimed under, so work in flight across an erase can be
         /// told from work that belongs to the queue that exists now.
         var eraseGeneration = 0
+        /// How many `resetClosingCollection(during:)` callbacks are running.
+        /// The gate is shut while any is, whatever consent says.
+        var closedForReset = 0
         /// How many signals have ever been dropped from the front of the queue.
         /// A batch carries the value it was claimed under, which is the only
         /// way to know how much of what it sent the queue still holds: two
@@ -418,15 +523,42 @@ public final class SignalRecorder: Sendable {
     /// Whether a batch claimed at `generation` may still be acted on. Consent
     /// alone is not the question: `reset()` erases without moving the answer.
     private func permitsCollection(at generation: Int) -> Bool {
-        lock.withLock { $0.consent.permitsCollection && $0.eraseGeneration == generation }
+        lock.withLock { $0.gateOpen && $0.eraseGeneration == generation }
     }
 
     /// Mints a session identifier where consent permits and none is open. It
     /// only ever fills an empty slot: a session an erase dropped must not come
     /// back, and one already open must not be replaced under its own signals.
     private static func openSessionIfNeeded(_ state: inout State) {
-        guard state.consent.permitsCollection, state.sessionID.isEmpty else { return }
+        guard state.gateOpen, state.sessionID.isEmpty else { return }
         state.sessionID = UUID().uuidString
+    }
+
+    /// Opens and counts a session, unless this instance's own is open. Call
+    /// from inside the lock, with the gate open.
+    private func openCountedSession(_ current: inout State) {
+        let started = now()
+        loadRetentionIfNeeded(&current, at: started)
+        // A session this instance already opened stays open. Two calls land
+        // in one activation whenever consent is adopted from another device
+        // — the host grants on that arrival, before the cycle's own session
+        // emit — and without this the second call would close the first at
+        // a near-zero duration and count the cycle twice.
+        //
+        // The comparison is against our own stamp, not merely against a
+        // non-nil `openSessionStartedAt`: a session left open by a process
+        // that died is also open, and closing that one is the entire point
+        // of the inference path.
+        if current.ownsOpenSession { return }
+        current.openedSessionAt = started
+        current.sessionID = UUID().uuidString
+        let record = RetentionCounters.recordingSessionStart(
+            in: current.retention,
+            at: started,
+            calendar: calendar
+        )
+        current.retention = record
+        retentionStore.save(record)
     }
 
     /// The one place a signal becomes queued state. Everything the invariant
@@ -434,7 +566,7 @@ public final class SignalRecorder: Sendable {
     /// write — sits behind the guard on the first line.
     private func enqueue(name: String, parameters: [String: String], floatValue: Double?) {
         let enqueued: (queued: Int, overflowBegan: Bool)? = lock.withLock { current in
-            guard current.consent.permitsCollection else { return nil }
+            guard current.gateOpen else { return nil }
             restoreQueueIfNeeded(&current)
             let recordedAt = now()
             loadRetentionIfNeeded(&current, at: recordedAt)
@@ -546,7 +678,7 @@ public final class SignalRecorder: Sendable {
     /// the same batch would go out twice.
     private func nextBatch(claim: Int) -> (batch: SignalBatch, generation: Int, evicted: Int)? {
         lock.withLock { current -> (batch: SignalBatch, generation: Int, evicted: Int)? in
-            guard current.consent.permitsCollection, current.drainClaim == claim else { return nil }
+            guard current.gateOpen, current.drainClaim == claim else { return nil }
             restoreQueueIfNeeded(&current)
             guard !current.pending.isEmpty else { return nil }
             guard let clientUser = clientUserProvider() else {
@@ -557,9 +689,7 @@ public final class SignalRecorder: Sendable {
                 // for an identifier it has already said it does not have, as
                 // often as the consumer flushes.
                 current.consecutiveFailures += 1
-                Self.oweRetry(&current, after: configuration.backoffInterval(
-                    consecutiveFailures: current.consecutiveFailures
-                ))
+                Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
                 logger.error("drain halt reason=no-client-user")
                 return nil
             }
@@ -584,7 +714,7 @@ public final class SignalRecorder: Sendable {
             // A verdict on a batch an erase has since dropped applies to
             // nothing: the queue it indexed no longer exists, and its removal
             // would take the front off one recorded under a later grant.
-            guard current.consent.permitsCollection, current.eraseGeneration == generation else { return nil }
+            guard current.gateOpen, current.eraseGeneration == generation else { return nil }
             switch outcome {
             case .delivered, .permanent:
                 // An overflow eviction during the send already dropped part of
@@ -605,9 +735,7 @@ public final class SignalRecorder: Sendable {
                 return (!current.pending.isEmpty, overflowDropped)
             case .retryable:
                 current.consecutiveFailures += 1
-                Self.oweRetry(&current, after: configuration.backoffInterval(
-                    consecutiveFailures: current.consecutiveFailures
-                ))
+                Self.oweRetry(&current, after: retryDelay(current.consecutiveFailures))
                 return (false, 0)
             }
         }
@@ -649,11 +777,10 @@ public final class SignalRecorder: Sendable {
     /// The one part of an erase that cannot happen under the lock. The delete
     /// has to land before the caller returns: a recorder torn down in the same
     /// breath as a decline would otherwise leave the file behind. Waits until
-    /// the writer's current drain goes idle, which covers the purge and any
-    /// write submitted while that drain runs. After a decline a record
-    /// submits nothing until another thread grants again; after a reset the
-    /// gate stays open, so recording continuously from another thread extends
-    /// the wait.
+    /// every write submitted before it, the purge included, has reached the
+    /// store. A write submitted after it — a record on another thread, after
+    /// a reset that leaves the gate open — is not promised by the return, and
+    /// lengthens the wait by at most one store call.
     private func awaitErasure() {
         writer.waitForPendingWrites()
     }
@@ -707,26 +834,36 @@ public final class SignalRecorder: Sendable {
     /// kills the process outright, which is why an interrupted flush loses
     /// nothing.
     private func startDrain(after delay: TimeInterval) {
-        // The task is created inside the claim, so the slot never holds a
-        // half-state and there is no late "still ours?" assignment to guard.
-        let preempted: Task<Void, Never>? = lock.withLock { current in
-            guard current.consent.permitsCollection else { return nil }
-            let due = max(delay, Self.secondsOwed(current.retryNotBefore))
-            switch current.drain {
-            case .running:
-                return nil
-            case let .waiting(existing):
-                guard due == 0 else { return nil }
-                let owned = makeOwnedDrain(&current, after: 0)
-                current.drain = .running(owned)
-                return existing.task
-            case .idle:
-                let owned = makeOwnedDrain(&current, after: due)
-                current.drain = due > 0 ? .waiting(owned) : .running(owned)
-                return nil
-            }
+        lock.withLock { decideDrain(&$0, after: delay) }?.cancel()
+    }
+
+    /// `startDrain`'s decision, for a caller already inside the lock. Returns
+    /// the waiting task it pre-empted, to be cancelled outside the lock.
+    ///
+    /// The task is created inside the claim, so the slot never holds a
+    /// half-state and there is no late "still ours?" assignment to guard.
+    private func decideDrain(_ current: inout State, after delay: TimeInterval) -> Task<Void, Never>? {
+        guard current.gateOpen else { return nil }
+        let due = max(delay, Self.secondsOwed(current.retryNotBefore))
+        switch current.drain {
+        case .running:
+            return nil
+        case let .waiting(existing):
+            guard due == 0 else { return nil }
+            current.drain = .running(makeOwnedDrain(&current, after: 0))
+            return existing.task
+        case .idle:
+            let owned = makeOwnedDrain(&current, after: due)
+            current.drain = due > 0 ? .waiting(owned) : .running(owned)
+            return nil
         }
-        preempted?.cancel()
+    }
+
+    /// The jittered draw a run of failures owes, so installs that failed
+    /// together do not retry together.
+    private func retryDelay(_ consecutiveFailures: Int) -> TimeInterval {
+        var generator = SystemRandomNumberGenerator()
+        return configuration.backoffInterval(consecutiveFailures: consecutiveFailures, using: &generator)
     }
 
     /// Records what the next attempt owes the endpoint. Call from inside the
@@ -798,14 +935,11 @@ public final class SignalRecorder: Sendable {
         lock.withLock { current in
             guard current.drain.owned?.id == id else { return }
             current.drain = .idle
-            guard current.consent.permitsCollection, !current.pending.isEmpty else { return }
-            // Steady interval when nothing failed, the backoff when something
-            // did; `backoffInterval` is the one place that distinction lives.
-            let owned = makeOwnedDrain(
-                &current,
-                after: configuration.backoffInterval(consecutiveFailures: current.consecutiveFailures)
-            )
-            current.drain = .waiting(owned)
+            guard !current.pending.isEmpty else { return }
+            // The steady interval, or the later retry a failure owes: its
+            // jittered draw, which recomputing a backoff here would replace
+            // with the ceiling every install shares.
+            _ = decideDrain(&current, after: configuration.transmitInterval)
         }
     }
 
@@ -825,4 +959,40 @@ public final class SignalRecorder: Sendable {
         state.drain = .idle
         return owned?.task
     }
+}
+
+/// A wait that ends once, on the first `fire()`, whether that lands before
+/// the wait begins or after.
+private final class OneShot: Sendable {
+    // MARK: Internal
+
+    func fire() {
+        let waiting: CheckedContinuation<Void, Never>? = state.withLock { state in
+            defer { state = .fired }
+            guard case let .waiting(continuation) = state else { return nil }
+            return continuation
+        }
+        waiting?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let fired: Bool = state.withLock { state in
+                guard case .idle = state else { return true }
+                state = .waiting(continuation)
+                return false
+            }
+            if fired { continuation.resume() }
+        }
+    }
+
+    // MARK: Private
+
+    private enum State {
+        case idle
+        case waiting(CheckedContinuation<Void, Never>)
+        case fired
+    }
+
+    private let state = Mutex(State.idle)
 }

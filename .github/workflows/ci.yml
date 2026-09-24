@@ -1,6 +1,6 @@
 name: ci
 
-# The suite is the merge gate. Offline and a few minutes from cold, so nothing green depends on a
+# The suite is the merge gate. Offline, so nothing green depends on a
 # vendor being reachable: the adapter's tests assert the request a batch produces, they do not send
 # it. Scripts/run-checks.sh is the whole gate, so a local run and this job prove the same things.
 
@@ -8,6 +8,9 @@ on:
   pull_request:
   push:
     branches: [main]
+    # A release tag runs the suite on the tagged commit, and first checks that the CHANGELOG's
+    # top heading names that release.
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -25,7 +28,9 @@ jobs:
     # toolchain change arriving that way is a red build nobody asked for.
     runs-on: macos-26
     # A wedged suite hangs rather than fails, so cap the job: the default is six hours of nothing.
-    timeout-minutes: 15
+    # The api-break gate builds four release tags and the working tree on top of the iOS, watchOS,
+    # and test builds, so the cap leaves room for all of them cold on three cores.
+    timeout-minutes: 30
     strategy:
       # One leg, deliberately. The matrix is here for the name it composes -- `test (macos)` -- so
       # the context a required status check names is platform-qualified before a second leg exists
@@ -40,7 +45,8 @@ jobs:
     steps:
       # Full history: the leak scan's history tier runs with --all, and a shallow (depth-1)
       # checkout would leave it scanning the one fetched commit -- a gate that never fires
-      # looks exactly like one that passes.
+      # looks exactly like one that passes. The api-break gate needs the release tags it
+      # compares against, which a full-history checkout also fetches.
       # A tag can be moved to other code after review; a commit SHA cannot.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -62,6 +68,10 @@ jobs:
             echo "the pinned Xcode does not provide Swift 6.3 or newer"
             exit 1
           }
+
+      - name: release heading
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: Scripts/check-release-heading.sh "$GITHUB_REF_NAME"
 
       - name: suite
         run: Scripts/run-checks.sh

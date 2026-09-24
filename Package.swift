@@ -11,7 +11,9 @@ let aethergramSwiftSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "Aethergram",
-    platforms: [.iOS(.v18), .macOS(.v15)],
+    // watchOS 11 is the floor of the same release as iOS 18 and macOS 15. Today's code needs 10
+    // (`Transaction.storefront`), but `Mutex` needs 11, and raising a floor later is a major.
+    platforms: [.iOS(.v18), .macOS(.v15), .watchOS(.v11)],
     products: [
         // The umbrella is the only product. Sub-targets are reached through
         // `@_exported import` re-exports, so a host imports one module and the
@@ -23,6 +25,9 @@ let package = Package(
         // leaves this one compiling, which is the test of that claim.
         .target(
             name: "AethergramCore",
+            // The core is what collects, and Apple reads an SDK's privacy
+            // manifest from its bundle, so the manifest ships in this one.
+            resources: [.copy("PrivacyInfo.xcprivacy")],
             swiftSettings: aethergramSwiftSettings
         ),
         // The only module that knows a vendor exists.

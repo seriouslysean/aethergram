@@ -58,6 +58,53 @@ struct BackoffTests {
         #expect(configuration.backoffInterval(consecutiveFailures: 1) == 10)
     }
 
+    /// Every install that failed together retries together on a fixed
+    /// schedule, so an outage that ends is met by all of them in the same
+    /// second. The jittered draw has to spread them.
+    @Test("Jittered backoff spreads retries rather than landing every install on the ceiling")
+    func jitteredBackoffSpreadsRetries() {
+        let configuration = AethergramConfiguration(logSubsystem: testLogSubsystem)
+        var generator = SeededGenerator(seed: 1)
+        let draws = (0 ..< 64).map { _ in
+            configuration.backoffInterval(consecutiveFailures: 3, using: &generator)
+        }
+        #expect(Set(draws).count > 32)
+    }
+
+    /// The draw stays inside `[max(transmitInterval, ceiling / 2), ceiling]`:
+    /// never faster than the steady state the schedule backs off from, never
+    /// slower than the ceiling. The second configuration puts the cap below
+    /// twice the interval, where half the ceiling alone would undercut it.
+    @Test(
+        "Jittered backoff never retries faster than the steady interval or slower than the ceiling",
+        arguments: [(10.0, 300.0), (10.0, 15.0), (10.0, 5.0)]
+    )
+    func jitteredBackoffStaysInsideTheSchedule(transmitInterval: TimeInterval, maxBackoffInterval: TimeInterval) {
+        let configuration = testConfiguration(
+            transmitInterval: transmitInterval,
+            maxBackoffInterval: maxBackoffInterval
+        )
+        var generator = SeededGenerator(seed: 7)
+        for failures in 1 ... 12 {
+            let ceiling = configuration.backoffInterval(consecutiveFailures: failures)
+            let floor = max(configuration.transmitInterval, ceiling / 2)
+            for _ in 0 ..< 32 {
+                let draw = configuration.backoffInterval(consecutiveFailures: failures, using: &generator)
+                #expect(draw >= floor && draw <= ceiling, "failures=\(failures) draw=\(draw)")
+            }
+        }
+    }
+
+    /// Jitter belongs to a retry. The steady interval is the coalescing
+    /// window, and moving it would change how often a healthy install sends.
+    @Test("With no failure the jittered draw is the steady interval exactly")
+    func jitteredBackoffLeavesTheSteadyIntervalAlone() {
+        let configuration = AethergramConfiguration(logSubsystem: testLogSubsystem)
+        var generator = SeededGenerator(seed: 3)
+        #expect(configuration.backoffInterval(consecutiveFailures: 0, using: &generator) == 10)
+        #expect(configuration.backoffInterval(consecutiveFailures: -1, using: &generator) == 10)
+    }
+
     /// The defaults match the SDK this package replaces, so the swap does not
     /// silently change how often an install phones home.
     @Test("The shipped defaults are the ones the swap promised")
@@ -100,4 +147,22 @@ struct BackoffTests {
         )
         #expect(configuration.deliveryDelay(queued: 1) == 0)
     }
+}
+
+/// SplitMix64, so a jittered draw is repeatable in a test without reaching
+/// for the system generator.
+private struct SeededGenerator: RandomNumberGenerator {
+    init(seed: UInt64) {
+        state = seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var value = state
+        value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+        return value ^ (value >> 31)
+    }
+
+    private var state: UInt64
 }

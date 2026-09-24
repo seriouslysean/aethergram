@@ -86,7 +86,7 @@ struct DeliverySchedulingTests {
         dead.recorder.record("survivor")
         // The dead process's write is what the next one inherits, so it has
         // to reach disk before that process is abandoned.
-        dead.recorder.writer.waitForPendingWrites()
+        await dead.recorder.writer.awaitPendingWrites()
         #expect(dead.transport.sendCount == 0)
         #expect(dead.storage.signalsOnDisk.count == 1)
 
@@ -443,6 +443,40 @@ struct DeliverySchedulingTests {
         #expect(transport.sendCount == 0)
     }
 
+    /// Installs that failed together must not come back together. A recorder
+    /// that owes the fixed ceiling owes it on every failure, so three
+    /// failures in a row each owing within a second of their ceiling is what
+    /// that recorder shows; a uniform draw does so about once in ten million
+    /// runs. Both paths that owe a retry: a refused send and a missing
+    /// identifier.
+    @Test("A retry after a failure is owed at a jittered draw, not the fixed ceiling", arguments: [true, false])
+    func retryAfterAFailureIsJittered(identifierResolves: Bool) async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let configuration = testConfiguration(transmitInterval: 100, maxBackoffInterval: 7200)
+        let recorder = try SignalRecorder(
+            configuration: configuration,
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "offline")),
+            queueStorage: RecordingQueueStorage(directory: directory),
+            retentionStore: SpyRetentionStore(),
+            clientUserProvider: { identifierResolves ? "client-user" : nil },
+            environmentProvider: { [:] },
+            calendar: testCalendar,
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        recorder.updateConsent(.granted)
+        recorder.record("Game.started")
+
+        var nearTheCeiling = 0
+        for failures in 1 ... 3 {
+            await recorder.drain()
+            let ceiling = configuration.backoffInterval(consecutiveFailures: failures)
+            let owed = recorder.secondsUntilRetry
+            #expect(owed > max(100, ceiling / 2) - 5 && owed <= ceiling, "failures=\(failures)")
+            if owed > ceiling - 1 { nearTheCeiling += 1 }
+        }
+        #expect(nearTheCeiling < 3)
+    }
+
     /// The invariant through the recorder rather than the pure
     /// functions: a process that dies without calling `endSession()` still
     /// contributes a duration, because the next activation closes its session
@@ -635,7 +669,7 @@ struct DeliverySchedulingTests {
 /// assertion that follows reports the state rather than a timeout. The deadline
 /// is wall time: what is being waited on is a task the pool schedules, not
 /// anything the recorder's own clock advances.
-private func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async {
+func waitUntil(within seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async {
     let deadline = Date().addingTimeInterval(seconds)
     while !condition(), Date() < deadline {
         try? await Task.sleep(for: .milliseconds(5))

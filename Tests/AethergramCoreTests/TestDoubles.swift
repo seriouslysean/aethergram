@@ -228,6 +228,8 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
 
     /// Opened as `purge()` is entered, before it is held or takes effect.
     let purgeEntered = Gate()
+    /// Opened as a held `persist` is entered, before it is held.
+    let persistEntered = Gate()
 
     var isPurged: Bool {
         lock.withLock { purged }
@@ -246,11 +248,32 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
         release.signal()
     }
 
+    /// Makes every `persist` wait until `releasePersist()`. What a store
+    /// stuck on a slow disk looks like to the writer.
+    func holdPersist() {
+        lock.withLock { persistHeld = true }
+    }
+
+    /// Idempotent, and lets through every persist held or still to come.
+    func releasePersist() {
+        let wasHeld: Bool = lock.withLock {
+            defer { persistHeld = false }
+            return persistHeld
+        }
+        if wasHeld { persistRelease.signal() }
+    }
+
     func load() -> [Signal] {
         lock.withLock { stored }
     }
 
     func persist(_ signals: [Signal]) {
+        if lock.withLock({ persistHeld }) {
+            persistEntered.open()
+            persistRelease.wait()
+            // The release is one signal; pass it on to a persist queued behind.
+            persistRelease.signal()
+        }
         lock.withLock { stored = signals }
     }
 
@@ -266,10 +289,12 @@ final class GatedQueueStorage: SignalQueueStorage, @unchecked Sendable {
     // MARK: Private
 
     private let release = DispatchSemaphore(value: 0)
+    private let persistRelease = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var stored: [Signal] = []
     private var purged = false
     private var held = false
+    private var persistHeld = false
 }
 
 /// A `RetentionStore` that holds every `save` open until the test releases it,
@@ -553,4 +578,71 @@ final class PrioritySpyTransport: SignalTransport, @unchecked Sendable {
 
     private let lock = NSLock()
     private var observed: [TaskPriority] = []
+}
+
+/// Answers every send after a pause, and counts the answers apart from the
+/// arrivals, so a test can tell a send that was started from one that was
+/// answered. Suspends rather than blocks, so the pause costs the pool nothing.
+final class SlowTransport: SignalTransport, @unchecked Sendable {
+    // MARK: Lifecycle
+
+    init(pause: Duration) {
+        self.pause = pause
+    }
+
+    // MARK: Internal
+
+    var sentSignalNames: [String] {
+        lock.withLock { received.flatMap { $0.signals.map(\.name) } }
+    }
+
+    var answeredCount: Int {
+        lock.withLock { answered }
+    }
+
+    func send(_ batch: SignalBatch) async -> TransportOutcome {
+        lock.withLock { received.append(batch) }
+        try? await Task.sleep(for: pause)
+        lock.withLock { answered += 1 }
+        return .delivered
+    }
+
+    // MARK: Private
+
+    private let pause: Duration
+    private let lock = NSLock()
+    private var received: [SignalBatch] = []
+    private var answered = 0
+}
+
+/// A flag set on one thread and read on another, from a provider closure or
+/// a recording loop.
+final class SharedFlag: @unchecked Sendable {
+    var isRaised: Bool {
+        lock.withLock { raised }
+    }
+
+    func raise() {
+        lock.withLock { raised = true }
+    }
+
+    func lower() {
+        lock.withLock { raised = false }
+    }
+
+    private let lock = NSLock()
+    private var raised = false
+}
+
+/// Holds every send until its task is cancelled, as `URLSession` ends a
+/// request whose task is, and answers it retryable.
+final class HeldUntilCancelledTransport: SignalTransport, @unchecked Sendable {
+    /// Opened once a send is holding.
+    let entered = Gate()
+
+    func send(_: SignalBatch) async -> TransportOutcome {
+        entered.open()
+        try? await Task.sleep(for: .seconds(3600))
+        return .retryable(reason: "cancelled")
+    }
 }

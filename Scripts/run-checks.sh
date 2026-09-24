@@ -1,12 +1,14 @@
 #!/bin/sh
-# Aethergram repo checks. Four gates, in the order a failure is cheapest to read.
+# Aethergram repo checks. The gates run in the order a failure is cheapest to read.
 #
-#   Scripts/run-checks.sh    offline, no network
+#   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
-# cannot reach, and `swift test` is the correctness gate.
+# cannot reach, the consumer fixture compiles what a host writes, the api-break gate holds
+# the public API to what the release being prepared may change, the release heading gate is proved
+# on the refusals a tag push would make, and `swift test` is the correctness gate.
 
 set -u
 
@@ -297,8 +299,40 @@ else
     fail "the package did not build for iOS release with -application-extension"
 fi
 
+# Apple reads the manifest out of the SDK's bundle, so it is checked where the build put it rather
+# than only where it is committed. `plutil -lint` is first watched refusing a malformed one.
+MANIFEST="Sources/AethergramCore/PrivacyInfo.xcprivacy"
+
+it "a malformed privacy manifest is refused"
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict><key>NSPrivacyTracking</key></dict>\n' > "$TMP/bad.xcprivacy"
+if plutil -lint "$TMP/bad.xcprivacy" >/dev/null 2>&1; then
+    fail "plutil accepted a manifest with no closing plist element and a key with no value"
+else
+    pass
+fi
+
+it "the privacy manifest is a valid property list and ships in the core's iOS bundle"
+BUNDLED="$(find "$TMP/ios" -path '*AethergramCore.bundle/PrivacyInfo.xcprivacy' 2>/dev/null | head -n 1)"
+if ! OUT="$(plutil -lint "$ROOT/$MANIFEST" 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "$MANIFEST is not a valid property list"
+elif [ -z "$BUNDLED" ]; then
+    fail "the iOS build produced no AethergramCore bundle carrying PrivacyInfo.xcprivacy"
+elif ! cmp -s "$ROOT/$MANIFEST" "$BUNDLED"; then
+    fail "the bundled manifest differs from $MANIFEST"
+else
+    pass
+fi
+
 # A copy of the package to break on purpose, so a gate is watched refusing before it is trusted.
-copy_package() { mkdir -p "$1" && cp -R "$ROOT/Package.swift" "$ROOT/Sources" "$ROOT/Tests" "$1/"; }
+# The consumer fixture is left out: it is no part of the package, and a local run may have left
+# its build directory in it.
+copy_package() {
+    mkdir -p "$1/Tests" && cp -R "$ROOT/Package.swift" "$ROOT/Sources" "$1/" || return 1
+    for _dir in "$ROOT"/Tests/*; do
+        [ "$_dir" = "$ROOT/Tests/Fixtures" ] || cp -R "$_dir" "$1/Tests/" || return 1
+    done
+}
 
 it "a core that imports the adapter is refused"
 BAD="$TMP/core-imports-adapter"
@@ -334,13 +368,205 @@ else
     pass
 fi
 
-printf '\nswift test\n'
+# watchOS is declared but nothing else compiles it. The triple's version is the manifest's floor,
+# so an API newer than the floor fails here.
+WATCH_SDK="$(xcrun --sdk watchos --show-sdk-path)" || WATCH_SDK=""
+watch_gate() {
+    [ -n "$WATCH_SDK" ] || { printf 'xcrun found no watchos SDK\n'; return 1; }
+    swift build --package-path "$1" --scratch-path "$2" \
+        -c release --triple arm64_32-apple-watchos11.0 --sdk "$WATCH_SDK" -Xswiftc -application-extension \
+        --explicit-target-dependency-import-check error --target Aethergram
+}
 
-it "the package suite passes"
-if swift test --package-path "$ROOT"; then
+it "the package builds for watchOS release at its floor"
+if OUT="$(watch_gate "$ROOT" "$TMP/watchos" 2>&1)"; then
     pass
 else
-    fail "swift test exited non-zero"
+    printf '%s\n' "$OUT"
+    fail "the package did not build for watchOS 11 release"
+fi
+
+it "the watchOS arm is compiled"
+BAD="$TMP/unbuilt-watch-arm"
+copy_package "$BAD"
+printf '#if os(watchOS)\nlet watchArmProbe: Int = watchArmMarker\n#endif\n' > "$BAD/Sources/AethergramCore/WatchArm.swift"
+OUT="$(watch_gate "$BAD" "$BAD.build" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ] || ! printf '%s\n' "$OUT" | grep -q 'watchArmMarker'; then
+    fail "the watchOS gate exited $GATE_RC and never reached the watchOS arm"
+else
+    pass
+fi
+
+printf '\nconsumer fixture\n'
+
+# A package of its own that depends on this one by path and imports the umbrella alone, in a module
+# with no upcoming-feature flag: it compiles what a host writes. The build goes to a scratch path,
+# never into the tree.
+FIXTURE="$ROOT/Tests/Fixtures/ConsumerHost"
+fixture_gate() { ios_build "$1" "$2" --target ConsumerHostExtension; }
+
+it "the fixture builds for iOS release as extension-safe"
+if OUT="$(fixture_gate "$FIXTURE" "$TMP/fixture-ios" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the fixture did not build for iOS release with -application-extension"
+fi
+
+it "the fixture build compiles the host's code"
+BAD="$TMP/unbuilt-fixture"
+copy_package "$BAD"
+mkdir -p "$BAD/Tests/Fixtures" && cp -R "$FIXTURE" "$BAD/Tests/Fixtures/"
+rm -rf "$BAD/Tests/Fixtures/ConsumerHost/.build"
+printf 'let hostProbe: Int = hostMarker\n' > "$BAD/Tests/Fixtures/ConsumerHost/Sources/ConsumerHostExtension/HostProbe.swift"
+OUT="$(fixture_gate "$BAD/Tests/Fixtures/ConsumerHost" "$BAD.build" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ] || ! printf '%s\n' "$OUT" | grep -q 'hostMarker'; then
+    fail "the fixture build exited $GATE_RC and never reached the host's code"
+else
+    pass
+fi
+
+# `swift test` at the root must not run the fixture's suite as its own, or compile its sources.
+root_takes_fixture() { swift package --package-path "$1" describe 2>&1 | grep -q 'Tests/Fixtures\|ConsumerHost'; }
+
+it "the root package takes no target or source from the fixture"
+BAD="$TMP/root-takes-fixture"
+copy_package "$BAD"
+mkdir -p "$BAD/Tests/Fixtures" && cp -R "$FIXTURE" "$BAD/Tests/Fixtures/"
+rm -rf "$BAD/Tests/Fixtures/ConsumerHost/.build"
+printf 'package.targets.append(.target(name: "FixtureProbe", path: "Tests/Fixtures/ConsumerHost/Sources/ConsumerHostExtension"))\n' \
+    >> "$BAD/Package.swift"
+if ! root_takes_fixture "$BAD"; then
+    fail "a manifest with a target inside the fixture was not caught"
+elif root_takes_fixture "$ROOT"; then
+    swift package --package-path "$ROOT" describe | grep 'Tests/Fixtures\|ConsumerHost'
+    fail "the root package describes something under Tests/Fixtures"
+else
+    pass
+fi
+
+printf '\napi-break gate\n'
+
+# Proved on the package's own history before it is trusted: 0.3.0 removed `SignalBatch.sessionID`
+# and changed `Signal.init`, and 0.3.2 moved nothing. One scratch directory, so each tag builds once.
+API="$TMP/api"
+api_gate() { "$ROOT/Scripts/check-api-breaks.sh" --scratch "$API" "$@"; }
+
+it "the break 0.3.0 made is refused when declared a patch"
+OUT="$(api_gate --base v0.2.1 --head v0.3.0 --release 0.2.2 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 1 ]; then
+    printf '%s\n' "$OUT"
+    fail "the gate exited $GATE_RC rather than 1 on a break declared a patch"
+elif ! printf '%s\n' "$OUT" | grep -q 'SignalBatch.sessionID has been removed' \
+    || ! printf '%s\n' "$OUT" | grep -q 'Signal.init(name:parameters:floatValue:recordedAt:) has been removed'; then
+    printf '%s\n' "$OUT"
+    fail "the gate refused without naming the removed property and initializer"
+else
+    pass
+fi
+
+it "the same break passes, and is still listed, when declared a 0.x minor"
+OUT="$(api_gate --base v0.2.1 --head v0.3.0 --release 0.3.0 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || ! printf '%s\n' "$OUT" | grep -q 'SignalBatch.sessionID has been removed'; then
+    printf '%s\n' "$OUT"
+    fail "the gate exited $GATE_RC or did not list the break a minor may make"
+else
+    pass
+fi
+
+it "a patch that moved nothing reports no break"
+OUT="$(api_gate --base v0.3.1 --head v0.3.2 --release 0.3.2 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || [ "$(printf '%s\n' "$OUT" | grep -c ': no breaks$')" -ne 2 ]; then
+    printf '%s\n' "$OUT"
+    fail "the gate exited $GATE_RC or found a break between 0.3.1 and 0.3.2"
+else
+    pass
+fi
+
+it "the working tree breaks nothing its CHANGELOG entry does not allow"
+if OUT="$(api_gate 2>&1)"; then
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "Scripts/check-api-breaks.sh refused the working tree against the last release"
+fi
+
+printf '\nrelease heading gate\n'
+
+# CI runs the check on a tag push only, so every refusal it can make is proved here, on each run.
+heading_gate() { "$ROOT/Scripts/check-release-heading.sh" "$1" --changelog "$2"; }
+EM="$(printf '\342\200\224')"
+heading_fixture() { printf '# Changelog\n\nIntro.\n\n%s\n\nBody.\n\n## 0.3.2 %s 2026-09-23\n' "$1" "$EM" > "$2"; }
+
+it "the tag v0.3.2 was cut from matches its own CHANGELOG's heading"
+git -C "$ROOT" show v0.3.2:CHANGELOG.md > "$TMP/changelog-v0.3.2" 2>/dev/null
+if OUT="$(heading_gate v0.3.2 "$TMP/changelog-v0.3.2" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "the heading gate refused the CHANGELOG v0.3.2 shipped with"
+fi
+
+it "a heading naming another release, one with no date, or a hyphen for the dash is refused"
+MISSING=""
+for CASE in "## 0.3.2 $EM 2026-09-23|the top heading is" "## 0.4.0|is not" "## 0.4.0 - 2026-09-23|is not" \
+    "## Unreleased|the top heading is" "## 0.4.0 $EM soon|is not"; do
+    HEADING="${CASE%|*}"; REASON="${CASE##*|}"
+    heading_fixture "$HEADING" "$TMP/changelog-bad"
+    OUT="$(heading_gate v0.4.0 "$TMP/changelog-bad" 2>&1)"; GATE_RC=$?
+    { [ "$GATE_RC" -eq 1 ] && printf '%s\n' "$OUT" | grep -qF "$REASON"; } \
+        || MISSING="$MISSING [$HEADING: exit $GATE_RC, $OUT]"
+done
+heading_fixture "## 0.4.0 $EM 2026-10-01" "$TMP/changelog-good"
+if [ -n "$MISSING" ]; then
+    fail "not refused as expected:$MISSING"
+elif ! OUT="$(heading_gate v0.4.0 "$TMP/changelog-good" 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "the same fixture with a dated 0.4.0 heading was refused, so the refusals are not about the heading"
+else
+    pass
+fi
+
+it "a tag that is not vX.Y.Z cannot run the heading gate"
+OUT="$(heading_gate 0.4.0 "$TMP/changelog-good" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 2 ]; then
+    printf '%s\n' "$OUT"
+    fail "a tag with no v exited $GATE_RC rather than 2"
+else
+    pass
+fi
+
+printf '\nswift test\n'
+
+# Swift Testing's summary line; a run that matched nothing says 0, or prints no line at all.
+tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' | tail -n 1; }
+
+# A floor rather than an exact count: suites grow in parallel lanes, and a floor only fails when
+# tests go missing. Raise it when the suite grows; lower it only with the tests it lost named.
+ROOT_TESTS_FLOOR=211
+root_ran_enough() { [ "$1" -eq 0 ] && [ "$(tests_run "$2")" -ge "$ROOT_TESTS_FLOOR" ] 2>/dev/null; }
+
+it "the package suite passes, running at least $ROOT_TESTS_FLOOR tests"
+swift test --package-path "$ROOT" > "$TMP/root-tests.log" 2>&1; GATE_RC=$?
+cat "$TMP/root-tests.log"
+OUT="$(cat "$TMP/root-tests.log")"
+if root_ran_enough "$GATE_RC" "$OUT"; then
+    pass
+else
+    fail "swift test exited $GATE_RC having run $(tests_run "$OUT") tests; ROOT_TESTS_FLOOR is $ROOT_TESTS_FLOOR"
+fi
+
+# After the full run, so the build is warm. It exits 0 having run nothing.
+it "a package run that executes no test is refused"
+OUT="$(swift test --package-path "$ROOT" --filter NoSuchTestProbe 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] || [ "$(tests_run "$OUT")" != 0 ]; then
+    printf '%s\n' "$OUT"
+    fail "the filtered run exited $GATE_RC or did not report 0 tests, so it proves nothing about the floor"
+elif root_ran_enough "$GATE_RC" "$OUT"; then
+    fail "a run of 0 tests passed the package suite's floor"
+else
+    pass
 fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"

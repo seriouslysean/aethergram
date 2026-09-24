@@ -2,3 +2,8 @@
 .swiftpm/
 *.xcodeproj
 .DS_Store
+
+# The consumer fixture is its own package; run-checks builds it into a temp scratch path, and a
+# local run writes these.
+Tests/Fixtures/ConsumerHost/.build/
+Tests/Fixtures/ConsumerHost/Package.resolved

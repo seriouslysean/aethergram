@@ -8,7 +8,8 @@ listed here is an implementation detail.
 The `public` surface of the `Aethergram` product, reached through the umbrella import:
 
 - `SignalRecorder`: its initializer's parameter list, `updateConsent`, `record`,
-  `recordPurchaseCompleted`, `recordError`, `beginSession`, `endSession`, `flush`, and `reset`.
+  `recordPurchaseCompleted`, `recordError`, `beginSession`, `endSession`, `flush`, `flushAndWait`,
+  `reset`, and `resetClosingCollection(during:)`.
 - `AethergramConfiguration`: its stored properties, its initializer's defaults, and the two pure
   policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`. The
   initializer traps on a `batchSize` or `queueLimit` that is not positive and on a
@@ -21,7 +22,9 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
 - The host seams: `SignalQueueStorage`, `RetentionStore`, and `SignalTransport`, along with
   `SignalBatch`, `TransportOutcome`, `RetentionRecord`, and `PurchaseDetails`, including
   `PurchaseDetails.init(transaction:)` where StoreKit is available. A type conforming to one of
-  these today keeps compiling across a minor release.
+  these today keeps compiling across a minor release. `SignalTransport.send` is spelled
+  `nonisolated(nonsending)` in the protocol, so the requirement means the same whatever
+  upcoming-feature flags a module is built with, and a plain `async` method still witnesses it.
 - `Signal`, its stored properties and its initializer: a custom `SignalQueueStorage` constructs
   one on `load()`, and a custom `SignalTransport` reads one out of every `SignalBatch`. Its
   `Codable` form is not: see below.
@@ -32,8 +35,10 @@ The `public` surface of the `Aethergram` product, reached through the umbrella i
   produces, and `calendarParameters(at:calendar:)`.
 - `RunContextChannel`'s cases and raw values, which `EnvironmentSnapshot.channel` carries.
 - `TelemetryDeckConfiguration`, including `defaultBaseURL` and `ingestURL`, `TelemetryDeckTransport`,
-  and `TelemetryDeckConfiguration.testPartition(for:)`. `TelemetryDeckTransport` traps at the first
-  send over a background `URLSession`.
+  and `TelemetryDeckConfiguration.testPartition(for:)`. `TelemetryDeckConfiguration` traps at
+  construction on a `baseURL` whose scheme is not `https`. `TelemetryDeckTransport` sends over an
+  ephemeral session with no cookie, credential, or cache store unless it is given one, and traps at
+  the first send over a background `URLSession`.
 
 A new case in a public enum — `PresetSignal`, `RunContextChannel`, `TransportOutcome`,
 `ConsentState` — is a minor addition. A host that switches over one of them must carry a `default`
@@ -73,8 +78,10 @@ branch; an exhaustive switch without one stops compiling when a case arrives.
   `firstSessionDay` fails to decode. The decoding is the host's `RetentionStore`'s, whose `load()`
   cannot throw: the package never sees the failure, so the store must return nil for it, and the
   recorder then starts a new record rather than recovering the old one.
-- The precise timing of a transmission. `deliveryDelay` and `backoffInterval` are the contract;
-  when the task actually runs is the scheduler's business.
+- The precise timing of a transmission. `deliveryDelay` and `backoffInterval` are the contract:
+  a retry after a failure is owed at a random draw no later than `backoffInterval` and no earlier
+  than the larger of `transmitInterval` and half of it. When the task actually runs is the
+  scheduler's business.
 - Which exact `TransportOutcome` a given HTTP status maps to, beyond the retryable-versus-permanent
   distinction. A status moving between those two is a behaviour change and gets release notes.
 
@@ -126,11 +133,21 @@ Depend on a release tag. `main` is a moving target. What each release changed is
 
 ## Platforms and toolchain
 
-iOS 18 and macOS 15, Swift tools 6.3, language mode 6. Raising a platform floor or the tools
-version is a major release, because a host that cannot build it cannot use it. macOS is a build
+iOS 18, macOS 15, and watchOS 11, Swift tools 6.3, language mode 6. Raising a platform floor or
+the tools version is a major release, because a host that cannot build it cannot use it. watchOS is
+built at its floor by the checks, not tested: the suite runs on macOS. macOS is a build
 and test host, not a shipping channel: `EnvironmentSnapshot` reports every macOS run as `dev`, so
 `TelemetryDeckConfiguration.testPartition(for:)` puts every macOS install in the test partition,
 and a macOS host that ships must supply `isTestMode` itself.
+
+## Privacy manifest
+
+The core's resource bundle, `Aethergram_AethergramCore.bundle`, carries a `PrivacyInfo.xcprivacy`.
+It declares no tracking, no tracking domains, and no required-reason APIs, and four collected data
+types, Product Interaction, Device ID, Purchase History, and Other Diagnostic Data, each linked to
+the user, not used for tracking, and collected for analytics. It describes the package's payload,
+not what a host puts in it: the host's own manifest and App Store answers must still reflect what
+the host sends.
 
 ## Dependencies
 

@@ -163,10 +163,11 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// Store by the same negation. For an app extension `receiptPath` is the
     /// location its containing app's bundle gives, falling back to its own;
     /// see `receiptURL(forBundleAt:receiptURL:)`.
-    /// `AppTransaction.shared.environment` is the modern, async replacement
-    /// for all of this, and it is async: this
-    /// function is called from a synchronous snapshot, so adopting it would
-    /// change the caller's shape and is deliberately not done here.
+    /// `AppTransaction.shared.environment` does not replace this. Apple
+    /// documents that both development-signed builds run from Xcode and
+    /// TestFlight installs use the sandbox environment, so `.sandbox` cannot
+    /// tell `dev` from `beta`. `shared` is also async, throws when the user is
+    /// not authenticated with the App Store, and may need the network.
     static func buildChannel(
         isDebug: Bool,
         isSimulator: Bool,

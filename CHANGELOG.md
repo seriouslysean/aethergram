@@ -3,6 +3,89 @@
 What each release changed that a host can see. What a version number promises is in
 [STABILITY.md](STABILITY.md); this file is the history that contract was applied to.
 
+## 0.4.0 — 2026-09-23
+
+A 0.x minor with no API break: two methods added to `SignalRecorder`, a platform and a privacy
+manifest added, nothing in the API list removed or changed. The payload version stays 2.0.0.
+
+### Additions
+
+- `SignalRecorder.flushAndWait()` starts one delivery pass now and waits for it to finish, then for
+  every queue write submitted by then, the pass's removal included, to reach the store. It starts
+  no pass, and waits only for the writes, when a retry is already owed, which it never hurries,
+  when consent is not granted, or while collection is closed for a reset. An erase while it waits
+  cancels the pass. Cancelling the caller returns it promptly and forfeits the promise that the
+  writes reached the store; it still takes the recorder's lock first. It promises that pass's
+  completion, not delivery of everything queued.
+- `SignalRecorder.resetClosingCollection(during:)` is `reset()` with collection closed for the
+  length of the closure. Collection reopens when the last overlapping call returns or throws, and
+  the reopen opens a counted session if consent permits, where `reset()` mints only an uncounted
+  session identifier. During the closure a decline erases and stands, a grant takes effect at the
+  reopen, `flush()` waits for the queue writes only, `flushAndWait()` starts no pass, and `reset()`
+  erases and leaves collection closed.
+- watchOS 11 is declared, with iOS 18 and macOS 15.
+- The core's bundle, `Aethergram_AethergramCore.bundle`, ships `PrivacyInfo.xcprivacy`: no
+  tracking, no tracking domains, no required-reason APIs, and Product Interaction, Device ID,
+  Purchase History, and Other Diagnostic Data collected for analytics, linked to the user and not
+  used for tracking. A host's own manifest and App Store answers must still reflect what it sends.
+- `SignalTransport.send` is spelled `nonisolated(nonsending)` in the protocol rather than left to
+  the module's feature flag. The requirement means what it meant, and a plain `async` witness
+  still conforms.
+
+### TelemetryDeck adapter
+
+- `TelemetryDeckTransport` sends over an ephemeral session with no cookie, credential, or URL cache
+  store by default, where 0.3.2 used `URLSession.shared`, so nothing the host's shared session
+  holds reaches the ingest. A session passed to `session:` is used as given.
+- `TelemetryDeckConfiguration` traps at construction on a `baseURL` whose scheme is not `https`.
+  0.3.2 accepted any scheme. A development server over `http` has to move to `https`.
+
+### Delivery
+
+- A retry after a failure is owed at a random draw between the larger of `transmitInterval` and
+  half the backoff ceiling, and the ceiling, rather than at the ceiling, so installs that failed
+  together do not retry together.
+- A grant onto a non-empty queue restored from a killed process schedules its delivery, rather
+  than waiting for the next record or flush. The restore reads and decodes the whole queue file on
+  the granting thread, under the recorder's lock: 1,000 signals, the default `queueLimit`, measured
+  about 38 ms cold on a simulator, and 10,000 about 380 ms.
+
+### Waiting and erasure
+
+- `flush()`, `reset()`, and a decline wait for the queue writes submitted before the call, where
+  0.3.2 waited until the writer went idle, including for writes other threads kept submitting. A
+  write submitted after the call lengthens the wait by at most one store call.
+- A purge refused with an error of code 4 from a domain other than Cocoa's is treated as a refused
+  delete, taking the overwrite and marker path, rather than read as "no file there".
+
+### Upgrading
+
+- On resign or background, call `flush()`, then run `flushAndWait()` inside the platform's
+  expiring-time API, `ProcessInfo.performExpiringActivity` in an extension or `beginBackgroundTask`
+  in an app, and cancel it when the time expires. ADOPTING.md has both patterns.
+- Replace a decline, rotate the identifier, re-grant, `beginSession()` sequence with
+  `resetClosingCollection { rotate() }`, and do not follow it with `beginSession()`. A host lock no
+  longer needs to span the erase.
+
+### Known limits
+
+- Every queue write rewrites the whole file, about 819 KB for a full queue at the default 1,000
+  signals and about 13.6 ms on a Mac. Records that arrive while a write is pending coalesce into
+  one write.
+- Overflow eviction and a permanent rejection lose signals, and a failed removal write can resend a
+  batch: delivery is at least once.
+- An install from TestFlight with no receipt reports the `dev` channel, which lands in the same
+  test partition as `beta`.
+
+### Tooling
+
+- `Scripts/run-checks.sh` adds an api-break gate against the last release tag, which reads the
+  release from this file's top heading; the release-heading check; a watchOS build at the floor; a
+  privacy-manifest check; a consumer fixture build; and a floor on the root suite's test count. It
+  needs the release tags, so not a shallow clone.
+- CI runs `Scripts/check-release-heading.sh` on every push of a tag matching `v*`, refusing a tag
+  this file's top heading does not name with a date.
+
 ## 0.3.2 — 2026-09-23
 
 A patch: nothing in the API list moved, and the payload version stays 2.0.0.

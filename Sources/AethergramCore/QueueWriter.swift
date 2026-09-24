@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Serializes every write to the durable queue, in the order the recorder
 /// committed them.
@@ -33,11 +34,30 @@ import Foundation
 /// than that — a file it could not read, one it could not reach — and only
 /// the erase says to drop it. The drain runs the purge, then the snapshot.
 ///
+/// **The barrier.** Every submit takes a ticket, in submit order, and a wait
+/// takes the newest at its call. A waiter returns once a write has landed
+/// that covers every submission up to its ticket: the first drain step to
+/// start after that submission has ended. Nothing submitted after the call
+/// is promised by the return, even when it happens to be on the store by
+/// then.
+///
+/// A later submission can still lengthen the wait, within that one step and
+/// never by another. A step takes everything pending when it starts,
+/// submissions made after the waiter included, and makes at most two store
+/// calls: the purge, then the newest snapshot. A later snapshot that
+/// supersedes a pending one, or a later purge that drops it, replaces that
+/// call. The step makes one more call than the waiter's own submissions
+/// needed only when it ends up holding a purge and a snapshot where those
+/// held one of the two — a snapshot coalesced behind a pending purge is the
+/// case the recorder meets. A submission made once the step has started
+/// goes to the next step, which the waiter does not wait for.
+///
 /// **What this costs.** The write no longer completes before `record` returns,
 /// so a kill in the microseconds between them loses that signal where the
 /// synchronous version would not have. `flush()` closes that window at the one
-/// moment it is known to matter, by waiting for pending writes on the way out.
-final class QueueWriter: @unchecked Sendable {
+/// moment it is known to matter, by waiting on the way out for the writes
+/// submitted before it.
+final class QueueWriter: Sendable {
     // MARK: Lifecycle
 
     init(storage: any SignalQueueStorage, label: String) {
@@ -63,17 +83,38 @@ final class QueueWriter: @unchecked Sendable {
         }
     }
 
-    /// Waits until the writer's current drain goes idle: every write
-    /// submitted before the call, and every one submitted while that drain
-    /// runs, because it keeps writing until nothing is left, so a caller
-    /// recording continuously from another thread extends the wait. A write
-    /// submitted after that drain goes idle can be scheduled behind this wait
-    /// and still be pending when it returns. Two callers need it: the
-    /// consumer's deactivation path, where the process is about to stop being
-    /// allowed to run, and an erase, which promises the file is gone rather
-    /// than that a delete was asked for.
+    /// Blocks until every write submitted before the call has reached the
+    /// store. A write submitted after it, from any thread, is not promised by
+    /// it, and lengthens it by at most one store call, as the type's barrier
+    /// describes. Two callers need it: the consumer's deactivation path,
+    /// where the process is about to stop being allowed to run, and an erase,
+    /// which promises the file is gone rather than that a delete was asked
+    /// for.
+    ///
+    /// Called from the writer's own queue, it waits on itself.
     func waitForPendingWrites() {
-        queue.sync {}
+        let released = DispatchSemaphore(value: 0)
+        guard enqueueWaiter({ released.signal() }) else { return }
+        released.wait()
+    }
+
+    /// `waitForPendingWrites()` for an async caller: the same barrier, reached
+    /// by suspending rather than by parking a thread the cooperative pool
+    /// cannot get back.
+    ///
+    /// Cancellation does not end it early, so a return always means the
+    /// writes landed. `flushAndWait()` runs it in a task of its own and lets
+    /// a cancelled caller stop waiting on that task instead.
+    ///
+    /// Named apart from the synchronous form because an async overload of one
+    /// name wins in every async context, which would turn each existing
+    /// unawaited call there into a compile error.
+    func awaitPendingWrites() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if !enqueueWaiter({ continuation.resume() }) {
+                continuation.resume()
+            }
+        }
     }
 
     // MARK: Private
@@ -90,47 +131,89 @@ final class QueueWriter: @unchecked Sendable {
         }
     }
 
+    /// A caller of the barrier, released once the store has every intent up
+    /// to `ticket`.
+    private struct Waiter {
+        let ticket: UInt64
+        let release: @Sendable () -> Void
+    }
+
+    /// Everything the lock guards, read and written only inside `withLock`.
+    ///
+    /// Tickets are what make the barrier exact. Each submit takes the next
+    /// one, and a drain that takes `pending` takes the newest ticket with it,
+    /// because what it takes is the merge of every intent up to that one. A
+    /// wait for "nothing pending" instead lasts as long as anyone keeps
+    /// submitting, and a wait for "the queue has run what it holds" can run
+    /// ahead of a submit that has not reached the queue yet.
+    private struct State {
+        var pending = Pending()
+        var scheduled = false
+        var submitted: UInt64 = 0
+        var completed: UInt64 = 0
+        /// In ticket order, because tickets are taken in submit order.
+        var waiters: [Waiter] = []
+    }
+
     private let storage: any SignalQueueStorage
     private let queue: DispatchQueue
-    private let lock = NSLock()
-    private var pending = Pending()
-    private var scheduled = false
+    private let state = Mutex(State())
 
     private func submit(_ update: (inout Pending) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        update(&pending)
-        guard !scheduled else { return }
-        scheduled = true
-        // Dispatched inside the lock: unlocking first leaves a window where a
-        // concurrent `waitForPendingWrites()` returns before this intent is on
-        // the queue at all. `self` is captured strongly because a snapshot has
-        // to outlive the recorder that submitted it: `record` does not wait,
-        // so a recorder released before the queue runs would take the writer,
-        // and the unwritten signal, down with it.
-        queue.async { self.drain() }
+        state.withLock { state in
+            update(&state.pending)
+            state.submitted += 1
+            guard !state.scheduled else { return }
+            state.scheduled = true
+            // `self` is captured strongly because a snapshot has
+            // to outlive the recorder that submitted it: `record` does not wait,
+            // so a recorder released before the queue runs would take the writer,
+            // and the unwritten signal, down with it.
+            queue.async { self.drain() }
+        }
+    }
+
+    /// Whether the caller has something to wait for. Asked and registered in
+    /// one critical section, so a drain cannot complete the ticket between
+    /// the question and the registration and leave the waiter unreleased.
+    private func enqueueWaiter(_ release: @escaping @Sendable () -> Void) -> Bool {
+        state.withLock { state in
+            guard state.completed < state.submitted else { return false }
+            state.waiters.append(Waiter(ticket: state.submitted, release: release))
+            return true
+        }
     }
 
     /// Runs on `queue`. Keeps writing what is pending until nothing is left,
     /// so a burst submitted while a write is in flight still coalesces into
-    /// one dispatch rather than queuing one closure per submit.
+    /// one dispatch rather than queuing one closure per submit. Releases each
+    /// waiter as the write covering its ticket lands, not when the drain
+    /// goes idle.
     private func drain() {
         while true {
-            lock.lock()
-            let next = pending
-            guard !next.isEmpty else {
-                scheduled = false
-                lock.unlock()
-                return
+            let taken: (next: Pending, ticket: UInt64)? = state.withLock { state in
+                guard !state.pending.isEmpty else {
+                    state.scheduled = false
+                    return nil
+                }
+                defer { state.pending = Pending() }
+                return (state.pending, state.submitted)
             }
-            pending = Pending()
-            lock.unlock()
-            if next.purge {
+            guard let taken else { return }
+            if taken.next.purge {
                 storage.purge()
             }
-            if let signals = next.contents {
+            if let signals = taken.next.contents {
                 storage.persist(signals)
             }
+            let released = state.withLock { state in
+                state.completed = taken.ticket
+                let covered = state.waiters.prefix { $0.ticket <= taken.ticket }
+                state.waiters.removeFirst(covered.count)
+                return covered
+            }
+            // Outside the lock: a released caller may submit straight away.
+            released.forEach { $0.release() }
         }
     }
 }

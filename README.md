@@ -23,7 +23,7 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.3.2")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.4.0")
 ```
 
 ```swift
@@ -71,6 +71,16 @@ let recorder = SignalRecorder(
 recorder.updateConsent(storedAnswer)   // on every activation, before anything records
 recorder.beginSession()                // a session boundary is host-specific
 recorder.record("Session.started", parameters: ["surface": "home"])
+
+// On the way out: queued signals to disk now, then a send. Run the await
+// inside the platform's expiring-time API and cancel it when the time runs
+// out; ADOPTING.md has the pattern for an app and for an app extension.
+recorder.flush()
+await recorder.flushAndWait()
+
+// A data reset that also replaces the identifier: nothing is recorded or
+// sent until the closure returns, and the counted session reopens after it.
+recorder.resetClosingCollection { rotateMyAnalyticsIdentifier() }
 ```
 
 Signal names are yours. The package prefixes them with `signalPrefix` and otherwise does not
@@ -84,8 +94,9 @@ the writer's own queue, off the call that recorded it, so `flush()` waits for th
 up on the way out — which is why the host calls it from its own deactivation path. Delivery is
 coalesced: a full batch goes without waiting for company, and anything less waits
 `transmitInterval`. A retryable failure keeps the batch queued and backs off exponentially,
-capped at `maxBackoffInterval` but never below `transmitInterval`, and a full batch or a
-`flush()` still waits out a backoff owed. A permanent rejection drops the batch rather than
+capped at `maxBackoffInterval` but never below `transmitInterval`, and retries at a random point
+between half that ceiling and the ceiling, so installs that failed together do not retry together.
+A full batch, a `flush()`, or a `flushAndWait()` still waits out a backoff owed. A permanent rejection drops the batch rather than
 retrying against an endpoint that will keep refusing. Past `queueLimit` the oldest signals are
 dropped, because the recent ones describe the version someone is actually running.
 
