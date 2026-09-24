@@ -269,8 +269,6 @@ struct SignalPayloadTests {
         #expect(signal.parameters[PayloadKey.purchaseCountryCode] == "JP")
     }
 
-    /// Asserts the key *set*, not a sample of it, so a field the audit dropped
-    /// cannot quietly reappear without failing here.
     /// Regression, caught by the first sim walk of this transport rather than
     /// by any static check: a simulator ships a receipt file named `receipt`,
     /// so deriving `isAppStore` from the receipt name reported every simulator
@@ -392,6 +390,9 @@ struct SignalPayloadTests {
         #expect(resolved == Self.fakeReceipt(extensionBundle))
     }
 
+    /// Asserts the key *set*, not a sample of it, so a field the audit dropped
+    /// cannot quietly reappear without failing here.
+    ///
     /// The package's identity is not among them: it is stamped per signal by
     /// the recorder, so that a host replacing this payload cannot drop it.
     @Test("The environment snapshot emits exactly its declared keys")
