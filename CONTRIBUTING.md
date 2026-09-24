@@ -130,7 +130,7 @@ failure, not the reporter.
 - Every host-specific decision — where the queue is written, where the consent answer is stored,
   how the identifier is minted, which logging subsystem to use — arrives through a protocol or a
   closure the host supplies.
-- No third-party dependency. `Package.swift` has no `dependencies:` line and is not getting one.
+- No third-party dependency. `Package.swift` declares no package dependency and is not getting one.
 
 ## Releasing
 
