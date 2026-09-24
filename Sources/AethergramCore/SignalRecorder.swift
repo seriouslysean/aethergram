@@ -351,8 +351,8 @@ public final class SignalRecorder: Sendable {
     }
 
     /// Sends queued signals until the queue empties or a send fails. Internal
-    /// rather than public so tests can await a transmission the consumer only
-    /// ever kicks off; `flush()` is the consumer's door.
+    /// rather than public so tests can await a drain directly; `flush()` and
+    /// `flushAndWait()` are the consumer's doors.
     func drain() async {
         let claim: Int? = lock.withLock { current in
             guard current.drainClaim == nil else { return nil }

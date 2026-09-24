@@ -11,8 +11,9 @@ import Synchronization
 /// A conformance must not call back into the recorder. `load()` is called
 /// under the recorder's non-recursive lock, where a call back in fails a
 /// precondition and terminates the process. `persist` and `purge` run on the
-/// writer queue that `flush()`, `reset()` and a decline wait on, where a call
-/// back into one of those waits on the queue it is running on.
+/// writer queue that `flush()`, `reset()`, `resetClosingCollection(during:)`
+/// and a decline wait on, where a call back into one of those waits on the
+/// queue it is running on.
 ///
 /// One store backs one recorder, and it owns what it is backed by. Two live
 /// stores over one file — in one process or two — is not a configuration this
