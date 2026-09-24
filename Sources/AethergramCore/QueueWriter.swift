@@ -102,9 +102,9 @@ final class QueueWriter: Sendable {
     /// by suspending rather than by parking a thread the cooperative pool
     /// cannot get back.
     ///
-    /// Cancellation does not end it early. The erase it stands behind
-    /// promises the file is gone, and a cancelled wait that returned first
-    /// would let that promise be read before it was kept.
+    /// Cancellation does not end it early, so a return always means the
+    /// writes landed. `flushAndWait()` runs it in a task of its own and lets
+    /// a cancelled caller stop waiting on that task instead.
     ///
     /// Named apart from the synchronous form because an async overload of one
     /// name wins in every async context, which would turn each existing
