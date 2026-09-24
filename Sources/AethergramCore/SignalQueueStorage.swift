@@ -79,7 +79,7 @@ public protocol SignalQueueStorage: Sendable {
 /// A copy of one store is the same store and shares all of it; a store
 /// constructed separately is not. Give a second consumer in one process a
 /// `filename` of its own, and give a second process a container of its own.
-public struct FileSignalQueueStorage: SignalQueueStorage, QueueLimitAdopting {
+public struct FileSignalQueueStorage: SignalQueueStorage {
     // MARK: Lifecycle
 
     /// - Parameters:
@@ -522,17 +522,6 @@ public struct FileSignalQueueStorage: SignalQueueStorage, QueueLimitAdopting {
             return false
         }
     }
-}
-
-/// A store that bounds what it holds beyond the recorder's snapshot by the
-/// recorder's `queueLimit`, which the recorder hands it at construction.
-///
-/// It exists only so the recorder can hand the limit over without naming a
-/// concrete store. It is internal, so a store outside this module cannot
-/// conform, and a host's storage that wraps a file store cannot forward the
-/// limit to it: the wrapped store keeps the limit it already has.
-protocol QueueLimitAdopting {
-    func adoptQueueLimit(_ limit: Int)
 }
 
 /// Every file operation the file store performs, so a test can fail one
