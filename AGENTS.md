@@ -33,7 +33,7 @@ Rules for working in this repo.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
 22. Keep the tag vocabulary short by design, and add one only when a suite applies it, because a tag nothing uses is a category nobody is thinking in.
 23. Write POSIX `sh` in `Scripts/` and `.githooks/`, and avoid bashisms so the same scripts run under `dash`.
-24. Run the adversarial pass over concurrency, the consent path, and published prose before reporting work done, because the suite only re-proves past failures.
+24. Run one adversarial pass over concurrency, the consent path, and published prose before reporting work done, because the suite only re-proves past failures. After its fixes, reopen code only for a consent bypass, data loss on a host's normal path, a hang a host can reach, a false doc claim, or a compile break, and record anything else as an accepted risk or a follow-up issue.
 
 ## Working
 
@@ -41,6 +41,7 @@ Rules for working in this repo.
 26. Merge with a merge commit rather than a squash, so each commit on `main` stays individually revertable.
 27. Commit and open the pull request on the owner's behalf; the owner reviews the diff and merges.
 28. Keep session links, agent trailers, and co-author lines out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry.
-29. Write terse and factual prose, and never pad it with filler, preamble, or a motivational opener.
-30. Keep the orchestrating session to routing and judgement, and dispatch implementation and review to agents where a harness provides them.
+29. Write terse, factual prose that opens with the substance and still reads in whole sentences.
+30. Dispatch an agent only for a sizeable, independent track, such as a lane of source files or a wide investigation, and do in the session what a handful of tool calls finishes, because each agent re-reads the repository and its report has to be read in turn.
 31. State the reason in one sentence when dispatching above an agent's pinned model, since escalation is a decision rather than a default.
+32. Build what a host needs or a measurement shows, and move the rest to an issue that names what would reopen it, because every addition to a published package is a contract to keep.
