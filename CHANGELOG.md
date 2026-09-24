@@ -15,8 +15,8 @@ manifest added, nothing in the API list removed or changed. The payload version 
   no pass, and waits only for the writes, when a retry is already owed, which it never hurries,
   when consent is not granted, or while collection is closed for a reset. An erase while it waits
   cancels the pass. Cancelling the caller returns it promptly and forfeits the promise that the
-  writes landed; it still takes the recorder's lock first. It promises that pass's completion, not
-  delivery of everything queued.
+  writes reached the store; it still takes the recorder's lock first. It promises that pass's
+  completion, not delivery of everything queued.
 - `SignalRecorder.resetClosingCollection(during:)` is `reset()` with collection closed for the
   length of the closure. Collection reopens when the last overlapping call returns or throws, and
   the reopen opens a counted session if consent permits, where `reset()` mints only an uncounted
@@ -69,8 +69,9 @@ manifest added, nothing in the API list removed or changed. The payload version 
 
 ### Known limits
 
-- A full queue rewrites the file on every record: about 819 KB at the default 1,000 signals, about
-  13.6 ms on a Mac.
+- Every queue write rewrites the whole file, about 819 KB for a full queue at the default 1,000
+  signals and about 13.6 ms on a Mac. Records that arrive while a write is pending coalesce into
+  one write.
 - Overflow eviction and a permanent rejection lose signals, and a failed removal write can resend a
   batch: delivery is at least once.
 - An install from TestFlight with no receipt reports the `dev` channel, which lands in the same
@@ -82,8 +83,8 @@ manifest added, nothing in the API list removed or changed. The payload version 
   release from this file's top heading; the release-heading check; a watchOS build at the floor; a
   privacy-manifest check; a consumer fixture build; and a floor on the root suite's test count. It
   needs the release tags, so not a shallow clone.
-- CI runs `Scripts/check-release-heading.sh` on every tag push, refusing a tag this file's top
-  heading does not name with a date.
+- CI runs `Scripts/check-release-heading.sh` on every push of a tag matching `v*`, refusing a tag
+  this file's top heading does not name with a date.
 
 ## 0.3.2 — 2026-09-23
 

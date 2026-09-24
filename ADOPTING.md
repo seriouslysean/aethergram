@@ -73,7 +73,7 @@ recorder's lock held:
 | `clientUserProvider` | The drain's, a utility-priority task | Yes |
 | `environmentProvider` | Whichever thread makes the first permitted record after a grant | Yes |
 | `RetentionStore` | Whichever thread calls `record`, `beginSession`, `endSession`, `updateConsent`, `reset`, or `resetClosingCollection` | Yes |
-| `SignalQueueStorage.load()` | The thread that grants; after a grant made during `resetClosingCollection`, whichever thread records or drains first | Yes |
+| `SignalQueueStorage.load()` | The thread that makes the recorder's first grant, and never after an erase: a decline, `reset()`, or `resetClosingCollection` marks the queue read | Yes |
 | `SignalQueueStorage.persist` and `purge` | The recorder's serial writer queue | No; `flush()`, `flushAndWait()`, `reset()`, `resetClosingCollection`, and a decline wait on that queue |
 | `SignalTransport.send` | The drain's | No |
 
@@ -117,8 +117,8 @@ return, and lengthens the wait by at most one store call.
 
 | Call | Returns once |
 |---|---|
-| `flush()` | Every queue write submitted before it has landed. It does not wait for the send. |
-| `flushAndWait()` | One delivery pass has finished, then every queue write submitted by then, the pass's removal included, has landed. It suspends rather than blocks. It starts no pass, and waits only for the writes, when a retry is owed, consent is not granted, or collection is closed for a reset. Cancelling the caller returns it promptly, without the promise that the writes landed. |
+| `flush()` | Every queue write submitted before it has been attempted; one the store skips or fails still ends the wait. It does not wait for the send. |
+| `flushAndWait()` | One delivery pass has finished, then every queue write submitted by then, the pass's removal included, has been attempted. It suspends rather than blocks. It starts no pass, and waits only for the writes, when a retry is owed, consent is not granted, or collection is closed for a reset. Cancelling the caller returns it promptly, without the promise that the writes were attempted. |
 | `updateConsent(.granted)` | On the recorder's first grant, the queue a killed process left has been read and decoded, on the calling thread under the recorder's lock. A full queue at the default `queueLimit` of 1,000 measured about 38 ms on a simulator. |
 | `updateConsent` with anything but `.granted` | The erase has reached the queue store and the retention store. |
 | `reset()` | The same. |
@@ -184,11 +184,13 @@ counts and you decide when. Two shapes of the same order:
 
 The view controller calls into the process-wide recorder; it does not own one.
 
-**Deliver on the way out.** `flush()` is synchronous and gets every queued signal to disk, so a
-process killed after it loses nothing. `flushAndWait()` then sends, and only runs as long as the
-OS grants the process time, so run it inside the API that grants it and cancel it when that time
-expires. Cancelling returns it at once without stopping the send; whatever the send has not
-delivered when the process is suspended or killed stays queued and on disk.
+**Deliver on the way out.** `flush()` is synchronous and waits until the queue writes submitted
+before it have been attempted. A write the store skips or fails is logged, not retried by the
+flush, so a kill after it loses what did not land. `flushAndWait()` then sends, and only runs as
+long as the OS grants the process time, so run it inside the API that grants it and cancel it when
+that time expires. Cancelling returns it at once without stopping the send; whatever the send has not
+delivered when the process is suspended or killed stays queued, and on disk where its write
+landed.
 
 An app extension asks with `ProcessInfo.performExpiringActivity`. Its block is called once with
 `expired == true` when no time is granted. Otherwise it is called with `false`, and may be called
