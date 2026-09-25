@@ -266,6 +266,46 @@ a co-author trailer in title case|Co-Authored-By: someone
 a session trailer in lower case|agent-session: 0f21
 EOF
 
+# A read that fails leaves nothing to match, so each of these must fail the scan rather than let
+# it print clean over input it never saw.
+it "a message in another encoding is still scanned"
+printf 'fix: caf\351\n\nAgent-Session: 0f21\n' > "$TMP/latin1"
+OUT="$(LC_ALL=en_US.UTF-8 "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/latin1" 2>&1)"; SCAN_RC=$?
+# Refusing the unreadable message is not enough: the scan must have read it and found the trailer.
+if [ "$SCAN_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'message: 3:Agent-Session'; then
+    printf '%s\n' "$OUT"
+    fail "a message with a byte invalid in the caller's locale exited $SCAN_RC without its trailer refused"
+else
+    pass
+fi
+
+it "a message the scan cannot read fails rather than reporting clean"
+OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/no-such-message" 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+    printf '%s\n' "$OUT"
+    fail "a missing message file exited $SCAN_RC rather than 2"
+else
+    pass
+fi
+
+# Each grep in the message tier is failed alone, by a stand-in that errors on that grep's flags and
+# runs the real one otherwise, so dropping either check fails its own row.
+REAL_GREP="$(command -v grep)"
+for flags in -nE -inE; do
+    it "a message grep that fails on $flags fails the scan rather than reporting clean"
+    FAKE="$TMP/fake-grep$flags"
+    mkdir -p "$FAKE"
+    printf '#!/bin/sh\n[ "$1" = "%s" ] && exit 2\nexec "%s" "$@"\n' "$flags" "$REAL_GREP" > "$FAKE/grep"
+    chmod +x "$FAKE/grep"
+    OUT="$(PATH="$FAKE:$PATH" "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/clean" 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+        printf '%s\n' "$OUT"
+        fail "a failing grep on $flags exited $SCAN_RC rather than 2"
+    else
+        pass
+    fi
+done
+
 # The history tier reads `%H %s` lines rather than a message file, so it is proved on real commits.
 # These are throwaway repos: the hooks are switched off so a fixture meant to be refused can exist.
 fixture_git() {
