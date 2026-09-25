@@ -3,6 +3,28 @@
 What each release changed that a host can see. What a version number promises is in
 [STABILITY.md](STABILITY.md); this file is the history that contract was applied to.
 
+## 0.4.2 — 2026-09-25
+
+A patch: nothing in the API list moved, and the payload version stays 2.0.0.
+
+### Delivery
+
+- A drain that `reset()`, `resetClosingCollection(during:)`, or a decline cancelled after it had
+  finished its delay, but before it took a batch, could still take the queue recorded after that
+  erase. It then sent from a cancelled task, which `TelemetryDeckTransport` reads as retryable, so
+  the recorder owed a backoff before those signals went out: a draw between 10 and 20 seconds at
+  the default intervals, during which `flushAndWait()` started no pass. A drain now takes a batch
+  only while it is still the recorder's scheduled drain. The signals stayed queued under the grant
+  that recorded them, and nothing was sent without consent, before or after this change.
+
+### Tooling
+
+- The leak scan's message tier matches co-author and session trailers in any capitalization. It
+  reads a message as bytes whatever the caller's locale, and exits with an error rather than
+  reporting clean when it cannot read the message file or either grep over it fails.
+- Each scanner pattern has a check that fails when that pattern is removed.
+- CI checks out with `actions/checkout` v7.0.1.
+
 ## 0.4.1 — 2026-09-24
 
 A patch: nothing in the API list moved, and the payload version stays 2.0.0.
