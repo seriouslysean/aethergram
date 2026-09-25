@@ -353,9 +353,16 @@ public final class SignalRecorder: Sendable {
     /// Sends queued signals until the queue empties or a send fails. Internal
     /// rather than public so tests can await a drain directly; `flush()` and
     /// `flushAndWait()` are the consumer's doors.
-    func drain() async {
+    ///
+    /// - Parameter slot: The id a scheduled drain holds the slot under. A
+    ///   test that drives a drain directly passes nothing, unless it stands in
+    ///   for a scheduled one.
+    func drain(slot: Int? = nil) async {
         let claim: Int? = lock.withLock { current in
             guard current.drainClaim == nil else { return nil }
+            // A drain an erase detached still runs once promoted; the slot is
+            // what tells it the queue is no longer its to send.
+            if let slot, current.drain.owned?.id != slot { return nil }
             current.lastClaimID &+= 1
             current.drainClaim = current.lastClaimID
             return current.lastClaimID
@@ -484,7 +491,8 @@ public final class SignalRecorder: Sendable {
         /// in flight belongs to the erased generation, its verdict is
         /// discarded, and `nextBatch` refuses the old token from here on, so
         /// the drain after this one cannot find itself locked out until the
-        /// cancelled send unwinds.
+        /// cancelled send unwinds. The drain the erase detaches cannot claim
+        /// again: a scheduled drain claims only while the slot holds it.
         mutating func eraseCollected() {
             pending = []
             retention = nil
@@ -902,7 +910,7 @@ public final class SignalRecorder: Sendable {
                 guard self?.promoteWaitingDrain(id: id) == true else { return }
             }
             guard !Task.isCancelled, let self else { return }
-            await drain()
+            await drain(slot: id)
             releaseDrainSlot(id: id)
         }
     }
