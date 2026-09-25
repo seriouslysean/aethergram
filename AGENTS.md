@@ -45,3 +45,7 @@ Rules for working in this repo. `CONTRIBUTING.md` holds the hook setup, the chec
 30. Dispatch an agent only for a sizeable, independent track, such as a lane of source files or a wide investigation, and do in the session what a handful of tool calls finishes, because each agent re-reads the repository and its report has to be read in turn.
 31. State the reason in one sentence when dispatching above an agent's pinned model, since escalation is a decision rather than a default.
 32. Build what a host needs or a measurement shows, and move the rest to an issue that names what would reopen it, because every addition to a published package is a contract to keep.
+
+## Declaring for the vendor
+
+33. Start anything declared on the vendor's behalf — the privacy manifest, identifier hashing, wire defaults — from the vendor SDK's own artifact, and record each difference as a decision, because a host's store disclosures were written against that SDK.
