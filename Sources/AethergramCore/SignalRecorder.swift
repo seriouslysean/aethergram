@@ -353,7 +353,10 @@ public final class SignalRecorder: Sendable {
     /// Sends queued signals until the queue empties or a send fails. Internal
     /// rather than public so tests can await a drain directly; `flush()` and
     /// `flushAndWait()` are the consumer's doors.
-    func drain() async {
+    ///
+    /// - Parameter slot: The id a scheduled drain holds the slot under. A
+    ///   test's direct call runs in no slot and passes nothing.
+    func drain(slot: Int? = nil) async {
         let claim: Int? = lock.withLock { current in
             guard current.drainClaim == nil else { return nil }
             current.lastClaimID &+= 1
@@ -902,7 +905,7 @@ public final class SignalRecorder: Sendable {
                 guard self?.promoteWaitingDrain(id: id) == true else { return }
             }
             guard !Task.isCancelled, let self else { return }
-            await drain()
+            await drain(slot: id)
             releaseDrainSlot(id: id)
         }
     }
