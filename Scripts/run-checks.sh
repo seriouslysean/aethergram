@@ -40,7 +40,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Each shape the file scan refuses is assembled at run time, from a printf argument or `$FOREIGN`,
 # so no line of this file carries one and the scan exempts none of it. `$FOREIGN` has the fewest
-# digits the scan reads as a foreign issue number, so the fixtures prove that floor as well.
+# digits the scan reads as a foreign issue number, so a scan that raises that floor fails here.
 FOREIGN=100
 
 it "a leak staged then reverted in the working tree is still refused"
