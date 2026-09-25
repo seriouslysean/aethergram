@@ -123,6 +123,31 @@ struct DeliverySchedulingTests {
         #expect(fixture.storage.signalsOnDisk.isEmpty)
     }
 
+    /// A reset detaches and cancels the owned drain, but a drain already past
+    /// its promotion runs on. Were it to claim, it would send the queue the
+    /// reset left from a cancelled task, whose send fails as retryable: a
+    /// backoff owed for an attempt that never reached the network.
+    @Test("A drain a reset detached claims nothing from the queue after it")
+    func drainDetachedByAResetClaimsNothing() async throws {
+        let directory = try #require(TestTempDirectory.url)
+        let fixture = try makeFixture(
+            directory: directory,
+            configuration: testConfiguration(transmitInterval: 3600),
+            now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
+        )
+        fixture.recorder.updateConsent(.granted)
+        fixture.recorder.record("pre")
+        let detached = fixture.recorder.drainsScheduled
+        fixture.recorder.reset()
+        fixture.recorder.record("post")
+
+        // The detached drain, arriving at its claim after the reset.
+        await fixture.recorder.drain(slot: detached)
+
+        #expect(fixture.transport.sendCount == 0)
+        #expect(fixture.recorder.secondsUntilRetry == 0)
+    }
+
     /// A record landing while a drain is running schedules nothing: the slot
     /// says running, and a second task would send the batch already in flight
     /// a second time. The running drain has to take that signal, and when it
