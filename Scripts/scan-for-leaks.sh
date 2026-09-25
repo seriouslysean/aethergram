@@ -42,8 +42,10 @@ ISSUE_URL_RE='github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(issues|pull)/[0-9]+'
 
 # What a message must not carry: the tracked-file shapes, plus the trailer keys that only ever
 # appear in one. Trailers stay out of the file tier, where a doc naming the shape would refuse
-# itself.
-MESSAGE_RE="/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|$ISSUE_URL_RE|^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):"
+# itself. Their keys are matched in any case, and apart, because `-i` over the rest would let the
+# record-id shape match inside ordinary words.
+MESSAGE_RE="/Users/[a-zA-Z0-9]|/home/[a-zA-Z]|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+#[0-9]+|#[0-9]{3,}|(DR|RL)-[0-9]{3}|$ISSUE_URL_RE"
+TRAILER_RE='^(Co-authored-by|[A-Za-z][A-Za-z0-9-]*-Session(-Id)?):'
 
 # GitHub writes one subject itself, on a web merge that runs no hook: `Merge pull request #N from
 # <owner>/<branch>`. Its number past 99 would otherwise fail every later history scan, and history
@@ -69,7 +71,9 @@ scan() {
 # One tier, two callers: the commit-msg hook reads the message being written, the release sweep
 # reads every message already in history.
 scan_messages() {
-    _hits="$(printf '%s\n' "$1" | grep -nE "$MESSAGE_RE")"
+    # A line both greps match is printed once.
+    _hits="$({ printf '%s\n' "$1" | grep -nE "$MESSAGE_RE"
+        printf '%s\n' "$1" | grep -inE "$TRAILER_RE"; } | sort -t: -k1,1n -u)"
     [ -z "$_hits" ] && return 0
     printf '%s\n' "$_hits" | head -20 | while IFS= read -r _l; do printf '  message: %s\n' "$_l"; done
     return 1
