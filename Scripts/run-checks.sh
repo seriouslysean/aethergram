@@ -113,66 +113,42 @@ else
     fi
 fi
 
-# The message tier holds its own copy of the number pattern, so its fixtures prove nothing about
-# the file scan's.
-it "a foreign issue number staged into a tracked file is refused"
-NUMBER="$TMP/number"
-mkdir -p "$NUMBER/Scripts"
-cp "$ROOT/Scripts/scan-for-leaks.sh" "$NUMBER/Scripts/scan-for-leaks.sh"
-chmod +x "$NUMBER/Scripts/scan-for-leaks.sh"
-(cd "$NUMBER" && git init -q && printf 'see #%s\n' "$FOREIGN" > note.txt && git add note.txt)
-OUT="$(cd "$NUMBER" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
-if [ "$SCAN_RC" -eq 0 ]; then
-    fail "a foreign issue number staged into a tracked file was accepted"
-elif ! printf '%s\n' "$OUT" | grep -q "foreign issue number: note.txt:.*#$FOREIGN"; then
-    printf '%s\n' "$OUT"
-    fail "the scanner refused for a reason other than the staged number"
-else
-    pass
-fi
+# One row a shape the file scan refuses: what is staged, and the label its refusal must name,
+# since a line can match more than one pattern and only its own proves that one is there. The
+# message tier holds its own copy of each pattern, so its rows prove nothing about these. Rows are
+# read on fd 3 so nothing in the loop can consume them from stdin.
+AT=@
+WHO=somebody
+_n=0
+while IFS='|' read -r name label line <&3; do
+    _n=$((_n + 1))
+    it "$name staged into a tracked file is refused"
+    SHAPE="$TMP/file-shape-$_n"
+    mkdir -p "$SHAPE/Scripts"
+    cp "$ROOT/Scripts/scan-for-leaks.sh" "$SHAPE/Scripts/scan-for-leaks.sh"
+    chmod +x "$SHAPE/Scripts/scan-for-leaks.sh"
+    (cd "$SHAPE" && git init -q && printf '%s\n' "$line" > note.txt && git add note.txt)
+    OUT="$(cd "$SHAPE" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -eq 0 ]; then
+        fail "$name staged into a tracked file was accepted"
+    elif ! printf '%s\n' "$OUT" | grep -qF "$label: note.txt:"; then
+        printf '%s\n' "$OUT"
+        fail "the scanner refused for a reason other than $label"
+    else
+        pass
+    fi
+done 3<<EOF
+a Linux home path|absolute home path|see /home/$WHO/notes
+an email address|email address|write to someone${AT}example.com
+a cross-repo issue reference|cross-repo issue reference|see foo/bar#$FOREIGN
+a foreign issue number|foreign issue number|see #$FOREIGN
+a private record reference|private record reference|see DR-$FOREIGN
+a private ruling reference|private record reference|see RL-$FOREIGN
+an issue URL|issue or pull request URL|see github.com/foo/bar/issues/$FOREIGN
+a pull request URL|issue or pull request URL|see github.com/foo/bar/pull/$FOREIGN
+EOF
 
 printf '\ncommit message gate\n'
-
-it "a session trailer in a message is refused"
-printf 'fix: a thing\n\nAgent-Session: 0f21\n' > "$TMP/trailer"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/trailer" >/dev/null 2>&1; then
-    fail "a message carrying a session trailer was accepted"
-else
-    pass
-fi
-
-it "an issue or pull request URL in a message is refused"
-printf 'fix: a thing\n\nSee github.com/foo/bar/issues/%s\n' 42 > "$TMP/issueurl"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/issueurl" >/dev/null 2>&1; then
-    fail "a message carrying an issue or pull request URL was accepted"
-else
-    pass
-fi
-
-it "a hash-prefixed leak line in a message is refused"
-printf 'fix: a thing\n\n# see github.com/foo/bar/issues/%s\n' 42 > "$TMP/hashline"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/hashline" >/dev/null 2>&1; then
-    fail "a message carrying a #-prefixed leak line was accepted"
-else
-    pass
-fi
-
-# One shape per message, so each check fails when its own alternative is dropped from the pattern.
-it "a macOS home path in a message is refused"
-printf 'fix: a thing\n\nSee /Users/%s/notes.\n' somebody > "$TMP/macoshome"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/macoshome" >/dev/null 2>&1; then
-    fail "a message carrying a macOS home path was accepted"
-else
-    pass
-fi
-
-it "a Linux home path in a message is refused"
-printf 'fix: a thing\n\nSee /home/%s/notes.\n' somebody > "$TMP/linuxhome"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/linuxhome" >/dev/null 2>&1; then
-    fail "a message carrying a Linux home path was accepted"
-else
-    pass
-fi
 
 it "an ordinary message is accepted"
 printf 'fix: a thing\n\nOne sentence saying why.\n' > "$TMP/clean"
@@ -183,29 +159,85 @@ else
     fail "a clean message was refused"
 fi
 
-it "a merge subject typed into a message is refused"
-printf 'Merge pull request #%s from seriouslysean/x\n' "$FOREIGN" > "$TMP/mergesubject"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/mergesubject" >/dev/null 2>&1; then
-    fail "a message carrying GitHub's merge subject was accepted, though no hook ever sees one GitHub wrote"
+# One row a shape the message scan refuses, as the subject or in the body. A refused message names
+# no pattern, so each row matches exactly one alternative: the cross-repo number stays under the
+# foreign-number floor, and the co-author trailer carries no address. A `#` line is still scanned,
+# since whether git strips it depends on how the commit was made. GitHub's merge subject is refused
+# here although history forgives it, because no hook ever sees one GitHub wrote.
+NEAR=7
+_n=0
+while IFS='|' read -r name where line <&3; do
+    _n=$((_n + 1))
+    it "$name in a message is refused"
+    if [ "$where" = subject ]; then
+        printf '%s\n' "$line" > "$TMP/message-shape-$_n"
+    else
+        printf 'fix: a thing\n\n%s\n' "$line" > "$TMP/message-shape-$_n"
+    fi
+    if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/message-shape-$_n" >/dev/null 2>&1; then
+        fail "a message carrying $name was accepted"
+    else
+        pass
+    fi
+done 3<<EOF
+a macOS home path|body|See /Users/$WHO/notes.
+a Linux home path|body|See /home/$WHO/notes.
+an email address|body|Reported by someone${AT}example.com.
+a cross-repo issue reference|body|See foo/bar#$NEAR.
+an issue number|body|See #$FOREIGN for why.
+a pull request number ending the subject|subject|fix: crash when the widget reloads (#$FOREIGN)
+GitHub's merge subject|subject|Merge pull request #$FOREIGN from seriouslysean/x
+a private record reference|body|See DR-$FOREIGN.
+a private ruling reference|body|See RL-$FOREIGN.
+an issue URL|body|See github.com/foo/bar/issues/$NEAR
+an issue URL on a # line|body|# see github.com/foo/bar/issues/$NEAR
+a pull request URL|body|See github.com/foo/bar/pull/$NEAR.
+a session trailer|body|Agent-Session: 0f21
+a session id trailer|body|Agent-Session-Id: 0f21
+a session trailer in lower case|body|agent-session: 0f21
+a co-author trailer|body|Co-authored-by: someone
+a co-author trailer in title case|body|Co-Authored-By: someone
+EOF
+
+# A read that fails leaves nothing to match, so each of these must fail the scan rather than let
+# it print clean over input it never saw.
+it "a message in another encoding is still scanned"
+printf 'fix: caf\351\n\nAgent-Session: 0f21\n' > "$TMP/latin1"
+OUT="$(LC_ALL=en_US.UTF-8 "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/latin1" 2>&1)"; SCAN_RC=$?
+# Refusing the unreadable message is not enough: the scan must have read it and found the trailer.
+if [ "$SCAN_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'message: 3:Agent-Session'; then
+    printf '%s\n' "$OUT"
+    fail "a message with a byte invalid in the caller's locale exited $SCAN_RC without its trailer refused"
 else
     pass
 fi
 
-it "a pull request number ending a subject is refused"
-printf 'fix: crash when the widget reloads (#%s)\n' "$FOREIGN" > "$TMP/squashsubject"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/squashsubject" >/dev/null 2>&1; then
-    fail "a subject ending in a pull request number was accepted"
+it "a message the scan cannot read fails rather than reporting clean"
+OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/no-such-message" 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+    printf '%s\n' "$OUT"
+    fail "a missing message file exited $SCAN_RC rather than 2"
 else
     pass
 fi
 
-it "an issue number in a body is still refused"
-printf 'fix: a thing\n\nSee #%s for why.\n' "$FOREIGN" > "$TMP/bodynumber"
-if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/bodynumber" >/dev/null 2>&1; then
-    fail "a message carrying an issue number in its body was accepted"
-else
-    pass
-fi
+# Each grep in the message tier is failed alone, by a stand-in that errors on that grep's flags and
+# runs the real one otherwise, so dropping either check fails its own row.
+REAL_GREP="$(command -v grep)"
+for flags in -nE -inE; do
+    it "a message grep that fails on $flags fails the scan rather than reporting clean"
+    FAKE="$TMP/fake-grep$flags"
+    mkdir -p "$FAKE"
+    printf '#!/bin/sh\n[ "$1" = "%s" ] && exit 2\nexec "%s" "$@"\n' "$flags" "$REAL_GREP" > "$FAKE/grep"
+    chmod +x "$FAKE/grep"
+    OUT="$(PATH="$FAKE:$PATH" "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/clean" 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+        printf '%s\n' "$OUT"
+        fail "a failing grep on $flags exited $SCAN_RC rather than 2"
+    else
+        pass
+    fi
+done
 
 # The history tier reads `%H %s` lines rather than a message file, so it is proved on real commits.
 # These are throwaway repos: the hooks are switched off so a fixture meant to be refused can exist.
