@@ -131,6 +131,37 @@ else
     pass
 fi
 
+# The rest of the file scan's shapes, one a row: what is staged, and the label its refusal must
+# name, since a line can match more than one pattern and only its own proves that one is there.
+# Rows are read on fd 3 so nothing in the loop can consume them from stdin.
+AT=@
+WHO=somebody
+_n=0
+while IFS='|' read -r name label line <&3; do
+    _n=$((_n + 1))
+    it "$name staged into a tracked file is refused"
+    SHAPE="$TMP/file-shape-$_n"
+    mkdir -p "$SHAPE/Scripts"
+    cp "$ROOT/Scripts/scan-for-leaks.sh" "$SHAPE/Scripts/scan-for-leaks.sh"
+    chmod +x "$SHAPE/Scripts/scan-for-leaks.sh"
+    (cd "$SHAPE" && git init -q && printf '%s\n' "$line" > note.txt && git add note.txt)
+    OUT="$(cd "$SHAPE" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+    if [ "$SCAN_RC" -eq 0 ]; then
+        fail "$name staged into a tracked file was accepted"
+    elif ! printf '%s\n' "$OUT" | grep -qF "$label: note.txt:"; then
+        printf '%s\n' "$OUT"
+        fail "the scanner refused for a reason other than $label"
+    else
+        pass
+    fi
+done 3<<EOF
+a Linux home path|absolute home path|see /home/$WHO/notes
+an email address|email address|write to someone${AT}example.com
+a cross-repo issue reference|cross-repo issue reference|see foo/bar#$FOREIGN
+a private record reference|private record reference|see DR-$FOREIGN
+an issue or pull request URL|issue or pull request URL|see github.com/foo/bar/issues/$FOREIGN
+EOF
+
 printf '\ncommit message gate\n'
 
 it "a session trailer in a message is refused"
@@ -206,6 +237,28 @@ if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/bodynumber" >/dev/null 2>&1
 else
     pass
 fi
+
+# The rest of the message tier's shapes, one a row. A refused message names no pattern, so each
+# row must match exactly one alternative: the cross-repo number stays under the foreign-number
+# floor, and the co-author trailer carries no address.
+NEAR=7
+_n=0
+while IFS='|' read -r name line <&3; do
+    _n=$((_n + 1))
+    it "$name in a message is refused"
+    printf 'fix: a thing\n\n%s\n' "$line" > "$TMP/message-shape-$_n"
+    if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/message-shape-$_n" >/dev/null 2>&1; then
+        fail "a message carrying $name was accepted"
+    else
+        pass
+    fi
+done 3<<EOF
+an email address|Reported by someone${AT}example.com.
+a cross-repo issue reference|See foo/bar#$NEAR.
+a private record reference|See DR-$FOREIGN.
+a co-author trailer|Co-authored-by: someone
+a session id trailer|Agent-Session-Id: 0f21
+EOF
 
 # The history tier reads `%H %s` lines rather than a message file, so it is proved on real commits.
 # These are throwaway repos: the hooks are switched off so a fixture meant to be refused can exist.
