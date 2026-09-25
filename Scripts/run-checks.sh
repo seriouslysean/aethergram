@@ -113,6 +113,24 @@ else
     fi
 fi
 
+# The message tier holds its own copy of the number pattern, so its fixtures prove nothing about
+# the file scan's.
+it "a foreign issue number staged into a tracked file is refused"
+NUMBER="$TMP/number"
+mkdir -p "$NUMBER/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$NUMBER/Scripts/scan-for-leaks.sh"
+chmod +x "$NUMBER/Scripts/scan-for-leaks.sh"
+(cd "$NUMBER" && git init -q && printf 'see #%s\n' "$FOREIGN" > note.txt && git add note.txt)
+OUT="$(cd "$NUMBER" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a foreign issue number staged into a tracked file was accepted"
+elif ! printf '%s\n' "$OUT" | grep -q "foreign issue number: note.txt:.*#$FOREIGN"; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the staged number"
+else
+    pass
+fi
+
 printf '\ncommit message gate\n'
 
 it "a session trailer in a message is refused"
