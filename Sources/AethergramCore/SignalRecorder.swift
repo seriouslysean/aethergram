@@ -828,11 +828,8 @@ public final class SignalRecorder: Sendable {
     /// consumer's cadence rather than the endpoint's, so a backoff any of them
     /// could collapse would only damp a queue nobody was recording into.
     ///
-    /// Cancellation is deliberate and safe: a cancelled send throws through
-    /// `URLSession` as a retryable failure, so the batch stays queued and on
-    /// disk. That is the same guarantee the durable queue gives when the OS
-    /// kills the process outright, which is why an interrupted flush loses
-    /// nothing.
+    /// The cancel reaches only a waiting task, which has claimed no batch, so
+    /// it loses nothing. A send in flight is cancelled only by an erase.
     private func startDrain(after delay: TimeInterval) {
         lock.withLock { decideDrain(&$0, after: delay) }?.cancel()
     }

@@ -28,8 +28,8 @@ jobs:
     # toolchain change arriving that way is a red build nobody asked for.
     runs-on: macos-26
     # A wedged suite hangs rather than fails, so cap the job: the default is six hours of nothing.
-    # The api-break gate builds four release tags and the working tree on top of the iOS, watchOS,
-    # and test builds, so the cap leaves room for all of them cold on three cores.
+    # The api-break gate builds every release tag it compares and the working tree on top of the
+    # iOS, watchOS, and test builds, so the cap leaves room for all of them cold on three cores.
     timeout-minutes: 30
     strategy:
       # One leg, deliberately. The matrix is here for the name it composes -- `test (macos)` -- so

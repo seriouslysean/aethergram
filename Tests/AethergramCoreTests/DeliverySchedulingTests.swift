@@ -25,15 +25,16 @@ import Testing
 /// by driving `drain()` from the test's own task, and the latency of a
 /// scheduled task is left to a runtime walk against a live host process.
 ///
-/// **What the two scheduling tests do assert.** Whether a scheduled drain
+/// **What the scheduling tests do assert.** Whether a scheduled drain
 /// actually runs, and roughly how often one wakes, has no other observer:
 /// `drainsScheduled` counts tasks created, not tasks the pool has reached, and
-/// a task that has not run yet looks exactly like one that never will. One
-/// polls to a deadline far longer than the interval it waits on; the other
-/// polls to a deadline for its second wake and then bounds the wakes inside a
-/// window, because too few and too many are different defects. A pool busy
-/// enough to starve either past its deadline would read as a failure, which is
-/// the price of asserting this at all.
+/// a task that has not run yet looks exactly like one that never will. A test
+/// that expects a scheduled send waits for it to a deadline far longer than
+/// the delay the send was scheduled at; the halted drain's test polls to a
+/// deadline for its second wake and then bounds the wakes inside a window,
+/// because too few and too many are different defects. A pool busy enough to
+/// starve one past its deadline would read as a failure, which is the price of
+/// asserting this at all.
 ///
 /// The time limit is the outer bound on those polls: a pool starved badly
 /// enough never to run the scheduled task must name the test rather than stall

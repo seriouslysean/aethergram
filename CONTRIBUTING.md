@@ -73,7 +73,7 @@ Open a pull request that closes it with `Closes #7`. Merge with a merge commit r
 squash, so each commit on `main` stays individually revertable.
 
 An agent commits and opens the pull request; the owner reviews the diff and merges. Commit
-messages and pull request bodies carry no session link, agent trailer, or co-author line.
+messages, issues, and pull request bodies carry no session link, agent trailer, or co-author line.
 
 ## Writing the test
 
@@ -130,7 +130,7 @@ failure, not the reporter.
 - Every host-specific decision — where the queue is written, where the consent answer is stored,
   how the identifier is minted, which logging subsystem to use — arrives through a protocol or a
   closure the host supplies.
-- No third-party dependency. `Package.swift` has no `dependencies:` line and is not getting one.
+- No third-party dependency. `Package.swift` declares no package dependency and is not getting one.
 
 ## Releasing
 
