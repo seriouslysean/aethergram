@@ -46,4 +46,4 @@ Rules for working in this repo. `CONTRIBUTING.md` holds the hook setup, the chec
 
 ## Declaring for the vendor
 
-31. Start anything declared on the vendor's behalf — the privacy manifest, identifier hashing, wire defaults — from the vendor SDK's own artifact, and record each difference as a decision, because a host's store disclosures were written against that SDK.
+31. Start a declaration about the vendor, such as a privacy-manifest type, identifier hashing, or a wire default, from the vendor's own authoritative artifact at an identified version, keep only what describes this adapter's actual behavior, and record the evidence for each material difference, because a host's store disclosures were written against that SDK and neither intuition nor a verbatim copy describes this implementation. Read the SDK as reference, never as a dependency.
