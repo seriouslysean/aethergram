@@ -258,6 +258,8 @@ a cross-repo issue reference|See foo/bar#$NEAR.
 a private record reference|See DR-$FOREIGN.
 a co-author trailer|Co-authored-by: someone
 a session id trailer|Agent-Session-Id: 0f21
+a co-author trailer in title case|Co-Authored-By: someone
+a session trailer in lower case|agent-session: 0f21
 EOF
 
 # The history tier reads `%H %s` lines rather than a message file, so it is proved on real commits.
