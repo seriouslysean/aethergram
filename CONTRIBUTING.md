@@ -98,10 +98,10 @@ name, a bundle identifier, or an issue number into a public commit. Prose is the
 `Scripts/scan-for-leaks.sh` runs in the checks, in the pre-commit hook over the staged tree, and in
 the commit-msg hook over the message being written. It refuses absolute home paths, email
 addresses, cross-repo issue references, bare issue numbers of three or more digits, private record
-ids, and, in a message, agent-session trailers. It also refuses a numbered issue or pull request URL
-(`github.com/.../issues|pull/N`) naming any repository, this one included, since a bare number is
-not a stable reference either. The file tier reads the index, so stage a file before expecting it
-to be scanned.
+ids, and, in a message, agent-session and co-author trailers in any capitalization. It also
+refuses a numbered issue or pull request URL (`github.com/.../issues|pull/N`) naming any
+repository, this one included, since a bare number is not a stable reference either. The file tier
+reads the index, so stage a file before expecting it to be scanned.
 
 One exemption, as narrow as it can be. GitHub writes its own subject on a web merge, which runs no
 hook: `Merge pull request #N from seriouslysean/<branch>`. The history scan forgives that number, in
