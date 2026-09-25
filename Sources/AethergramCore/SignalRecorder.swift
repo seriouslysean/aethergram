@@ -355,7 +355,8 @@ public final class SignalRecorder: Sendable {
     /// `flushAndWait()` are the consumer's doors.
     ///
     /// - Parameter slot: The id a scheduled drain holds the slot under. A
-    ///   test's direct call runs in no slot and passes nothing.
+    ///   test that drives a drain directly passes nothing, unless it stands in
+    ///   for a scheduled one.
     func drain(slot: Int? = nil) async {
         let claim: Int? = lock.withLock { current in
             guard current.drainClaim == nil else { return nil }
