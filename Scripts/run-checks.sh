@@ -275,6 +275,30 @@ else
     pass
 fi
 
+it "a merge subject naming another owner is refused in history"
+HIST="$TMP/history-other-owner"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'fix: a thing' \
+    && fixture_git checkout -q -b side \
+    && fixture_git commit -q --allow-empty -m 'fix: another thing' \
+    && fixture_git checkout -q - \
+    && fixture_git merge -q --no-ff -m "Merge pull request #$FOREIGN from another-owner/$FOREIGN-a-branch" side
+) || fail "the fixture history could not be built"
+OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
+if [ "$SCAN_RC" -eq 0 ]; then
+    fail "a merge subject naming another owner was accepted in history"
+elif ! printf '%s\n' "$OUT" | grep -q "#$FOREIGN"; then
+    printf '%s\n' "$OUT"
+    fail "the scanner refused for a reason other than the subject"
+else
+    pass
+fi
+
 it "a merge subject's shape in a body is still refused in history"
 HIST="$TMP/history-body"
 mkdir -p "$HIST/Scripts"
