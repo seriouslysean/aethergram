@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rules for working in this repo.
+Rules for working in this repo. `CONTRIBUTING.md` holds the hook setup, the checks (`Scripts/run-checks.sh`, run offline on a full clone with the release tags), and the release sequence.
 
 ## The package
 
