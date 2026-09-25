@@ -157,6 +157,23 @@ else
     pass
 fi
 
+# One shape per message, so each check fails when its own alternative is dropped from the pattern.
+it "a macOS home path in a message is refused"
+printf 'fix: a thing\n\nSee /Users/%s/notes.\n' somebody > "$TMP/macoshome"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/macoshome" >/dev/null 2>&1; then
+    fail "a message carrying a macOS home path was accepted"
+else
+    pass
+fi
+
+it "a Linux home path in a message is refused"
+printf 'fix: a thing\n\nSee /home/%s/notes.\n' somebody > "$TMP/linuxhome"
+if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/linuxhome" >/dev/null 2>&1; then
+    fail "a message carrying a Linux home path was accepted"
+else
+    pass
+fi
+
 it "an ordinary message is accepted"
 printf 'fix: a thing\n\nOne sentence saying why.\n' > "$TMP/clean"
 if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/clean" 2>&1)"; then
