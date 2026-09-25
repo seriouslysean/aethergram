@@ -39,7 +39,7 @@ Rules for working in this repo.
 
 25. Start every change as an issue and a branch named for it, so the reason outlives the diff.
 26. Merge with a merge commit rather than a squash, so each commit on `main` stays individually revertable.
-27. Commit and open the pull request on the owner's behalf; the owner reviews the diff and merges.
+27. Commit and open the pull request on the owner's behalf.
 28. Keep session links, agent trailers, and co-author lines out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry.
 29. Write terse, factual prose that opens with the substance and still reads in whole sentences.
 30. Dispatch an agent only for a sizeable, independent track, such as a lane of source files or a wide investigation, and do in the session what a handful of tool calls finishes, because each agent re-reads the repository and its report has to be read in turn.
