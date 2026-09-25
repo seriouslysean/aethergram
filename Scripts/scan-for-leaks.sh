@@ -18,6 +18,10 @@
 #   scan-for-leaks.sh --message FILE  scan one commit message, for the commit-msg hook
 
 set -u
+# Bytes are read as bytes. In a UTF-8 locale, a message in another encoding makes sed fail, and a
+# read that fails leaves nothing to match.
+LC_ALL=C
+export LC_ALL
 
 # Resolve the message path against the caller's directory, before the cd below moves out of it.
 MSG=""
@@ -71,9 +75,13 @@ scan() {
 # One tier, two callers: the commit-msg hook reads the message being written, the release sweep
 # reads every message already in history.
 scan_messages() {
+    # grep exits 1 for no match; anything past that is grep failing, which is not a clean message.
+    _plain="$(printf '%s\n' "$1" | grep -nE "$MESSAGE_RE")"
+    [ $? -le 1 ] || die "grep failed on the message"
+    _trailers="$(printf '%s\n' "$1" | grep -inE "$TRAILER_RE")"
+    [ $? -le 1 ] || die "grep failed on the message's trailers"
     # A line both greps match is printed once.
-    _hits="$({ printf '%s\n' "$1" | grep -nE "$MESSAGE_RE"
-        printf '%s\n' "$1" | grep -inE "$TRAILER_RE"; } | sort -t: -k1,1n -u)"
+    _hits="$(printf '%s\n%s\n' "$_plain" "$_trailers" | sed '/^$/d' | sort -t: -k1,1n -u)"
     [ -z "$_hits" ] && return 0
     printf '%s\n' "$_hits" | head -20 | while IFS= read -r _l; do printf '  message: %s\n' "$_l"; done
     return 1
@@ -86,7 +94,8 @@ if [ -n "$MSG" ]; then
     # itself drops a `#` line depends on commit.cleanup (default "strip" for an editor commit,
     # "whitespace" for `-m`), and a line `-m` keeps must still be caught here. No subject is
     # forgiven either: a hook never sees one GitHub wrote, and a local merge writes `Merge branch`.
-    scan_messages "$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG")" || FOUND=1
+    _message="$(sed '/^#\{0,1\} *-\{2,\} >8 -\{2,\}/,$d' "$MSG")" || die "could not read the message"
+    scan_messages "$_message" || FOUND=1
     if [ "$FOUND" -eq 0 ]; then
         printf 'clean\n'
         exit 0
