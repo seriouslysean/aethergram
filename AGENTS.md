@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rules for working in this repo.
+Rules for working in this repo. `CONTRIBUTING.md` holds the hook setup, the checks (`Scripts/run-checks.sh`, run offline on a full clone with the release tags), and the release sequence.
 
 ## The package
 
@@ -33,7 +33,7 @@ Rules for working in this repo.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
 22. Keep the tag vocabulary short by design, and add one only when a suite applies it, because a tag nothing uses is a category nobody is thinking in.
 23. Write POSIX `sh` in `Scripts/` and `.githooks/`, and avoid bashisms so the same scripts run under `dash`.
-24. Obtain one independent adversarial review of each coherent change's actual diff, covering the relevant concurrency, consent, and published claims, because the suite only re-proves past failures. A change is done when its acceptance criteria and required checks pass and material in-scope objections are resolved with evidence. A correction gets a focused recheck of itself and the behavior it affects, not an automatic new broad review. Log a credible unrelated defect separately; a serious one may block a release without widening the task. Do not file every finding outside a fixed list as an accepted risk.
+24. Obtain one independent adversarial review of each coherent change's actual diff, covering the relevant concurrency, consent, and published claims, because the suite only re-proves past failures. A change is done when its acceptance criteria and required checks pass and material in-scope objections are resolved with evidence. A correction gets a focused recheck of itself and the behavior it affects, not an automatic new broad review. Log a credible unrelated defect separately; a serious one may block a release without widening the task. Do not file every finding outside a fixed list as an accepted risk. The reviewer is anyone other than the context that wrote the change, such as a fresh agent context, another model, or a person, reached through a mechanism this session is authorized to use; when none is available, report the review as outstanding rather than substituting a self-review.
 
 ## Working
 
@@ -42,6 +42,8 @@ Rules for working in this repo.
 27. Commit and open the pull request on the owner's behalf.
 28. Keep session links, agent trailers, and co-author lines out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry.
 29. Write terse, factual prose that opens with the substance and still reads in whole sentences.
-30. Dispatch an agent only for a sizeable, independent track, such as a lane of source files or a wide investigation, and do in the session what a handful of tool calls finishes, because each agent re-reads the repository and its report has to be read in turn.
-31. State the reason in one sentence when dispatching above an agent's pinned model, since escalation is a decision rather than a default.
-32. Build what a host needs or a measurement shows, and move the rest to an issue that names what would reopen it, because every addition to a published package is a contract to keep.
+30. Build what a host needs or a measurement shows, and move the rest to an issue that names what would reopen it, because every addition to a published package is a contract to keep.
+
+## Declaring for the vendor
+
+31. Start a declaration about the vendor, such as a privacy-manifest type, identifier hashing, or a wire default, from the vendor's own authoritative artifact at an identified version, keep only what describes this adapter's actual behavior, and record the evidence for each material difference, because a host's store disclosures were written against that SDK and neither intuition nor a verbatim copy describes this implementation. Read the SDK as reference, never as a dependency.
