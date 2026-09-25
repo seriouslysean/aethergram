@@ -130,9 +130,12 @@ struct DeliverySchedulingTests {
     @Test("A drain a reset detached claims nothing from the queue after it")
     func drainDetachedByAResetClaimsNothing() async throws {
         let directory = try #require(TestTempDirectory.url)
+        // Answering as a cancelled request does, so a send from the detached
+        // task would owe the backoff this asserts was never owed.
         let fixture = try makeFixture(
             directory: directory,
             configuration: testConfiguration(transmitInterval: 3600),
+            transport: SpyTransport(defaultOutcome: .retryable(reason: "cancelled")),
             now: steppingClock(from: testDate(year: 2026, month: 3, day: 4))
         )
         fixture.recorder.updateConsent(.granted)
