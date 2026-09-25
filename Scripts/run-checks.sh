@@ -159,7 +159,9 @@ a Linux home path|absolute home path|see /home/$WHO/notes
 an email address|email address|write to someone${AT}example.com
 a cross-repo issue reference|cross-repo issue reference|see foo/bar#$FOREIGN
 a private record reference|private record reference|see DR-$FOREIGN
-an issue or pull request URL|issue or pull request URL|see github.com/foo/bar/issues/$FOREIGN
+a private ruling reference|private record reference|see RL-$FOREIGN
+an issue URL|issue or pull request URL|see github.com/foo/bar/issues/$FOREIGN
+a pull request URL|issue or pull request URL|see github.com/foo/bar/pull/$FOREIGN
 EOF
 
 printf '\ncommit message gate\n'
@@ -256,6 +258,8 @@ done 3<<EOF
 an email address|Reported by someone${AT}example.com.
 a cross-repo issue reference|See foo/bar#$NEAR.
 a private record reference|See DR-$FOREIGN.
+a private ruling reference|See RL-$FOREIGN.
+a pull request URL|See github.com/foo/bar/pull/$NEAR.
 a co-author trailer|Co-authored-by: someone
 a session id trailer|Agent-Session-Id: 0f21
 a co-author trailer in title case|Co-Authored-By: someone
