@@ -38,6 +38,11 @@ fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/aethergram-checks.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
+# Each shape the file scan refuses is assembled at run time, from a printf argument or `$FOREIGN`,
+# so no line of this file carries one and the scan exempts none of it. `$FOREIGN` has the fewest
+# digits the scan reads as a foreign issue number, so a scan that raises that floor fails here.
+FOREIGN=100
+
 it "a leak staged then reverted in the working tree is still refused"
 CLONE="$TMP/clone"
 mkdir -p "$CLONE/Scripts"
@@ -46,7 +51,7 @@ chmod +x "$CLONE/Scripts/scan-for-leaks.sh"
 (
     cd "$CLONE" \
     && git init -q \
-    && printf 'see /Users/example\n' > leak.txt \
+    && printf 'see /Users/%s\n' example > leak.txt \
     && git add leak.txt \
     && printf 'clean\n' > leak.txt
 )
@@ -83,7 +88,7 @@ else
     fi
 fi
 
-it "a leak staged into the runner, outside its fixtures, is refused"
+it "a leak staged into the runner is refused"
 RUNNER="$TMP/runner"
 mkdir -p "$RUNNER/Scripts"
 cp "$ROOT/Scripts/scan-for-leaks.sh" "$ROOT/Scripts/run-checks.sh" "$RUNNER/Scripts/"
@@ -93,14 +98,14 @@ chmod +x "$RUNNER/Scripts/scan-for-leaks.sh"
 # would pass this test for the wrong reason.
 if ! OUT="$(cd "$RUNNER" && ./Scripts/scan-for-leaks.sh 2>&1)"; then
     printf '%s\n' "$OUT"
-    fail "the unmodified runner was refused, so its fixtures are not all allowed"
+    fail "the unmodified runner was refused"
 else
-    printf '# see /Users/somebody\n' >> "$RUNNER/Scripts/run-checks.sh"
+    printf '# see /Users/%s\n' somebody >> "$RUNNER/Scripts/run-checks.sh"
     (cd "$RUNNER" && git add Scripts/run-checks.sh)
     OUT="$(cd "$RUNNER" && ./Scripts/scan-for-leaks.sh 2>&1)"; SCAN_RC=$?
     if [ "$SCAN_RC" -eq 0 ]; then
         fail "a leak staged into the runner was accepted"
-    elif ! printf '%s\n' "$OUT" | grep -q 'Scripts/run-checks.sh:.*/Users/somebody'; then
+    elif ! printf '%s\n' "$OUT" | grep -q 'absolute home path: Scripts/run-checks.sh:.*somebody'; then
         printf '%s\n' "$OUT"
         fail "the scanner refused for a reason other than the staged line"
     else
@@ -119,7 +124,7 @@ else
 fi
 
 it "an issue or pull request URL in a message is refused"
-printf 'fix: a thing\n\nSee github.com/foo/bar/issues/42\n' > "$TMP/issueurl"
+printf 'fix: a thing\n\nSee github.com/foo/bar/issues/%s\n' 42 > "$TMP/issueurl"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/issueurl" >/dev/null 2>&1; then
     fail "a message carrying an issue or pull request URL was accepted"
 else
@@ -127,7 +132,7 @@ else
 fi
 
 it "a hash-prefixed leak line in a message is refused"
-printf 'fix: a thing\n\n# see github.com/foo/bar/issues/42\n' > "$TMP/hashline"
+printf 'fix: a thing\n\n# see github.com/foo/bar/issues/%s\n' 42 > "$TMP/hashline"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/hashline" >/dev/null 2>&1; then
     fail "a message carrying a #-prefixed leak line was accepted"
 else
@@ -144,7 +149,7 @@ else
 fi
 
 it "a merge subject typed into a message is refused"
-printf 'Merge pull request #4812 from seriouslysean/x\n' > "$TMP/mergesubject"
+printf 'Merge pull request #%s from seriouslysean/x\n' "$FOREIGN" > "$TMP/mergesubject"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/mergesubject" >/dev/null 2>&1; then
     fail "a message carrying GitHub's merge subject was accepted, though no hook ever sees one GitHub wrote"
 else
@@ -152,7 +157,7 @@ else
 fi
 
 it "a pull request number ending a subject is refused"
-printf 'fix: crash when the widget reloads (#4812)\n' > "$TMP/squashsubject"
+printf 'fix: crash when the widget reloads (#%s)\n' "$FOREIGN" > "$TMP/squashsubject"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/squashsubject" >/dev/null 2>&1; then
     fail "a subject ending in a pull request number was accepted"
 else
@@ -160,7 +165,7 @@ else
 fi
 
 it "an issue number in a body is still refused"
-printf 'fix: a thing\n\nSee #100 for why.\n' > "$TMP/bodynumber"
+printf 'fix: a thing\n\nSee #%s for why.\n' "$FOREIGN" > "$TMP/bodynumber"
 if "$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/bodynumber" >/dev/null 2>&1; then
     fail "a message carrying an issue number in its body was accepted"
 else
@@ -186,7 +191,7 @@ chmod +x "$HIST/Scripts/scan-for-leaks.sh"
     && fixture_git checkout -q -b side \
     && fixture_git commit -q --allow-empty -m 'fix: another thing' \
     && fixture_git checkout -q - \
-    && fixture_git merge -q --no-ff -m 'Merge pull request #101 from seriouslysean/101-a-branch' side
+    && fixture_git merge -q --no-ff -m "Merge pull request #$FOREIGN from seriouslysean/$FOREIGN-a-branch" side
 ) || fail "the fixture history could not be built"
 if OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; then
     pass
@@ -203,12 +208,12 @@ chmod +x "$HIST/Scripts/scan-for-leaks.sh"
 (
     cd "$HIST" \
     && fixture_git init -q \
-    && fixture_git commit -q --allow-empty -m 'fix: crash when the widget reloads (#4812)'
+    && fixture_git commit -q --allow-empty -m "fix: crash when the widget reloads (#$FOREIGN)"
 ) || fail "the fixture history could not be built"
 OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
 if [ "$SCAN_RC" -eq 0 ]; then
     fail "a subject ending in a pull request number was accepted in history"
-elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+elif ! printf '%s\n' "$OUT" | grep -q "#$FOREIGN"; then
     printf '%s\n' "$OUT"
     fail "the scanner refused for a reason other than the subject"
 else
@@ -223,12 +228,12 @@ chmod +x "$HIST/Scripts/scan-for-leaks.sh"
 (
     cd "$HIST" \
     && fixture_git init -q \
-    && fixture_git commit -q --allow-empty -m 'Merge pull request #4812 from seriouslysean/x'
+    && fixture_git commit -q --allow-empty -m "Merge pull request #$FOREIGN from seriouslysean/x"
 ) || fail "the fixture history could not be built"
 OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
 if [ "$SCAN_RC" -eq 0 ]; then
     fail "a merge subject typed onto a single-parent commit was accepted in history"
-elif ! printf '%s\n' "$OUT" | grep -q '#4812'; then
+elif ! printf '%s\n' "$OUT" | grep -q "#$FOREIGN"; then
     printf '%s\n' "$OUT"
     fail "the scanner refused for a reason other than the subject"
 else
@@ -243,12 +248,12 @@ chmod +x "$HIST/Scripts/scan-for-leaks.sh"
 (
     cd "$HIST" \
     && fixture_git init -q \
-    && fixture_git commit -q --allow-empty -m 'fix: a thing' -m 'Merge pull request #102 from seriouslysean/102-a-branch'
+    && fixture_git commit -q --allow-empty -m 'fix: a thing' -m "Merge pull request #$FOREIGN from seriouslysean/$FOREIGN-a-branch"
 ) || fail "the fixture history could not be built"
 OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; SCAN_RC=$?
 if [ "$SCAN_RC" -eq 0 ]; then
     fail "a merge subject's shape in a body was accepted in history"
-elif ! printf '%s\n' "$OUT" | grep -q '#102'; then
+elif ! printf '%s\n' "$OUT" | grep -q "#$FOREIGN"; then
     printf '%s\n' "$OUT"
     fail "the scanner refused for a reason other than the body line"
 else
@@ -256,7 +261,7 @@ else
 fi
 
 it "what a verbose commit appends below the scissors line is not scanned"
-printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #404\n' > "$TMP/verbose"
+printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #%s\n' "$FOREIGN" > "$TMP/verbose"
 if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/verbose" 2>&1)"; then
     pass
 else
