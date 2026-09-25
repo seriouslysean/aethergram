@@ -5,7 +5,7 @@ Rules for working in this repo.
 ## The package
 
 1. Consent is the core's invariant and never an adapter's option, because a gate a caller can route around is not a gate.
-2. Until consent is granted, record nothing: no allocation, no disk write, no identifier resolved, no counter advanced, no transport call.
+2. Before consent is granted, a recording entry point enqueues and retains no event data, writes no analytics storage, resolves no analytics identifier, advances no analytics counter, and calls no transport. A transient input value discarded at the gate is not collection: this is not a zero-allocation promise, and it neither forbids the bookkeeping consent and erasure need nor relaxes the tested consent invariant.
 3. Withdrawing consent erases what was collected under it, since an off switch that leaves yesterday's signals on disk to be sent later is not an off switch.
 4. Assert the consent invariant at every layer the recorder touches, because a transport-only assertion cannot tell "dropped before enqueue" from "enqueued but not yet sent".
 5. Only the adapter module knows a vendor exists, and the core must still compile with every adapter deleted.
@@ -33,11 +33,11 @@ Rules for working in this repo.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
 22. Keep the tag vocabulary short by design, and add one only when a suite applies it, because a tag nothing uses is a category nobody is thinking in.
 23. Write POSIX `sh` in `Scripts/` and `.githooks/`, and avoid bashisms so the same scripts run under `dash`.
-24. Run one adversarial pass over concurrency, the consent path, and published prose before reporting work done, because the suite only re-proves past failures. After its fixes, reopen code only for a consent bypass, data loss on a host's normal path, a hang a host can reach, a false doc claim, or a compile break, and record anything else as an accepted risk or a follow-up issue.
+24. Obtain one independent adversarial review of each coherent change's actual diff, covering the relevant concurrency, consent, and published claims, because the suite only re-proves past failures. A change is done when its acceptance criteria and required checks pass and material in-scope objections are resolved with evidence. A correction gets a focused recheck of itself and the behavior it affects, not an automatic new broad review. Log a credible unrelated defect separately; a serious one may block a release without widening the task. Do not file every finding outside a fixed list as an accepted risk.
 
 ## Working
 
-25. Start every change as an issue and a branch named for it, so the reason outlives the diff.
+25. Start every change from an issue and a branch named for it, so the reason outlives the diff. One issue may carry an owner-approved set of related items; keep each independently useful correction separable with its tests, and an inseparable correction whole.
 26. Merge with a merge commit rather than a squash, so each commit on `main` stays individually revertable.
 27. Commit and open the pull request on the owner's behalf.
 28. Keep session links, agent trailers, and co-author lines out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry.
