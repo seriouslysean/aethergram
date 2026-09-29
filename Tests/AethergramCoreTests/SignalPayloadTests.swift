@@ -197,6 +197,7 @@ struct SignalPayloadTests {
         }
         // Friday 2026-01-02 and Sunday 2026-01-04 are where the two answers
         // part. Without the locale's weekend in place this proves nothing.
+        try #require(calendar.firstWeekday == 1)
         try #require(calendar.isDateInWeekend(noon(2)))
         try #require(!calendar.isDateInWeekend(noon(4)))
 
