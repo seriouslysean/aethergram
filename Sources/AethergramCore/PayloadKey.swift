@@ -72,6 +72,11 @@ public enum PayloadKey {
     /// Local hour, 0-23. Server receipt time cannot reconstruct it — receipt is
     /// UTC and the interesting question is local.
     public static let calendarHourOfDay = "calendar.hourOfDay"
+    /// The local day, numbered as ISO 8601 numbers it: Monday 1 through
+    /// Sunday 7, whatever the locale's first weekday.
+    public static let calendarDayOfWeek = "calendar.dayOfWeek"
+    /// `true` on a Saturday or a Sunday, derived from the day of week rather
+    /// than from the locale's weekend.
     public static let calendarIsWeekend = "calendar.isWeekend"
 
     // MARK: Acquisition and retention

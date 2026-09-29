@@ -84,9 +84,10 @@ enum TelemetryDeckWireNames {
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
 
-        // The vendor documents `hourOfDay` by name; `isWeekend` is the other
-        // half of the only question an app asks of a calendar.
+        // Three of the calendar fields the vendor documents. Only the hour's
+        // value differs on the wire; see `wireValue(forKey:value:)`.
         PayloadKey.calendarHourOfDay: "TelemetryDeck.Calendar.hourOfDay",
+        PayloadKey.calendarDayOfWeek: "TelemetryDeck.Calendar.dayOfWeek",
         PayloadKey.calendarIsWeekend: "TelemetryDeck.Calendar.isWeekend",
 
         PayloadKey.acquisitionFirstSessionDate: "TelemetryDeck.Acquisition.firstSessionDate",

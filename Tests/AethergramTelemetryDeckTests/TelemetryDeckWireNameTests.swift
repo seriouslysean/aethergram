@@ -37,6 +37,7 @@ struct TelemetryDeckWireNameTests {
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
 
         PayloadKey.calendarHourOfDay: "TelemetryDeck.Calendar.hourOfDay",
+        PayloadKey.calendarDayOfWeek: "TelemetryDeck.Calendar.dayOfWeek",
         PayloadKey.calendarIsWeekend: "TelemetryDeck.Calendar.isWeekend",
 
         PayloadKey.acquisitionFirstSessionDate: "TelemetryDeck.Acquisition.firstSessionDate",

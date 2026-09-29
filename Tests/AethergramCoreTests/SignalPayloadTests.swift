@@ -63,6 +63,7 @@ struct SignalPayloadTests {
         #expect(signal.recordedAt == saturday)
         #expect(signal.parameters["env.key"] == "env-value")
         #expect(signal.parameters[PayloadKey.calendarHourOfDay] == "15")
+        #expect(signal.parameters[PayloadKey.calendarDayOfWeek] == "6")
         #expect(signal.parameters[PayloadKey.calendarIsWeekend] == "true")
         #expect(signal.parameters[PayloadKey.acquisitionFirstSessionDate] == "2026-01-01")
         #expect(signal.parameters[PayloadKey.retentionTotalSessionsCount] == "4")
@@ -147,7 +148,7 @@ struct SignalPayloadTests {
         #expect(signal.parameters[PayloadKey.sdkNameAndVersion] == Aethergram.nameAndVersion)
     }
 
-    @Test("A weekday signal reports its local hour and clears the weekend flag")
+    @Test("A weekday signal reports its local hour and weekday, and clears the weekend flag")
     func weekdaySignalReportsLocalHour() async throws {
         let directory = try #require(TestTempDirectory.url)
         let monday = try testDate(year: 2026, month: 1, day: 5, hour: 9)
@@ -159,6 +160,7 @@ struct SignalPayloadTests {
 
         let signal = try #require(fixture.transport.sentSignals.first)
         #expect(signal.parameters[PayloadKey.calendarHourOfDay] == "9")
+        #expect(signal.parameters[PayloadKey.calendarDayOfWeek] == "1")
         #expect(signal.parameters[PayloadKey.calendarIsWeekend] == "false")
     }
 
@@ -170,17 +172,25 @@ struct SignalPayloadTests {
         return calendar
     }()
 
-    /// The vendor defines `isWeekend` as Saturday or Sunday. The locale's own
-    /// weekend is a different answer wherever it is not those two days: under
-    /// a Friday-Saturday weekend, a Friday would report weekend and a Sunday
-    /// a weekday.
-    @Test("The weekend is Saturday and Sunday whatever the locale's weekend is", arguments: [
-        (2, "false"),
-        (3, "true"),
-        (4, "true"),
-        (5, "false")
-    ])
-    func weekendIsSaturdayAndSunday(dayOfJanuary: Int, isWeekend: String) throws {
+    /// The vendor numbers the day of week as ISO 8601 does and defines
+    /// `isWeekend` as Saturday or Sunday. The locale's own weekend is a
+    /// different answer wherever it is not those two days: under a
+    /// Friday-Saturday weekend, a Friday would report weekend and a Sunday a
+    /// weekday.
+    @Test(
+        "The day of week is ISO numbered, and the weekend is Saturday and Sunday whatever the locale's is",
+        arguments: [
+            (2, "5", "false"),
+            (3, "6", "true"),
+            (4, "7", "true"),
+            (5, "1", "false")
+        ]
+    )
+    func weekdayIsISONumberedAndTheWeekendIsSaturdayAndSunday(
+        dayOfJanuary: Int,
+        dayOfWeek: String,
+        isWeekend: String
+    ) throws {
         let calendar = Self.fridaySaturdayWeekend
         func noon(_ day: Int) throws -> Date {
             try #require(calendar.date(from: DateComponents(year: 2026, month: 1, day: day, hour: 12)))
@@ -192,6 +202,7 @@ struct SignalPayloadTests {
 
         let parameters = try EnvironmentSnapshot.calendarParameters(at: noon(dayOfJanuary), calendar: calendar)
 
+        #expect(parameters[PayloadKey.calendarDayOfWeek] == dayOfWeek)
         #expect(parameters[PayloadKey.calendarIsWeekend] == isWeekend)
     }
 
@@ -495,12 +506,13 @@ struct SignalPayloadTests {
     }
 
     @Test("Calendar parameters are the only clock-derived fields")
-    func calendarParametersCoverHourAndWeekendOnly() throws {
+    func calendarParametersCoverHourDayAndWeekendOnly() throws {
         let saturday = try testDate(year: 2026, month: 1, day: 3, hour: 15)
         let parameters = EnvironmentSnapshot.calendarParameters(at: saturday, calendar: testCalendar)
 
         #expect(parameters == [
             PayloadKey.calendarHourOfDay: "15",
+            PayloadKey.calendarDayOfWeek: "6",
             PayloadKey.calendarIsWeekend: "true"
         ])
     }

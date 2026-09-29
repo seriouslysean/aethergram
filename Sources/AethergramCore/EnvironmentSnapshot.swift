@@ -20,10 +20,11 @@ public enum RunContextChannel: String, Sendable {
 /// The authored default payload: what the package attaches to every signal
 /// beyond what the consumer passed.
 ///
-/// Authored, not inherited. Each field maps to a chart someone reads; see
-/// `PayloadKey` for what was dropped and why. The recorder reads the default
-/// payload once per grant, on the first permitted record, and an erase drops
-/// that copy; none of these values change inside a process. The
+/// Authored, not inherited. Every field but `runContext.channel` is one the
+/// vendor documents, sent in the form it documents; `PayloadKey` says what the
+/// vendor's SDK sends that this leaves out, and why. The recorder reads the
+/// default payload once per grant, on the first permitted record, and an
+/// erase drops that copy; none of these values change inside a process. The
 /// clock-derived fields are computed per signal instead.
 public struct EnvironmentSnapshot: Equatable, Sendable {
     // MARK: Lifecycle
@@ -156,20 +157,22 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     }
 
     /// Clock-derived fields, computed per signal rather than cached: an
-    /// extension process can outlive an hour boundary, and hour-of-day is the
-    /// field the whole `Calendar` family was reduced to.
+    /// extension process can outlive an hour boundary, and a day boundary.
     ///
-    /// The weekend is Saturday and Sunday, as the vendor defines it, rather
-    /// than `isDateInWeekend`, which follows the locale's weekend.
+    /// The day of week is the Gregorian day on `calendar`'s time zone, numbered
+    /// as ISO 8601 numbers it, and the weekend is derived from it: Saturday and
+    /// Sunday, as the vendor defines it, rather than `isDateInWeekend`, which
+    /// follows the locale's weekend.
     public static func calendarParameters(at date: Date, calendar: Calendar) -> [String: String] {
         let hour = calendar.component(.hour, from: date)
         // Gregorian numbers Sunday 1 through Saturday 7; ISO 8601 numbers
         // Monday 1 through Sunday 7.
         let weekday = RetentionCounters.dayCalendar(matching: calendar).component(.weekday, from: date)
-        let isoWeekday = weekday == 1 ? 7 : weekday - 1
+        let dayOfWeek = weekday == 1 ? 7 : weekday - 1
         return [
             PayloadKey.calendarHourOfDay: "\(hour)",
-            PayloadKey.calendarIsWeekend: "\(isoWeekday >= 6)"
+            PayloadKey.calendarDayOfWeek: "\(dayOfWeek)",
+            PayloadKey.calendarIsWeekend: "\(dayOfWeek >= 6)"
         ]
     }
 
