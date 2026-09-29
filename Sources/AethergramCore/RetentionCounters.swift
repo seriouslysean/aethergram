@@ -348,9 +348,10 @@ enum RetentionCounters {
         return record.distinctDaysUsed.count { window.contains($0) && $0 >= cutoffDay }
     }
 
-    /// The calendar day strings are numbered in: Gregorian, on the caller's
-    /// time zone, so a day still turns over at the device's midnight.
-    private static func dayCalendar(matching calendar: Calendar) -> Calendar {
+    /// The calendar day strings are numbered in, and the weekday is read in:
+    /// Gregorian, on the caller's time zone, so a day still turns over at the
+    /// device's midnight.
+    static func dayCalendar(matching calendar: Calendar) -> Calendar {
         guard calendar.identifier != .gregorian else { return calendar }
         var gregorian = Calendar(identifier: .gregorian)
         gregorian.timeZone = calendar.timeZone

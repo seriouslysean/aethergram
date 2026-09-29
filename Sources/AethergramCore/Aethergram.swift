@@ -15,11 +15,16 @@ enum Aethergram {
     /// answers which shape it arrived in. Semantic versioning against the field
     /// set, so a removal is major: 1.0.0 was the shape the package shipped
     /// with, and 2.0.0 is that shape with the four run-context fields removed
-    /// in favour of `runContext.channel`.
+    /// in favour of `runContext.channel`. 2.1.0 adds `device.systemMajorVersion`,
+    /// `runContext.language`, `calendar.dayOfWeek`, and the new-install preset,
+    /// and fixes two values without changing their form:
+    /// `userPreference.language` is the device's preferred language rather
+    /// than the app's, and `calendar.isWeekend` is Saturday and Sunday rather
+    /// than the locale's weekend.
     ///
     /// 1.1.0 was stamped in error for one release and describes the 2.0.0
     /// shape. A reader separating shapes treats the two as one.
-    static let version = "2.0.0"
+    static let version = "2.1.0"
 
     /// The pair as one grouping key, in the form the vendor's own SDK sent it.
     /// Derived rather than written a second time, so a version bump cannot

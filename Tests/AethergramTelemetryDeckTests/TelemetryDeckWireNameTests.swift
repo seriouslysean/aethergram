@@ -28,13 +28,16 @@ struct TelemetryDeckWireNameTests {
         PayloadKey.devicePlatform: "TelemetryDeck.Device.platform",
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
+        PayloadKey.deviceSystemMajorVersion: "TelemetryDeck.Device.systemMajorVersion",
 
         PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
+        PayloadKey.runContextLanguage: "TelemetryDeck.RunContext.language",
 
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
 
         PayloadKey.calendarHourOfDay: "TelemetryDeck.Calendar.hourOfDay",
+        PayloadKey.calendarDayOfWeek: "TelemetryDeck.Calendar.dayOfWeek",
         PayloadKey.calendarIsWeekend: "TelemetryDeck.Calendar.isWeekend",
 
         PayloadKey.acquisitionFirstSessionDate: "TelemetryDeck.Acquisition.firstSessionDate",
@@ -92,7 +95,8 @@ struct TelemetryDeckWireNameTests {
 
     @Test("Preset signal names take the vendor's namespaced form", arguments: [
         (PresetSignal.purchaseCompleted, "TelemetryDeck.Purchase.completed"),
-        (PresetSignal.errorOccurred, "TelemetryDeck.Error.occurred")
+        (PresetSignal.errorOccurred, "TelemetryDeck.Error.occurred"),
+        (PresetSignal.newInstallDetected, "TelemetryDeck.Acquisition.newInstallDetected")
     ])
     func presetSignalNames(preset: PresetSignal, wireName: String) {
         #expect(TelemetryDeckWireNames.signalName(for: preset.rawValue) == wireName)
@@ -273,16 +277,18 @@ struct TelemetryDeckWireNameTests {
             appBuild: "34",
             modelName: "iPhone17,1",
             platform: "iOS",
-            systemVersion: "26.1.2",
-            systemMajorMinorVersion: "26.1",
+            systemMajorVersion: 26,
+            systemMinorVersion: 1,
+            systemPatchVersion: 2,
             channel: .store,
             region: "US",
-            language: "en"
+            preferredLanguage: "en",
+            appLanguage: "en"
         )
         let identity = [
             PayloadKey.sdkName: "Aethergram",
-            PayloadKey.sdkVersion: "2.0.0",
-            PayloadKey.sdkNameAndVersion: "Aethergram 2.0.0"
+            PayloadKey.sdkVersion: "2.1.0",
+            PayloadKey.sdkNameAndVersion: "Aethergram 2.1.0"
         ]
         let signal = TelemetryDeckFixture.signal(parameters: environment.parameters.merging(identity) { $1 })
 
@@ -290,8 +296,8 @@ struct TelemetryDeckWireNameTests {
 
         let payload = try #require(element["payload"] as? [String: String])
         #expect(payload["TelemetryDeck.SDK.name"] == "Aethergram")
-        #expect(payload["TelemetryDeck.SDK.version"] == "2.0.0")
-        #expect(payload["TelemetryDeck.SDK.nameAndVersion"] == "Aethergram 2.0.0")
+        #expect(payload["TelemetryDeck.SDK.version"] == "2.1.0")
+        #expect(payload["TelemetryDeck.SDK.nameAndVersion"] == "Aethergram 2.1.0")
         #expect(payload["sdk.name"] == nil)
         #expect(payload["sdk.version"] == nil)
         #expect(payload["sdk.nameAndVersion"] == nil)

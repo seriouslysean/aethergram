@@ -41,11 +41,13 @@ struct TelemetryDeckBodyTests {
             appBuild: "1",
             modelName: "iPhone",
             platform: "iOS",
-            systemVersion: "18.0",
-            systemMajorMinorVersion: "18.0",
+            systemMajorVersion: 18,
+            systemMinorVersion: 0,
+            systemPatchVersion: 0,
             channel: channel,
             region: "US",
-            language: "en"
+            preferredLanguage: "en",
+            appLanguage: "en"
         )
     }
 

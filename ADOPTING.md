@@ -16,7 +16,7 @@ why the adapter carries a canonical-to-vendor wire-name table rather than renami
 ## Phase 1: add the package, emit nothing
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.4.2")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.5.0")
 ```
 
 Depend on a release tag, never on `main`. Add the `Aethergram` product to the target that owns
@@ -169,7 +169,12 @@ closes it and erases what was collected under it.
    with `recorder.updateConsent(storedAnswer)`. A recorder starts at `.neverAsked` in every process
    and reads no answer on its own. A non-granted answer adopted here erases, by design: that is
    how a decline made while this process was not running reaches what it collected.
-3. Call `beginSession()` on activation.
+3. Call `beginSession()` on activation. It returns `true` when its session is the first counted
+   since install or since the last erase; on that answer, call `recordNewInstallDetected()` from
+   the path every other signal takes, so whatever you apply there covers it too. The recorder
+   never records it on its own. Each recorder reads the retention record once, so two live
+   processes sharing one `RetentionStore` can each get `true` for the same install, and each then
+   saves over the other's record.
 4. Record.
 5. On deactivation, call `endSession()`, then `flush()`, then `flushAndWait()` inside the
    platform's expiring-time API, cancelled when the time expires.
@@ -320,6 +325,11 @@ reopens and, if consent permits, opens a counted session, so do not follow it wi
 `beginSession()`: the session is already open and the call is redundant. It replaces the decline,
 rotate, re-grant, `beginSession()` sequence 0.3.x called for.
 
+That reopened session is the first counted after the erase, but the reopen opened it, so no
+`beginSession()` reports it. If your dashboard counts a data reset as a new install, call
+`recordNewInstallDetected()` once `resetClosingCollection(during:)` returns, from your usual emit
+path; a decline that landed during the closure drops it at the gate like any other record.
+
 Consent is never touched, so there is no answer to read back and restore afterwards, and nothing
 that could overwrite a decline arriving mid-reset. Your consent lock does not need to span the
 erase. Calls may nest or overlap from several threads; collection reopens when the last one
@@ -328,7 +338,8 @@ returns.
 **After a plain `reset()`, reopen the counted session.** The erase takes the retention record with
 it and `reset()` opens no counted session, so until the next `beginSession()` every signal goes out
 with no acquisition or retention fields. Call it at the end of a reset that left collection
-enabled, as your activation path does.
+enabled, as your activation path does. It returns `true`: the reset took the retention record, so
+this session creates a new one.
 
 **A request already sent is not recalled.** The erase cancels a request already handed to the
 transport, and the supplied adapter stops it through `URLSession`, but whatever the server had
@@ -361,14 +372,23 @@ transports live at once is the drift this replaces, so do not leave it in place 
 Search without extension filters. A stale initialization in a lifecycle hook is one nobody notices
 until it posts.
 
-Two things the swap does to the data, so the dashboard's owner hears them before the charts show
-them:
+What the swap does to the data, so the dashboard's owner hears it before the charts show it:
 
 - **The retention counters restart.** The package does not read the SDK's counters, and the
   `RetentionStore` starts empty, so every existing install's first `beginSession()` after the swap
   creates its record: `acquisition.firstSessionDate` becomes the migration day, and the session and
   day counts restart with that session and day counted, so the first totals sent are 1. A cohort
-  chart shows every existing install arriving on that day.
+  chart shows every existing install arriving on that day. That `beginSession()` also returns
+  `true`, so a host that records `recordNewInstallDetected()` on its answer counts every existing
+  install as new on that day too. One that can tell a migrated install from a fresh one, from
+  something it stored itself, skips the preset for the migrated ones.
+- **New installs are counted once per retention record.** The SDK sends
+  `TelemetryDeck.Acquisition.newInstallDetected` whenever a session starts with no stored session
+  behind it, which also happens after 90 days without a session and after sessions that each
+  lasted under a second. `beginSession()` answers `true` only when it creates the retention record,
+  so a user returning after a long absence is no longer counted as new.
+- **The OS versions arrive bare.** The Swift SDK sent `iOS 26.5.1`, `iOS 26.5`, and `iOS 26`; this
+  package sends `26.5.1`, `26.5`, and `26`, so a chart grouped on one of them splits at the swap.
 - **The user hash carries over only if the input does.** The adapter sends the hex SHA-256 of
   `clientUserProvider`'s string with `salt` appended. The vendor's Swift SDK, at its 2.14.1 tag,
   hashes the same way (`Sources/TelemetryDeck/Helpers/CryptoHashing.swift`), over the signal's
@@ -405,6 +425,7 @@ Then confirm, on a real run:
   | Other Diagnostic Data | `recordError` | Your app, if you call it |
 
   With the default `environmentProvider`, every signal also carries the app version, device model,
-  OS version, region, and language, as every signal from the vendor's SDK does, and its manifest
-  declares no further type for them. If you return a user identifier rather than a device one, or
-  use any of this for tracking, the app's manifest and answers say so; the package's cannot.
+  OS version, region, the language the user prefers on the device, and the language the app runs
+  in, as every signal from the vendor's SDK does, and its manifest declares no further type for
+  them. If you return a user identifier rather than a device one, or use any of this for tracking,
+  the app's manifest and answers say so; the package's cannot.

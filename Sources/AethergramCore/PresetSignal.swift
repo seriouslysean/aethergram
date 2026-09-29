@@ -7,12 +7,14 @@ import Foundation
 /// name working after a transport swap.
 ///
 /// The set is small on purpose. A preset earns its place by being
-/// domain-neutral — an id plus a category, or a purchase's normalised fields —
-/// while anything carrying domain vocabulary (screen names, game events) stays
-/// with the consumer.
+/// domain-neutral — an id plus a category, a purchase's normalised fields, or
+/// an install every app has — while anything carrying domain vocabulary
+/// (screen names, game events) stays with the consumer.
 public enum PresetSignal: String, Sendable, CaseIterable {
     case purchaseCompleted = "purchase.completed"
     case errorOccurred = "error.occurred"
+    /// The first counted session since install, or since the last erase.
+    case newInstallDetected = "acquisition.newInstallDetected"
 }
 
 /// A completed purchase in vendor-neutral fields.

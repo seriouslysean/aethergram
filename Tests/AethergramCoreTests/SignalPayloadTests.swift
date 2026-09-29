@@ -63,6 +63,7 @@ struct SignalPayloadTests {
         #expect(signal.recordedAt == saturday)
         #expect(signal.parameters["env.key"] == "env-value")
         #expect(signal.parameters[PayloadKey.calendarHourOfDay] == "15")
+        #expect(signal.parameters[PayloadKey.calendarDayOfWeek] == "6")
         #expect(signal.parameters[PayloadKey.calendarIsWeekend] == "true")
         #expect(signal.parameters[PayloadKey.acquisitionFirstSessionDate] == "2026-01-01")
         #expect(signal.parameters[PayloadKey.retentionTotalSessionsCount] == "4")
@@ -147,7 +148,7 @@ struct SignalPayloadTests {
         #expect(signal.parameters[PayloadKey.sdkNameAndVersion] == Aethergram.nameAndVersion)
     }
 
-    @Test("A weekday signal reports its local hour and clears the weekend flag")
+    @Test("A weekday signal reports its local hour and weekday, and clears the weekend flag")
     func weekdaySignalReportsLocalHour() async throws {
         let directory = try #require(TestTempDirectory.url)
         let monday = try testDate(year: 2026, month: 1, day: 5, hour: 9)
@@ -159,7 +160,60 @@ struct SignalPayloadTests {
 
         let signal = try #require(fixture.transport.sentSignals.first)
         #expect(signal.parameters[PayloadKey.calendarHourOfDay] == "9")
+        #expect(signal.parameters[PayloadKey.calendarDayOfWeek] == "1")
         #expect(signal.parameters[PayloadKey.calendarIsWeekend] == "false")
+    }
+
+    /// A device calendar whose locale keeps a Friday-Saturday weekend.
+    static let fridaySaturdayWeekend: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_IL")
+        calendar.timeZone = TimeZone(identifier: "Asia/Jerusalem") ?? .gmt
+        return calendar
+    }()
+
+    /// The vendor numbers the day of week as ISO 8601 does and defines
+    /// `isWeekend` as Saturday or Sunday. The locale's own weekend is a
+    /// different answer wherever it is not those two days: under a
+    /// Friday-Saturday weekend, a Friday would report weekend and a Sunday a
+    /// weekday.
+    @Test(
+        "The day of week is ISO numbered, and the weekend is Saturday and Sunday whatever the locale's is",
+        arguments: [
+            (2, "5", "false"),
+            (3, "6", "true"),
+            (4, "7", "true"),
+            (5, "1", "false")
+        ]
+    )
+    func weekdayIsISONumberedAndTheWeekendIsSaturdayAndSunday(
+        dayOfJanuary: Int,
+        dayOfWeek: String,
+        isWeekend: String
+    ) throws {
+        let calendar = Self.fridaySaturdayWeekend
+        func noon(_ day: Int) throws -> Date {
+            try #require(calendar.date(from: DateComponents(year: 2026, month: 1, day: day, hour: 12)))
+        }
+        // Friday 2026-01-02 and Sunday 2026-01-04 are where the two answers
+        // part. Without the locale's weekend in place this proves nothing.
+        try #require(calendar.firstWeekday == 1)
+        try #require(calendar.isDateInWeekend(noon(2)))
+        try #require(!calendar.isDateInWeekend(noon(4)))
+
+        let parameters = try EnvironmentSnapshot.calendarParameters(at: noon(dayOfJanuary), calendar: calendar)
+
+        #expect(parameters[PayloadKey.calendarDayOfWeek] == dayOfWeek)
+        #expect(parameters[PayloadKey.calendarIsWeekend] == isWeekend)
+
+        // The week above starts on Sunday. The number must not move with a
+        // locale whose week starts on Monday either.
+        var mondayFirst = calendar
+        mondayFirst.locale = Locale(identifier: "de_DE")
+        mondayFirst.firstWeekday = 2
+        let fromMondayFirst = try EnvironmentSnapshot.calendarParameters(at: noon(dayOfJanuary), calendar: mondayFirst)
+        #expect(fromMondayFirst[PayloadKey.calendarDayOfWeek] == dayOfWeek)
+        #expect(fromMondayFirst[PayloadKey.calendarIsWeekend] == isWeekend)
     }
 
     /// The prefix lets one dashboard hold several surfaces. Presets bypass it:
@@ -187,12 +241,14 @@ struct SignalPayloadTests {
             )
         )
         fixture.recorder.recordError(id: "decode.failure")
+        fixture.recorder.recordNewInstallDetected()
         await fixture.recorder.drain()
 
         #expect(fixture.transport.sentSignalNames == [
             "prefix.thing.happened",
             PresetSignal.purchaseCompleted.rawValue,
-            PresetSignal.errorOccurred.rawValue
+            PresetSignal.errorOccurred.rawValue,
+            PresetSignal.newInstallDetected.rawValue
         ])
     }
 
@@ -402,11 +458,13 @@ struct SignalPayloadTests {
             appBuild: "34",
             modelName: "iPhone17,1",
             platform: "iOS",
-            systemVersion: "26.1.2",
-            systemMajorMinorVersion: "26.1",
+            systemMajorVersion: 26,
+            systemMinorVersion: 1,
+            systemPatchVersion: 2,
             channel: .store,
             region: "US",
-            language: "en"
+            preferredLanguage: "de",
+            appLanguage: "en"
         )
 
         let expected: Set<String> = [
@@ -417,7 +475,9 @@ struct SignalPayloadTests {
             PayloadKey.devicePlatform,
             PayloadKey.deviceSystemVersion,
             PayloadKey.deviceSystemMajorMinorVersion,
+            PayloadKey.deviceSystemMajorVersion,
             PayloadKey.runContextChannel,
+            PayloadKey.runContextLanguage,
             PayloadKey.userPreferenceRegion,
             PayloadKey.userPreferenceLanguage
         ]
@@ -425,15 +485,46 @@ struct SignalPayloadTests {
         #expect(snapshot.parameters.count == expected.count)
         #expect(snapshot.parameters[PayloadKey.appVersionAndBuild] == "1.2 (build 34)")
         #expect(snapshot.parameters[PayloadKey.runContextChannel] == "store")
+        // One stored version, three bare granularities derived from it.
+        #expect(snapshot.parameters[PayloadKey.deviceSystemVersion] == "26.1.2")
+        #expect(snapshot.parameters[PayloadKey.deviceSystemMajorMinorVersion] == "26.1")
+        #expect(snapshot.parameters[PayloadKey.deviceSystemMajorVersion] == "26")
+        #expect(snapshot.parameters[PayloadKey.userPreferenceLanguage] == "de")
+        #expect(snapshot.parameters[PayloadKey.runContextLanguage] == "en")
+    }
+
+    /// The vendor defines the user's language as the one they most prefer on
+    /// the device, which the app may not be localized in, and the run
+    /// context's as the one the app runs in. Read from the locale alone, both
+    /// are the app's, so a device set to German reads as English in an app
+    /// with no German localization.
+    @Test(
+        "The user's language is the device's first preference, not the app's",
+        arguments: [
+            (["de-DE", "en-US"], "de"),
+            (["zh-Hans-CN"], "zh"),
+            (["pt_BR"], "pt"),
+            ([], "")
+        ] as [([String], String)]
+    )
+    func userLanguageIsTheDevicePreference(preferredLanguages: [String], expected: String) {
+        let snapshot = EnvironmentSnapshot.current(
+            locale: Locale(identifier: "en_IL"),
+            preferredLanguages: preferredLanguages
+        )
+
+        #expect(snapshot.parameters[PayloadKey.userPreferenceLanguage] == expected)
+        #expect(snapshot.parameters[PayloadKey.runContextLanguage] == "en")
     }
 
     @Test("Calendar parameters are the only clock-derived fields")
-    func calendarParametersCoverHourAndWeekendOnly() throws {
+    func calendarParametersCoverHourDayAndWeekendOnly() throws {
         let saturday = try testDate(year: 2026, month: 1, day: 3, hour: 15)
         let parameters = EnvironmentSnapshot.calendarParameters(at: saturday, calendar: testCalendar)
 
         #expect(parameters == [
             PayloadKey.calendarHourOfDay: "15",
+            PayloadKey.calendarDayOfWeek: "6",
             PayloadKey.calendarIsWeekend: "true"
         ])
     }

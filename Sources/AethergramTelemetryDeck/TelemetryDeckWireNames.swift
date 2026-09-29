@@ -53,11 +53,12 @@ enum TelemetryDeckWireNames {
     /// `channel`; nothing in this package reads it back.
     private static let legacyIsTestFlightWireName = "TelemetryDeck.RunContext.isTestFlight"
 
-    /// Both vendor-namespaced names bypass the SDK's signal prefix, which is
+    /// Each vendor-namespaced name bypasses the SDK's signal prefix, which is
     /// why the core leaves preset names unprefixed.
     private static let presetSignalNames: [String: String] = [
         PresetSignal.purchaseCompleted.rawValue: "TelemetryDeck.Purchase.completed",
-        PresetSignal.errorOccurred.rawValue: "TelemetryDeck.Error.occurred"
+        PresetSignal.errorOccurred.rawValue: "TelemetryDeck.Error.occurred",
+        PresetSignal.newInstallDetected.rawValue: "TelemetryDeck.Acquisition.newInstallDetected"
     ]
 
     private static let parameterKeys: [String: String] = [
@@ -76,15 +77,18 @@ enum TelemetryDeckWireNames {
         PayloadKey.devicePlatform: "TelemetryDeck.Device.platform",
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
+        PayloadKey.deviceSystemMajorVersion: "TelemetryDeck.Device.systemMajorVersion",
 
         PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
+        PayloadKey.runContextLanguage: "TelemetryDeck.RunContext.language",
 
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
 
-        // The vendor documents `hourOfDay` by name; `isWeekend` is the other
-        // half of the only question an app asks of a calendar.
+        // Three of the calendar fields the vendor documents. Only the hour's
+        // value differs on the wire; see `wireValue(forKey:value:)`.
         PayloadKey.calendarHourOfDay: "TelemetryDeck.Calendar.hourOfDay",
+        PayloadKey.calendarDayOfWeek: "TelemetryDeck.Calendar.dayOfWeek",
         PayloadKey.calendarIsWeekend: "TelemetryDeck.Calendar.isWeekend",
 
         PayloadKey.acquisitionFirstSessionDate: "TelemetryDeck.Acquisition.firstSessionDate",

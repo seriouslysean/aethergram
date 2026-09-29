@@ -23,7 +23,7 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.4.2")
+.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.5.0")
 ```
 
 ```swift
@@ -69,7 +69,13 @@ let recorder = SignalRecorder(
 )
 
 recorder.updateConsent(storedAnswer)   // on every activation, before anything records
-recorder.beginSession()                // a session boundary is host-specific
+
+// A session boundary is host-specific. The session that creates the retention
+// record, after an install, a reset(), or a decline and regrant, answers
+// true: report it as a new install.
+if recorder.beginSession() {
+    recorder.recordNewInstallDetected()
+}
 recorder.record("Session.started", parameters: ["surface": "home"])
 
 // On the way out: queued signals to disk now, then a send. Run the await

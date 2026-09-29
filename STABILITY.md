@@ -8,8 +8,9 @@ listed here is an implementation detail.
 The `public` surface of the `Aethergram` product, reached through the umbrella import:
 
 - `SignalRecorder`: its initializer's parameter list, `updateConsent`, `record`,
-  `recordPurchaseCompleted`, `recordError`, `beginSession`, `endSession`, `flush`, `flushAndWait`,
-  `reset`, and `resetClosingCollection(during:)`.
+  `recordPurchaseCompleted`, `recordError`, `recordNewInstallDetected`, `beginSession` and the
+  answer it returns, `endSession`, `flush`, `flushAndWait`, `reset`, and
+  `resetClosingCollection(during:)`.
 - `AethergramConfiguration`: its stored properties, its initializer's defaults, and the two pure
   policy functions `deliveryDelay(queued:)` and `backoffInterval(consecutiveFailures:)`. The
   initializer traps on a `batchSize` or `queueLimit` that is not positive and on a
@@ -106,6 +107,13 @@ that no reading places between 2015-01-01 and tomorrow is kept as written. A day
 Ethiopic calendar's Incarnation-era numbering that also reads as a Gregorian date in that range
 stays unconverted, and one in a Chinese or Dangi leap month converts a lunar month early, as the
 changelog describes.
+
+2.1.0, first stamped by 0.5.0, adds `device.systemMajorVersion`, `runContext.language`,
+`calendar.dayOfWeek`, and the new-install preset, which is a minor step. The same release fixes
+two values, which by themselves would have moved nothing: `userPreference.language` is the
+device's preferred language rather than the app's, and `calendar.isWeekend` is Saturday and Sunday
+rather than the locale's weekend. Each keeps its key and its form, a language code and `true` or
+`false`, so a reader keyed on either has nothing to react to beyond the values being right.
 
 ## How versions move
 
