@@ -89,14 +89,15 @@ struct ConsentEnforcementTests {
 
     /// Session boundaries are the other write path. A counter that advanced
     /// before the grant would survive as collected data even though nothing
-    /// was ever sent.
-    @Test("Session boundaries advance no counter before a grant")
+    /// was ever sent. A session begun then is not a new install either: the
+    /// host would record the preset on that answer.
+    @Test("Session boundaries advance no counter and report no new install before a grant")
     func sessionBoundariesBeforeGrantAdvanceNothing() throws {
         let directory = try #require(TestTempDirectory.url)
         let start = try testDate(year: 2026, month: 1, day: 5)
         let fixture = makeFixture(directory: directory, now: steppingClock(from: start))
 
-        fixture.recorder.beginSession()
+        #expect(!fixture.recorder.beginSession())
         fixture.recorder.endSession()
 
         #expect(fixture.retention.saved.isEmpty)

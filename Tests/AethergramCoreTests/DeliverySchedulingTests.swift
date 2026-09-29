@@ -614,6 +614,58 @@ struct DeliverySchedulingTests {
         #expect(after.totalSessionsCount == 2)
     }
 
+    /// A host records the new-install preset on `beginSession()`'s answer,
+    /// so a second true is a second install on the dashboard. Only the call
+    /// that creates the retention record answers true: not a repeat in the
+    /// same activation, not the next session, and not the next process over
+    /// the same store. A record made before that first session reads the
+    /// store without creating anything, so it leaves the answer to the
+    /// session.
+    @Test("Only the session that creates the retention record reports a new install")
+    func onlyTheFirstCountedSessionReportsANewInstall() throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let retention = SpyRetentionStore()
+        let first = makeFixture(directory: directory, retention: retention, now: steppingClock(from: start, step: 30))
+        first.recorder.updateConsent(.granted)
+        first.recorder.record("launch")
+
+        #expect(first.recorder.beginSession())
+        #expect(!first.recorder.beginSession())
+        first.recorder.endSession()
+        #expect(!first.recorder.beginSession())
+
+        let next = makeFixture(
+            directory: directory,
+            retention: retention,
+            now: steppingClock(from: start.addingTimeInterval(3600), step: 30)
+        )
+        next.recorder.updateConsent(.granted)
+        #expect(!next.recorder.beginSession())
+        #expect(retention.record?.totalSessionsCount == 3)
+    }
+
+    /// An erase drops the retention record, and with it the acquisition
+    /// date, so the session after it is counted as the first again and the
+    /// host can report it as one.
+    @Test(
+        "An erase makes the next session report a new install again",
+        arguments: ConsentEnforcementTests.Erasure.allCases
+    )
+    func eraseMakesTheNextSessionReportANewInstall(erasure: ConsentEnforcementTests.Erasure) throws {
+        let directory = try #require(TestTempDirectory.url)
+        let start = try testDate(year: 2026, month: 3, day: 4)
+        let fixture = makeFixture(directory: directory, now: steppingClock(from: start, step: 30))
+        fixture.recorder.updateConsent(.granted)
+        #expect(fixture.recorder.beginSession())
+
+        erasure.apply(to: fixture.recorder)
+
+        #expect(fixture.recorder.beginSession())
+        #expect(!fixture.recorder.beginSession())
+        #expect(fixture.retention.record?.totalSessionsCount == 1)
+    }
+
     /// A record in the next process lands before its `beginSession()` often
     /// enough — a launch emit, a restored queue — and it must not move the
     /// dead session's checkpoint. Moved to now, the inference closes that

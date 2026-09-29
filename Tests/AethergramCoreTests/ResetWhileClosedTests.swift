@@ -110,6 +110,23 @@ struct ResetWhileClosedTests {
         #expect(counters.openSessionStartedAt != nil)
     }
 
+    /// The reopen counts the first session after the erase itself, so a
+    /// `beginSession()` after it finds that session open and reports no new
+    /// install. A host that treats a data reset as a new install records the
+    /// preset once the reset returns; a begin that also answered true would
+    /// have it recorded twice for one session.
+    @Test("A begin after a closing reset does not report the session the reopen counted")
+    func beginAfterAClosingResetReportsNoNewInstall() throws {
+        let fixture = try makeFixture()
+        fixture.recorder.updateConsent(.granted)
+        #expect(fixture.recorder.beginSession())
+
+        fixture.recorder.resetClosingCollection {}
+
+        #expect(!fixture.recorder.beginSession())
+        #expect(fixture.retention.record?.totalSessionsCount == 1)
+    }
+
     /// The reopen restores the answer in force when the callback returns,
     /// not the one in force when the reset began: a decline made meanwhile
     /// is the user's, and a reopen that restored the old grant would turn

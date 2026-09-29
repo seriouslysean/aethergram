@@ -162,11 +162,22 @@ public final class SignalRecorder: Sendable {
     /// Opens a session for the counters. A session boundary is host-specific —
     /// a short-lived extension process has no app foreground to key off — so
     /// the host calls it and the package counts.
-    public func beginSession() {
+    ///
+    /// - Returns: Whether this call created the retention record: the session
+    ///   it opened is the first counted since install, or since the last
+    ///   erase, and the host records `recordNewInstallDetected` on it. False
+    ///   on every later session, on a repeat call in the same activation, and
+    ///   whenever collection is not permitted. The session
+    ///   `resetClosingCollection(during:)` reopens is counted by that reopen,
+    ///   so no later call reports it. A `RetentionStore` whose `load()`
+    ///   returns nil, including for a record it could not decode, reads as no
+    ///   record, and the next session reports true.
+    @discardableResult
+    public func beginSession() -> Bool {
         requireNoReentry()
-        lock.withLock { current in
-            guard current.gateOpen else { return }
-            openCountedSession(&current)
+        return lock.withLock { current in
+            guard current.gateOpen else { return false }
+            return openCountedSession(&current)
         }
     }
 
@@ -543,8 +554,11 @@ public final class SignalRecorder: Sendable {
     }
 
     /// Opens and counts a session, unless this instance's own is open. Call
-    /// from inside the lock, with the gate open.
-    private func openCountedSession(_ current: inout State) {
+    /// from inside the lock, with the gate open. Returns whether it created
+    /// the retention record, which it answers only after loading the stored
+    /// one, since a record made before this session has already read it.
+    @discardableResult
+    private func openCountedSession(_ current: inout State) -> Bool {
         let started = now()
         loadRetentionIfNeeded(&current, at: started)
         // A session this instance already opened stays open. Two calls land
@@ -557,7 +571,8 @@ public final class SignalRecorder: Sendable {
         // non-nil `openSessionStartedAt`: a session left open by a process
         // that died is also open, and closing that one is the entire point
         // of the inference path.
-        if current.ownsOpenSession { return }
+        if current.ownsOpenSession { return false }
+        let createsRecord = current.retention == nil
         current.openedSessionAt = started
         current.sessionID = UUID().uuidString
         let record = RetentionCounters.recordingSessionStart(
@@ -567,6 +582,7 @@ public final class SignalRecorder: Sendable {
         )
         current.retention = record
         retentionStore.save(record)
+        return createsRecord
     }
 
     /// The one place a signal becomes queued state. Everything the invariant
