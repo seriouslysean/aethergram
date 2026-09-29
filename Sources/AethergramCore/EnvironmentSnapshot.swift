@@ -158,11 +158,18 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// Clock-derived fields, computed per signal rather than cached: an
     /// extension process can outlive an hour boundary, and hour-of-day is the
     /// field the whole `Calendar` family was reduced to.
+    ///
+    /// The weekend is Saturday and Sunday, as the vendor defines it, rather
+    /// than `isDateInWeekend`, which follows the locale's weekend.
     public static func calendarParameters(at date: Date, calendar: Calendar) -> [String: String] {
         let hour = calendar.component(.hour, from: date)
+        // Gregorian numbers Sunday 1 through Saturday 7; ISO 8601 numbers
+        // Monday 1 through Sunday 7.
+        let weekday = RetentionCounters.dayCalendar(matching: calendar).component(.weekday, from: date)
+        let isoWeekday = weekday == 1 ? 7 : weekday - 1
         return [
             PayloadKey.calendarHourOfDay: "\(hour)",
-            PayloadKey.calendarIsWeekend: "\(calendar.isDateInWeekend(date))"
+            PayloadKey.calendarIsWeekend: "\(isoWeekday >= 6)"
         ]
     }
 

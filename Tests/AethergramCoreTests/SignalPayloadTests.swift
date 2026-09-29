@@ -162,6 +162,39 @@ struct SignalPayloadTests {
         #expect(signal.parameters[PayloadKey.calendarIsWeekend] == "false")
     }
 
+    /// A device calendar whose locale keeps a Friday-Saturday weekend.
+    static let fridaySaturdayWeekend: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_IL")
+        calendar.timeZone = TimeZone(identifier: "Asia/Jerusalem") ?? .gmt
+        return calendar
+    }()
+
+    /// The vendor defines `isWeekend` as Saturday or Sunday. The locale's own
+    /// weekend is a different answer wherever it is not those two days: under
+    /// a Friday-Saturday weekend, a Friday would report weekend and a Sunday
+    /// a weekday.
+    @Test("The weekend is Saturday and Sunday whatever the locale's weekend is", arguments: [
+        (2, "false"),
+        (3, "true"),
+        (4, "true"),
+        (5, "false")
+    ])
+    func weekendIsSaturdayAndSunday(dayOfJanuary: Int, isWeekend: String) throws {
+        let calendar = Self.fridaySaturdayWeekend
+        func noon(_ day: Int) throws -> Date {
+            try #require(calendar.date(from: DateComponents(year: 2026, month: 1, day: day, hour: 12)))
+        }
+        // Friday 2026-01-02 and Sunday 2026-01-04 are where the two answers
+        // part. Without the locale's weekend in place this proves nothing.
+        try #require(calendar.isDateInWeekend(noon(2)))
+        try #require(!calendar.isDateInWeekend(noon(4)))
+
+        let parameters = try EnvironmentSnapshot.calendarParameters(at: noon(dayOfJanuary), calendar: calendar)
+
+        #expect(parameters[PayloadKey.calendarIsWeekend] == isWeekend)
+    }
+
     /// The prefix lets one dashboard hold several surfaces. Presets bypass it:
     /// their names are the package's, and a prefixed preset would not join with
     /// anything an adapter maps.
