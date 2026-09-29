@@ -159,6 +159,18 @@ public final class SignalRecorder: Sendable {
         enqueue(name: PresetSignal.errorOccurred.rawValue, parameters: combined, floatValue: nil)
     }
 
+    /// Records the new-install preset. Unprefixed, like the other presets.
+    ///
+    /// Call it when `beginSession()` returns true. The recorder never records
+    /// it on its own, so it takes the host's emit path, and whatever the host
+    /// decides there, as every other signal does. The acquisition date the
+    /// vendor's SDK attaches to it already rides every signal once a session
+    /// is counted.
+    public func recordNewInstallDetected(parameters: [String: String] = [:]) {
+        requireNoReentry()
+        enqueue(name: PresetSignal.newInstallDetected.rawValue, parameters: parameters, floatValue: nil)
+    }
+
     /// Opens a session for the counters. A session boundary is host-specific —
     /// a short-lived extension process has no app foreground to key off — so
     /// the host calls it and the package counts.

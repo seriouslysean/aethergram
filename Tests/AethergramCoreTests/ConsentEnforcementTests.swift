@@ -70,6 +70,7 @@ struct ConsentEnforcementTests {
                 price: 1.99
             )
         )
+        fixture.recorder.recordNewInstallDetected()
         await fixture.recorder.drain()
 
         #expect(fixture.transport.sendCount == 0)

@@ -53,11 +53,12 @@ enum TelemetryDeckWireNames {
     /// `channel`; nothing in this package reads it back.
     private static let legacyIsTestFlightWireName = "TelemetryDeck.RunContext.isTestFlight"
 
-    /// Both vendor-namespaced names bypass the SDK's signal prefix, which is
+    /// Each vendor-namespaced name bypasses the SDK's signal prefix, which is
     /// why the core leaves preset names unprefixed.
     private static let presetSignalNames: [String: String] = [
         PresetSignal.purchaseCompleted.rawValue: "TelemetryDeck.Purchase.completed",
-        PresetSignal.errorOccurred.rawValue: "TelemetryDeck.Error.occurred"
+        PresetSignal.errorOccurred.rawValue: "TelemetryDeck.Error.occurred",
+        PresetSignal.newInstallDetected.rawValue: "TelemetryDeck.Acquisition.newInstallDetected"
     ]
 
     private static let parameterKeys: [String: String] = [

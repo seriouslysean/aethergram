@@ -95,7 +95,8 @@ struct TelemetryDeckWireNameTests {
 
     @Test("Preset signal names take the vendor's namespaced form", arguments: [
         (PresetSignal.purchaseCompleted, "TelemetryDeck.Purchase.completed"),
-        (PresetSignal.errorOccurred, "TelemetryDeck.Error.occurred")
+        (PresetSignal.errorOccurred, "TelemetryDeck.Error.occurred"),
+        (PresetSignal.newInstallDetected, "TelemetryDeck.Acquisition.newInstallDetected")
     ])
     func presetSignalNames(preset: PresetSignal, wireName: String) {
         #expect(TelemetryDeckWireNames.signalName(for: preset.rawValue) == wireName)

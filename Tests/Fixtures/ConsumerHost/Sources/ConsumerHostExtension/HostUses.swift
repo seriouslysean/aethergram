@@ -24,8 +24,20 @@ struct HostTransport: SignalTransport {
     }
 }
 
-/// The two calls a host's lifecycle makes: an awaited flush on the way out, and a data reset that
-/// replaces the identifier with collection closed.
+/// The calls a host's lifecycle makes: a session on the way in, with the new-install preset on the
+/// one session that creates the retention record; an awaited flush on the way out; and a data reset
+/// that replaces the identifier with collection closed.
+func onActivate(_ recorder: SignalRecorder) {
+    if recorder.beginSession() {
+        recorder.recordNewInstallDetected()
+    }
+}
+
+/// A call written before `beginSession()` returned an answer, which still compiles without one.
+func onActivateIgnoringTheAnswer(_ recorder: SignalRecorder) {
+    recorder.beginSession()
+}
+
 func onResign(_ recorder: SignalRecorder) async {
     recorder.endSession()
     await recorder.flushAndWait()

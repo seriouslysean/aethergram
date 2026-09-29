@@ -231,12 +231,14 @@ struct SignalPayloadTests {
             )
         )
         fixture.recorder.recordError(id: "decode.failure")
+        fixture.recorder.recordNewInstallDetected()
         await fixture.recorder.drain()
 
         #expect(fixture.transport.sentSignalNames == [
             "prefix.thing.happened",
             PresetSignal.purchaseCompleted.rawValue,
-            PresetSignal.errorOccurred.rawValue
+            PresetSignal.errorOccurred.rawValue,
+            PresetSignal.newInstallDetected.rawValue
         ])
     }
 
