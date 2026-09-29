@@ -31,6 +31,7 @@ struct TelemetryDeckWireNameTests {
         PayloadKey.deviceSystemMajorVersion: "TelemetryDeck.Device.systemMajorVersion",
 
         PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
+        PayloadKey.runContextLanguage: "TelemetryDeck.RunContext.language",
 
         PayloadKey.userPreferenceRegion: "TelemetryDeck.UserPreference.region",
         PayloadKey.userPreferenceLanguage: "TelemetryDeck.UserPreference.language",
@@ -279,7 +280,8 @@ struct TelemetryDeckWireNameTests {
             systemPatchVersion: 2,
             channel: .store,
             region: "US",
-            language: "en"
+            preferredLanguage: "en",
+            appLanguage: "en"
         )
         let identity = [
             PayloadKey.sdkName: "Aethergram",

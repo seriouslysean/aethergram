@@ -54,12 +54,17 @@ public enum PayloadKey {
     // MARK: Run context
 
     public static let runContextChannel = "runContext.channel"
+    /// The language the app runs in, which is always one it is localized in.
+    public static let runContextLanguage = "runContext.language"
 
     // MARK: User preference
 
     /// The only geographic signal a native app has: no server-side derivation
     /// exists for app signals, so dropping this leaves no fallback behind it.
     public static let userPreferenceRegion = "userPreference.region"
+    /// The language the user most prefers on the device, whether or not the
+    /// app is localized in it. Where it differs from `runContextLanguage`, the
+    /// app lacks a localization that user would have chosen.
     public static let userPreferenceLanguage = "userPreference.language"
 
     // MARK: Calendar

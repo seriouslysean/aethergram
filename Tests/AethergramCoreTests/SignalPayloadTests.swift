@@ -407,7 +407,8 @@ struct SignalPayloadTests {
             systemPatchVersion: 2,
             channel: .store,
             region: "US",
-            language: "en"
+            preferredLanguage: "de",
+            appLanguage: "en"
         )
 
         let expected: Set<String> = [
@@ -420,6 +421,7 @@ struct SignalPayloadTests {
             PayloadKey.deviceSystemMajorMinorVersion,
             PayloadKey.deviceSystemMajorVersion,
             PayloadKey.runContextChannel,
+            PayloadKey.runContextLanguage,
             PayloadKey.userPreferenceRegion,
             PayloadKey.userPreferenceLanguage
         ]
@@ -431,6 +433,32 @@ struct SignalPayloadTests {
         #expect(snapshot.parameters[PayloadKey.deviceSystemVersion] == "26.1.2")
         #expect(snapshot.parameters[PayloadKey.deviceSystemMajorMinorVersion] == "26.1")
         #expect(snapshot.parameters[PayloadKey.deviceSystemMajorVersion] == "26")
+        #expect(snapshot.parameters[PayloadKey.userPreferenceLanguage] == "de")
+        #expect(snapshot.parameters[PayloadKey.runContextLanguage] == "en")
+    }
+
+    /// The vendor defines the user's language as the one they most prefer on
+    /// the device, which the app may not be localized in, and the run
+    /// context's as the one the app runs in. Read from the locale alone, both
+    /// are the app's, so a device set to German reads as English in an app
+    /// with no German localization.
+    @Test(
+        "The user's language is the device's first preference, not the app's",
+        arguments: [
+            (["de-DE", "en-US"], "de"),
+            (["zh-Hans-CN"], "zh"),
+            (["pt_BR"], "pt"),
+            ([], "")
+        ] as [([String], String)]
+    )
+    func userLanguageIsTheDevicePreference(preferredLanguages: [String], expected: String) {
+        let snapshot = EnvironmentSnapshot.current(
+            locale: Locale(identifier: "en_IL"),
+            preferredLanguages: preferredLanguages
+        )
+
+        #expect(snapshot.parameters[PayloadKey.userPreferenceLanguage] == expected)
+        #expect(snapshot.parameters[PayloadKey.runContextLanguage] == "en")
     }
 
     @Test("Calendar parameters are the only clock-derived fields")

@@ -38,7 +38,8 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         systemPatchVersion: Int,
         channel: RunContextChannel,
         region: String,
-        language: String
+        preferredLanguage: String,
+        appLanguage: String
     ) {
         self.appVersion = appVersion
         self.appBuild = appBuild
@@ -49,7 +50,8 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         self.systemPatchVersion = systemPatchVersion
         self.channel = channel
         self.region = region
-        self.language = language
+        self.preferredLanguage = preferredLanguage
+        self.appLanguage = appLanguage
     }
 
     // MARK: Public
@@ -75,8 +77,13 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let channel: RunContextChannel
     /// The locale's region identifier, or empty when it has none.
     public let region: String
-    /// The locale's language code, or empty when it has none.
-    public let language: String
+    /// The language the user most prefers on the device: the language subtag
+    /// of the first `Locale.preferredLanguages` entry, or empty when there is
+    /// none. It may be one the app is not localized in.
+    public let preferredLanguage: String
+    /// The language the app runs in: the locale's language code, or empty when
+    /// it has none.
+    public let appLanguage: String
 
     /// The snapshot as payload parameters under canonical keys.
     ///
@@ -93,8 +100,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             PayloadKey.deviceSystemMajorMinorVersion: "\(systemMajorVersion).\(systemMinorVersion)",
             PayloadKey.deviceSystemMajorVersion: "\(systemMajorVersion)",
             PayloadKey.runContextChannel: channel.rawValue,
+            PayloadKey.runContextLanguage: appLanguage,
             PayloadKey.userPreferenceRegion: region,
-            PayloadKey.userPreferenceLanguage: language
+            PayloadKey.userPreferenceLanguage: preferredLanguage
         ]
     }
 
@@ -105,15 +113,18 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     /// - Parameters:
     ///   - bundle: Supplies the version, the build, and, outside macOS, the
     ///     receipt the channel is read from.
-    ///   - locale: Supplies the region and the language.
+    ///   - locale: Supplies the region and the language the app runs in.
     ///   - processInfo: Supplies the OS version, and the simulator's model
     ///     identifier, whose presence marks a simulator run.
     ///   - fileManager: Answers whether the receipt file exists.
+    ///   - preferredLanguages: The user's languages, most preferred first,
+    ///     which the preferred language is read from.
     public static func current(
         bundle: Bundle = .main,
         locale: Locale = .current,
         processInfo: ProcessInfo = .processInfo,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        preferredLanguages: [String] = Locale.preferredLanguages
     ) -> EnvironmentSnapshot {
         let version = processInfo.operatingSystemVersion
         // One read, two answers: the presence of the identifier is what makes
@@ -138,7 +149,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             systemPatchVersion: version.patchVersion,
             channel: RunContextChannel(isTestFlight: distribution.isTestFlight, isAppStore: distribution.isAppStore),
             region: locale.region?.identifier ?? "",
-            language: locale.language.languageCode?.identifier ?? ""
+            // The subtag before the first `-` or `_`, as the vendor's SDK reads it.
+            preferredLanguage: preferredLanguages.first.map { String($0.prefix { $0 != "-" && $0 != "_" }) } ?? "",
+            appLanguage: locale.language.languageCode?.identifier ?? ""
         )
     }
 

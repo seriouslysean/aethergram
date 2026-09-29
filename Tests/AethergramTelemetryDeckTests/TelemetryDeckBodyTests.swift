@@ -46,7 +46,8 @@ struct TelemetryDeckBodyTests {
             systemPatchVersion: 0,
             channel: channel,
             region: "US",
-            language: "en"
+            preferredLanguage: "en",
+            appLanguage: "en"
         )
     }
 
