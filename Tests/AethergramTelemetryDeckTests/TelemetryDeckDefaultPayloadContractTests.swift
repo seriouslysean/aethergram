@@ -240,7 +240,7 @@ struct TelemetryDeckDefaultPayloadContractTests {
             // Signal+Helpers.swift:33,43 and default-parameters.md:164: Saturday or Sunday.
             "TelemetryDeck.Calendar.isWeekend": "false",
             // Signal.swift:71: `<version> (build <build>)`.
-            "TelemetryDeck.AppInfo.versionAndBuildNumber": "3.4.0 (build 18)",
+            "TelemetryDeck.AppInfo.versionAndBuildNumber": "1.2.3 (build 45)",
             // Signal.swift:95: `<name> <version>`.
             "TelemetryDeck.SDK.nameAndVersion": "Aethergram 2.1.0",
             // SessionManager.swift:177 and default-parameters.md:168: the local day of the first session.
@@ -288,8 +288,8 @@ struct TelemetryDeckDefaultPayloadContractTests {
         }
     }
 
-    /// SessionManager.swift:181-184 sends the signal under this name, once, when
-    /// the first session after install starts.
+    /// SessionManager.swift:175-184 sends the signal under this name when a
+    /// session starts with no stored session behind it.
     @Test("The install preset takes the vendor's name")
     func installPresetTakesTheVendorsName() async throws {
         #expect(
@@ -301,7 +301,8 @@ struct TelemetryDeckDefaultPayloadContractTests {
             recorder.recordNewInstallDetected()
         }
 
-        #expect(try TelemetryDeckFixture.string(element["type"], "type") == "TelemetryDeck.Acquisition.newInstallDetected")
+        let type = try TelemetryDeckFixture.string(element["type"], "type")
+        #expect(type == "TelemetryDeck.Acquisition.newInstallDetected")
     }
 
     // MARK: Private
@@ -388,8 +389,8 @@ struct TelemetryDeckDefaultPayloadContractTests {
             preferredLanguages: ["de-DE", "en-US"]
         )
         return EnvironmentSnapshot(
-            appVersion: "3.4.0",
-            appBuild: "18",
+            appVersion: "1.2.3",
+            appBuild: "45",
             modelName: "iPhone18,1",
             platform: "iOS",
             systemMajorVersion: 26,

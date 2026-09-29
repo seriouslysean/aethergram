@@ -204,6 +204,15 @@ struct SignalPayloadTests {
 
         #expect(parameters[PayloadKey.calendarDayOfWeek] == dayOfWeek)
         #expect(parameters[PayloadKey.calendarIsWeekend] == isWeekend)
+
+        // The week above starts on Sunday. The number must not move with a
+        // locale whose week starts on Monday either.
+        var mondayFirst = calendar
+        mondayFirst.locale = Locale(identifier: "de_DE")
+        mondayFirst.firstWeekday = 2
+        let fromMondayFirst = try EnvironmentSnapshot.calendarParameters(at: noon(dayOfJanuary), calendar: mondayFirst)
+        #expect(fromMondayFirst[PayloadKey.calendarDayOfWeek] == dayOfWeek)
+        #expect(fromMondayFirst[PayloadKey.calendarIsWeekend] == isWeekend)
     }
 
     /// The prefix lets one dashboard hold several surfaces. Presets bypass it:
