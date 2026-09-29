@@ -3,6 +3,76 @@
 What each release changed that a host can see. What a version number promises is in
 [STABILITY.md](STABILITY.md); this file is the history that contract was applied to.
 
+## 0.5.0 — 2026-09-29
+
+A 0.x minor that changes the API list: `EnvironmentSnapshot`'s initializer and stored properties
+change, and `beginSession()` returns a value. The payload version moves to 2.1.0, which adds three
+fields and a preset and fixes two values, each checked against TelemetryDeck's SwiftSDK at
+`58f43629` and its default-parameters reference at `2b9c2108`.
+
+### Payload 2.1.0
+
+- `device.systemMajorVersion`, sent as `TelemetryDeck.Device.systemMajorVersion`: the major OS
+  version, `26`. The vendor documents it among its default parameters, its SDK sends it, and its
+  prebuilt system-version chart switches between it and the major.minor version. All three version
+  strings stay bare (`26.5.1`, `26.5`, `26`): the vendor documents each only as a String, its Swift
+  SDK prefixes the platform where its Kotlin SDK sends the major and major.minor versions bare, and
+  a changed form would split every chart already grouped on the bare one.
+- `runContext.language`, sent as `TelemetryDeck.RunContext.language`: the language the app runs in,
+  the locale's language code.
+- `calendar.dayOfWeek`, sent as `TelemetryDeck.Calendar.dayOfWeek`: the local day numbered as ISO
+  8601 numbers it, Monday 1 through Sunday 7, as the vendor documents it and its SDK sends it.
+- `userPreference.language` is the language the user most prefers on the device, the language
+  subtag of the first `Locale.preferredLanguages` entry, as the vendor defines it. It was the
+  locale's language, which is the app's, so an app localized only in English reported `en` from a
+  device set to German. The key and the form are unchanged.
+- `calendar.isWeekend` is `true` on a Saturday or a Sunday, as the vendor defines it, and is
+  derived from the day of week. It followed the locale's weekend, so under a Friday-Saturday weekend
+  a Friday reported `true` and a Sunday `false`. The key and the form are unchanged.
+- `PresetSignal.newInstallDetected`, `acquisition.newInstallDetected`, sent as the vendor's
+  `TelemetryDeck.Acquisition.newInstallDetected`. The vendor's docs name that signal as how new
+  users are detected, and its SDK sends it once, when the first session after install starts.
+
+### API
+
+- `SignalRecorder.beginSession()` returns `true` when the call created the retention record, which
+  makes its session the first counted since install or since the last erase. It is
+  `@discardableResult`, so an existing call compiles unchanged. It returns `false` on every later
+  session, on a repeat in the same activation, and while collection is not permitted. The session
+  `resetClosingCollection(during:)` reopens is counted by that reopen, so no later `beginSession()`
+  reports it: a host that counts a data reset as a new install records the preset once that call
+  returns. A `RetentionStore` whose `load()` returns nil, for a record it could not decode
+  included, reads as no record, and the next session reports `true`.
+- `SignalRecorder.recordNewInstallDetected(parameters:)` records the preset, unprefixed like the
+  other presets. The recorder never records it on its own: a host calls it when `beginSession()`
+  returns `true`, on the path every other signal takes, so whatever the host applies there covers
+  it too.
+- `EnvironmentSnapshot` holds the OS version once, as `systemMajorVersion`, `systemMinorVersion`,
+  and `systemPatchVersion`, in place of `systemVersion` and `systemMajorMinorVersion`, and derives
+  all three version fields from it. `language` becomes `preferredLanguage` and `appLanguage`. The
+  initializer takes the new properties.
+- `EnvironmentSnapshot.current()` takes `preferredLanguages:`, defaulting to
+  `Locale.preferredLanguages`.
+
+### Upgrading
+
+- A call to `EnvironmentSnapshot`'s initializer passes the three version components and the two
+  languages. Calls to `current()` and `beginSession()` change nothing.
+- An install whose retention record predates the upgrade already has one, so `beginSession()`
+  never reports it as new.
+- A host swapping to this package from the vendor's SDK starts every existing install without a
+  retention record (ADOPTING.md, Phase 6). Its first `beginSession()` after the swap returns
+  `true`, and recording the preset on that answer counts every existing install as new on the
+  migration day.
+
+### Tooling
+
+- A contract suite records a signal through the recorder, encodes it with the adapter, and holds it
+  to TelemetryDeck's SwiftSDK at `58f43629` and its default-parameters reference at `2b9c2108`, as
+  read on 2026-09-29: the key set, the value forms, the deliberately absent keys and their reasons,
+  and the install preset's name. The test floor rises to 224.
+- The consumer fixture compiles a host's activation with the new preset.
+
 ## 0.4.2 — 2026-09-25
 
 A patch: nothing in the API list moved, and the payload version stays 2.0.0.
