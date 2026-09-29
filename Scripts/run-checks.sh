@@ -734,7 +734,7 @@ tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tes
 
 # A floor rather than an exact count: suites grow in parallel lanes, and a floor only fails when
 # tests go missing. Raise it when the suite grows; lower it only with the tests it lost named.
-ROOT_TESTS_FLOOR=211
+ROOT_TESTS_FLOOR=224
 root_ran_enough() { [ "$1" -eq 0 ] && [ "$(tests_run "$2")" -ge "$ROOT_TESTS_FLOOR" ] 2>/dev/null; }
 
 it "the package suite passes, running at least $ROOT_TESTS_FLOOR tests"
