@@ -221,8 +221,9 @@ struct TelemetryDeckDefaultPayloadContractTests {
         let payload = try await Self.recordedPayload(at: Self.mondayHalfPastMidnight())
 
         let expected: [String: String] = [
-            // default-parameters.md:42-44 types all three as String. Bare, as
-            // the Kotlin SDK sends them and this package always has.
+            // default-parameters.md:42-44 types all three only as String. Bare,
+            // as the Kotlin SDK sends the major and major.minor versions and
+            // this package always has.
             "TelemetryDeck.Device.systemVersion": "26.5.1",
             "TelemetryDeck.Device.systemMajorMinorVersion": "26.5",
             "TelemetryDeck.Device.systemMajorVersion": "26",

@@ -51,9 +51,10 @@ public enum PayloadKey {
     public static let deviceModelName = "device.modelName"
     public static let devicePlatform = "device.platform"
     /// `major.minor.patch`, as a bare number like the two below. The vendor's
-    /// Swift SDK prefixes the platform (`iOS 26.5.1`) and its Kotlin SDK does
-    /// not; the vendor documents each as a String, so both conform, and a
-    /// changed form would split every chart already grouped on this one.
+    /// Swift SDK prefixes all three with the platform (`iOS 26.5.1`), while its
+    /// Kotlin SDK sends the major and major.minor versions bare. The vendor
+    /// documents each only as a String, so both forms conform, and a changed
+    /// form would split every chart already grouped on this one.
     public static let deviceSystemVersion = "device.systemVersion"
     /// Major.minor only. Crash triage groups here; the patch component
     /// fragments the chart without changing a decision.
