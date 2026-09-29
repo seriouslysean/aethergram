@@ -8,13 +8,25 @@ import Foundation
 /// dashboard built against the old vendor's field names working after the
 /// transport swap.
 ///
-/// The list is deliberately short. Every field here survived an audit against
-/// what a chart reads: it names a decision it would change, it survives data
-/// minimisation, and its volume is proportionate. Fields the SDK
-/// sent that no chart reads — architecture, time zone, target environment,
-/// extension identifier, colour scheme, layout direction, the six
-/// accessibility flags, and screen geometry — are not here and are not coming
-/// back without a reason written down.
+/// The list is deliberately short. Every field here answers a question a
+/// chart asks, survives data minimisation, and is proportionate in volume.
+/// What the vendor's SDK sends that is not here stays out until a reason to
+/// send it is written down, and each has its own reason for now:
+///
+/// - The accessibility settings and screen geometry: left out by decision,
+///   although the vendor's charts for them then stay empty for these signals.
+///   The SDK sends no preferred text size from an app extension either.
+/// - Layout direction: the SDK sends `N/A` for it from any app extension, so
+///   its chart is empty there under the SDK too.
+/// - The debug, simulator, and App Store flags: `runContextChannel` replaced
+///   them in payload 2.0.0. The adapter still sends the vendor's TestFlight
+///   flag beside it.
+/// - Operating system and locale: each repeats what is sent on its own, the
+///   first as `devicePlatform`, the second as `userPreferenceRegion` and
+///   `runContextLanguage`.
+/// - Orientation, architecture, time zone, target environment, extension
+///   identifier, colour scheme, and the calendar's day of month, day of year,
+///   week, month, and quarter: no built-in chart was found reading them.
 public enum PayloadKey {
     // MARK: App
 
