@@ -8,16 +8,20 @@ What each release changed that a host can see. What a version number promises is
 A 0.x minor that changes the API list: `EnvironmentSnapshot`'s initializer and stored properties
 change, and `beginSession()` returns a value. The payload version moves to 2.1.0, which adds three
 fields and a preset and fixes two values, each checked against TelemetryDeck's SwiftSDK at
-`58f43629` and its default-parameters reference at `2b9c2108`.
+`58f43629`, its docs at `2b9c2108` (the default-parameters reference, `basics/acquisition.md`, and
+`articles/decide-to-drop-ios-version.md`), and its KotlinSDK at `10b87d4a`.
 
 ### Payload 2.1.0
 
 - `device.systemMajorVersion`, sent as `TelemetryDeck.Device.systemMajorVersion`: the major OS
   version, `26`. The vendor documents it among its default parameters, its SDK sends it, and its
-  prebuilt system-version chart switches between it and the major.minor version. All three version
-  strings stay bare (`26.5.1`, `26.5`, `26`): the vendor documents each only as a String, its Swift
-  SDK prefixes the platform where its Kotlin SDK sends the major and major.minor versions bare, and
-  a changed form would split every chart already grouped on the bare one.
+  docs describe the prebuilt system-version chart offering a major-version breakdown beside the
+  major.minor one.
+  All three version strings stay bare (`26.5.1`, `26.5`, `26`). The default-parameters reference
+  types each only as a String, and the vendor's own articles show both forms; its Swift SDK
+  prefixes the platform where its Kotlin SDK sends the major and major.minor versions bare. A
+  changed form would split every chart already grouped on the bare `systemVersion` and
+  `systemMajorMinorVersion`, and the new field takes the same form as those two.
 - `runContext.language`, sent as `TelemetryDeck.RunContext.language`: the language the app runs in,
   the locale's language code.
 - `calendar.dayOfWeek`, sent as `TelemetryDeck.Calendar.dayOfWeek`: the local day numbered as ISO
@@ -31,7 +35,10 @@ fields and a preset and fixes two values, each checked against TelemetryDeck's S
   a Friday reported `true` and a Sunday `false`. The key and the form are unchanged.
 - `PresetSignal.newInstallDetected`, `acquisition.newInstallDetected`, sent as the vendor's
   `TelemetryDeck.Acquisition.newInstallDetected`. The vendor's docs name that signal as how new
-  users are detected, and its SDK sends it once, when the first session after install starts.
+  users are detected, sent on first launch. Its SDK sends it whenever a session starts with no
+  stored session behind it, which is also after 90 days without a session, or after sessions that
+  each lasted under a second. This package reports it once per retention record, so only after an
+  install or an erase.
 
 ### API
 
@@ -63,7 +70,9 @@ fields and a preset and fixes two values, each checked against TelemetryDeck's S
 - A host swapping to this package from the vendor's SDK starts every existing install without a
   retention record (ADOPTING.md, Phase 6). Its first `beginSession()` after the swap returns
   `true`, and recording the preset on that answer counts every existing install as new on the
-  migration day.
+  migration day. After that, a user returning from 90 days away is not counted as new again, as
+  the SDK would count them, and the three OS version fields arrive bare where the Swift SDK sent
+  them with the platform.
 
 ### Tooling
 

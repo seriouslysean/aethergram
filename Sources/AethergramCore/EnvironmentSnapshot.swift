@@ -21,11 +21,11 @@ public enum RunContextChannel: String, Sendable {
 /// beyond what the consumer passed.
 ///
 /// Authored, not inherited. Every field but `runContext.channel` is one the
-/// vendor documents, sent in the form it documents; `PayloadKey` says what the
-/// vendor's SDK sends that this leaves out, and why. The recorder reads the
-/// default payload once per grant, on the first permitted record, and an
-/// erase drops that copy; none of these values change inside a process. The
-/// clock-derived fields are computed per signal instead.
+/// vendor documents; `PayloadKey` says what the vendor's SDK sends that this
+/// leaves out, and why. The recorder reads the default payload once per grant,
+/// on the first permitted record, and an erase drops that copy; none of these
+/// values change inside a process. The clock-derived fields are computed per
+/// signal instead.
 public struct EnvironmentSnapshot: Equatable, Sendable {
     // MARK: Lifecycle
 
@@ -80,10 +80,12 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let region: String
     /// The language the user most prefers on the device: the language subtag
     /// of the first `Locale.preferredLanguages` entry, or empty when there is
-    /// none. It may be one the app is not localized in.
+    /// none, where the vendor's SDK sends `zz`. It may be one the app is not
+    /// localized in.
     public let preferredLanguage: String
     /// The language the app runs in: the locale's language code, or empty when
-    /// it has none.
+    /// it has none, where the vendor's SDK falls back to the locale
+    /// identifier's first component.
     public let appLanguage: String
 
     /// The snapshot as payload parameters under canonical keys.
@@ -150,7 +152,7 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             systemPatchVersion: version.patchVersion,
             channel: RunContextChannel(isTestFlight: distribution.isTestFlight, isAppStore: distribution.isAppStore),
             region: locale.region?.identifier ?? "",
-            // The subtag before the first `-` or `_`, as the vendor's SDK reads it.
+            // The subtag before the first `-` or `_`, split as the vendor's SDK splits it.
             preferredLanguage: preferredLanguages.first.map { String($0.prefix { $0 != "-" && $0 != "_" }) } ?? "",
             appLanguage: locale.language.languageCode?.identifier ?? ""
         )

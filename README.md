@@ -70,8 +70,9 @@ let recorder = SignalRecorder(
 
 recorder.updateConsent(storedAnswer)   // on every activation, before anything records
 
-// A session boundary is host-specific. The first counted session since
-// install, or since an erase, answers true: report it as a new install.
+// A session boundary is host-specific. The session that creates the retention
+// record, after an install, a reset(), or a decline and regrant, answers
+// true: report it as a new install.
 if recorder.beginSession() {
     recorder.recordNewInstallDetected()
 }

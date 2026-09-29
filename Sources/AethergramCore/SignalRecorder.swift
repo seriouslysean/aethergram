@@ -183,7 +183,10 @@ public final class SignalRecorder: Sendable {
     ///   `resetClosingCollection(during:)` reopens is counted by that reopen,
     ///   so no later call reports it. A `RetentionStore` whose `load()`
     ///   returns nil, including for a record it could not decode, reads as no
-    ///   record, and the next session reports true.
+    ///   record, and the next session reports true. Each recorder loads the
+    ///   record once, so two live processes over one store that both load it
+    ///   before either saves can each report true, and each then saves over
+    ///   the other's record.
     @discardableResult
     public func beginSession() -> Bool {
         requireNoReentry()

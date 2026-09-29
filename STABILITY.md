@@ -112,8 +112,8 @@ changelog describes.
 `calendar.dayOfWeek`, and the new-install preset, which is a minor step. The same release fixes
 two values, which by themselves would have moved nothing: `userPreference.language` is the
 device's preferred language rather than the app's, and `calendar.isWeekend` is Saturday and Sunday
-rather than the locale's weekend. Each keeps its key and its form, an ISO language code and `true`
-or `false`, so a reader keyed on either has nothing to react to beyond the values being right.
+rather than the locale's weekend. Each keeps its key and its form, a language code and `true` or
+`false`, so a reader keyed on either has nothing to react to beyond the values being right.
 
 ## How versions move
 

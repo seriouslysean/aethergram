@@ -172,7 +172,9 @@ closes it and erases what was collected under it.
 3. Call `beginSession()` on activation. It returns `true` when its session is the first counted
    since install or since the last erase; on that answer, call `recordNewInstallDetected()` from
    the path every other signal takes, so whatever you apply there covers it too. The recorder
-   never records it on its own.
+   never records it on its own. Each recorder reads the retention record once, so two live
+   processes sharing one `RetentionStore` can each get `true` for the same install, and each then
+   saves over the other's record.
 4. Record.
 5. On deactivation, call `endSession()`, then `flush()`, then `flushAndWait()` inside the
    platform's expiring-time API, cancelled when the time expires.
@@ -336,8 +338,8 @@ returns.
 **After a plain `reset()`, reopen the counted session.** The erase takes the retention record with
 it and `reset()` opens no counted session, so until the next `beginSession()` every signal goes out
 with no acquisition or retention fields. Call it at the end of a reset that left collection
-enabled, as your activation path does. It returns `true`, as the first session after any erase
-does.
+enabled, as your activation path does. It returns `true`: the reset took the retention record, so
+this session creates a new one.
 
 **A request already sent is not recalled.** The erase cancels a request already handed to the
 transport, and the supplied adapter stops it through `URLSession`, but whatever the server had
@@ -370,8 +372,7 @@ transports live at once is the drift this replaces, so do not leave it in place 
 Search without extension filters. A stale initialization in a lifecycle hook is one nobody notices
 until it posts.
 
-Two things the swap does to the data, so the dashboard's owner hears them before the charts show
-them:
+What the swap does to the data, so the dashboard's owner hears it before the charts show it:
 
 - **The retention counters restart.** The package does not read the SDK's counters, and the
   `RetentionStore` starts empty, so every existing install's first `beginSession()` after the swap
@@ -381,6 +382,13 @@ them:
   `true`, so a host that records `recordNewInstallDetected()` on its answer counts every existing
   install as new on that day too. One that can tell a migrated install from a fresh one, from
   something it stored itself, skips the preset for the migrated ones.
+- **New installs are counted once per retention record.** The SDK sends
+  `TelemetryDeck.Acquisition.newInstallDetected` whenever a session starts with no stored session
+  behind it, which also happens after 90 days without a session and after sessions that each
+  lasted under a second. `beginSession()` answers `true` only when it creates the retention record,
+  so a user returning after a long absence is no longer counted as new.
+- **The OS versions arrive bare.** The Swift SDK sent `iOS 26.5.1`, `iOS 26.5`, and `iOS 26`; this
+  package sends `26.5.1`, `26.5`, and `26`, so a chart grouped on one of them splits at the swap.
 - **The user hash carries over only if the input does.** The adapter sends the hex SHA-256 of
   `clientUserProvider`'s string with `salt` appended. The vendor's Swift SDK, at its 2.14.1 tag,
   hashes the same way (`Sources/TelemetryDeck/Helpers/CryptoHashing.swift`), over the signal's
