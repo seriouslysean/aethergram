@@ -28,6 +28,7 @@ struct TelemetryDeckWireNameTests {
         PayloadKey.devicePlatform: "TelemetryDeck.Device.platform",
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
+        PayloadKey.deviceSystemMajorVersion: "TelemetryDeck.Device.systemMajorVersion",
 
         PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
 
@@ -273,8 +274,9 @@ struct TelemetryDeckWireNameTests {
             appBuild: "34",
             modelName: "iPhone17,1",
             platform: "iOS",
-            systemVersion: "26.1.2",
-            systemMajorMinorVersion: "26.1",
+            systemMajorVersion: 26,
+            systemMinorVersion: 1,
+            systemPatchVersion: 2,
             channel: .store,
             region: "US",
             language: "en"

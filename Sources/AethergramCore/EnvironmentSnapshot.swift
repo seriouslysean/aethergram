@@ -33,8 +33,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         appBuild: String,
         modelName: String,
         platform: String,
-        systemVersion: String,
-        systemMajorMinorVersion: String,
+        systemMajorVersion: Int,
+        systemMinorVersion: Int,
+        systemPatchVersion: Int,
         channel: RunContextChannel,
         region: String,
         language: String
@@ -43,8 +44,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         self.appBuild = appBuild
         self.modelName = modelName
         self.platform = platform
-        self.systemVersion = systemVersion
-        self.systemMajorMinorVersion = systemMajorMinorVersion
+        self.systemMajorVersion = systemMajorVersion
+        self.systemMinorVersion = systemMinorVersion
+        self.systemPatchVersion = systemPatchVersion
         self.channel = channel
         self.region = region
         self.language = language
@@ -61,10 +63,14 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let modelName: String
     /// The OS family the package was compiled for, such as `iOS`.
     public let platform: String
-    /// `major.minor.patch`.
-    public let systemVersion: String
-    /// `major.minor`.
-    public let systemMajorMinorVersion: String
+    /// The OS version's major component. The version is held once, as its
+    /// three components, and `parameters` derives all three version strings
+    /// from them, so no two can disagree.
+    public let systemMajorVersion: Int
+    /// The OS version's minor component.
+    public let systemMinorVersion: Int
+    /// The OS version's patch component.
+    public let systemPatchVersion: Int
     /// The distribution channel this run came down.
     public let channel: RunContextChannel
     /// The locale's region identifier, or empty when it has none.
@@ -83,8 +89,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             PayloadKey.appVersionAndBuild: "\(appVersion) (build \(appBuild))",
             PayloadKey.deviceModelName: modelName,
             PayloadKey.devicePlatform: platform,
-            PayloadKey.deviceSystemVersion: systemVersion,
-            PayloadKey.deviceSystemMajorMinorVersion: systemMajorMinorVersion,
+            PayloadKey.deviceSystemVersion: "\(systemMajorVersion).\(systemMinorVersion).\(systemPatchVersion)",
+            PayloadKey.deviceSystemMajorMinorVersion: "\(systemMajorVersion).\(systemMinorVersion)",
+            PayloadKey.deviceSystemMajorVersion: "\(systemMajorVersion)",
             PayloadKey.runContextChannel: channel.rawValue,
             PayloadKey.userPreferenceRegion: region,
             PayloadKey.userPreferenceLanguage: language
@@ -126,8 +133,9 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             appBuild: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
             modelName: simulatorModel ?? hardwareModelName(),
             platform: platformName,
-            systemVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
-            systemMajorMinorVersion: "\(version.majorVersion).\(version.minorVersion)",
+            systemMajorVersion: version.majorVersion,
+            systemMinorVersion: version.minorVersion,
+            systemPatchVersion: version.patchVersion,
             channel: RunContextChannel(isTestFlight: distribution.isTestFlight, isAppStore: distribution.isAppStore),
             region: locale.region?.identifier ?? "",
             language: locale.language.languageCode?.identifier ?? ""

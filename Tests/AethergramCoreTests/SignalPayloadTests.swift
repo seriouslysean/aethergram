@@ -402,8 +402,9 @@ struct SignalPayloadTests {
             appBuild: "34",
             modelName: "iPhone17,1",
             platform: "iOS",
-            systemVersion: "26.1.2",
-            systemMajorMinorVersion: "26.1",
+            systemMajorVersion: 26,
+            systemMinorVersion: 1,
+            systemPatchVersion: 2,
             channel: .store,
             region: "US",
             language: "en"
@@ -417,6 +418,7 @@ struct SignalPayloadTests {
             PayloadKey.devicePlatform,
             PayloadKey.deviceSystemVersion,
             PayloadKey.deviceSystemMajorMinorVersion,
+            PayloadKey.deviceSystemMajorVersion,
             PayloadKey.runContextChannel,
             PayloadKey.userPreferenceRegion,
             PayloadKey.userPreferenceLanguage
@@ -425,6 +427,10 @@ struct SignalPayloadTests {
         #expect(snapshot.parameters.count == expected.count)
         #expect(snapshot.parameters[PayloadKey.appVersionAndBuild] == "1.2 (build 34)")
         #expect(snapshot.parameters[PayloadKey.runContextChannel] == "store")
+        // One stored version, three bare granularities derived from it.
+        #expect(snapshot.parameters[PayloadKey.deviceSystemVersion] == "26.1.2")
+        #expect(snapshot.parameters[PayloadKey.deviceSystemMajorMinorVersion] == "26.1")
+        #expect(snapshot.parameters[PayloadKey.deviceSystemMajorVersion] == "26")
     }
 
     @Test("Calendar parameters are the only clock-derived fields")

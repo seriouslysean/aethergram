@@ -76,6 +76,7 @@ enum TelemetryDeckWireNames {
         PayloadKey.devicePlatform: "TelemetryDeck.Device.platform",
         PayloadKey.deviceSystemVersion: "TelemetryDeck.Device.systemVersion",
         PayloadKey.deviceSystemMajorMinorVersion: "TelemetryDeck.Device.systemMajorMinorVersion",
+        PayloadKey.deviceSystemMajorVersion: "TelemetryDeck.Device.systemMajorVersion",
 
         PayloadKey.runContextChannel: "TelemetryDeck.RunContext.channel",
 
