@@ -86,34 +86,29 @@ branch; an exhaustive switch without one stops compiling when a case arrives.
 - Which exact `TransportOutcome` a given HTTP status maps to, beyond the retryable-versus-permanent
   distinction. A status moving between those two is a behaviour change and gets release notes.
 
-## The payload version
+## The stamped version
 
 `sdk.name`, `sdk.version`, and `sdk.nameAndVersion` are stamped on every signal. That version is
-the payload contract's, not the package's: it moves when the set of fields the package attaches
-changes, or when the form one of them takes changes. A release that changes only behaviour leaves
-it alone.
+the package's release version: the one a host depends on, the one a tag carries, and the one at
+the top of [CHANGELOG.md](CHANGELOG.md). The package has one version, and
+`Scripts/check-version-stamp.sh` refuses a tree where the stamp and that heading differ.
 
-It follows semantic versioning against the field set, and the reader is who it promises to: a
-removed field breaks whoever keyed on it, so a removal is major, an addition is minor, and a
-changed form is whichever of the two a reader would have to react to.
+Every release moves the stamp, one that changes only behaviour included. A reader grouping on
+`sdk.version` sees a value per release rather than per payload shape, and the changelog is where
+to learn which releases share a shape.
 
-A fix to a field's value is none of those. 0.3.2 left the version at 2.0.0 while numbering
-`acquisition.firstSessionDate` in the Gregorian calendar. On a device set to Gregorian the string
-is unchanged. On any other device the old value was not a date in the form every other device
-sent, so the release corrects a defect in the value rather than changing the form a reader keys
-on. 0.3.1's doc comment on `RetentionRecord.firstSessionDay`, "`yyyy-MM-dd` in the device's
-calendar", described that defect. A stored day is converted when the recorder loads it, and one
-that no reading places between 2015-01-01 and tomorrow is kept as written. A day written under the
-Ethiopic calendar's Incarnation-era numbering that also reads as a Gregorian date in that range
-stays unconverted, and one in a Chinese or Dangi leap month converts a lunar month early, as the
-changelog describes.
+Before 2.1.0 the stamp was a separate payload version, which moved only when the set of fields
+the package attaches changed, or the form one of them took. What each release stamped:
 
-2.1.0, first stamped by 0.5.0, adds `device.systemMajorVersion`, `runContext.language`,
-`calendar.dayOfWeek`, and the new-install preset, which is a minor step. The same release fixes
-two values, which by themselves would have moved nothing: `userPreference.language` is the
-device's preferred language rather than the app's, and `calendar.isWeekend` is Saturday and Sunday
-rather than the locale's weekend. Each keeps its key and its form, a language code and `true` or
-`false`, so a reader keyed on either has nothing to react to beyond the values being right.
+| Releases | Stamped |
+|---|---|
+| 0.1.0, 0.1.1 | 1.0.0 |
+| 0.2.0 | 1.1.0 (in error; the 2.0.0 shape) |
+| 0.2.1 through 0.4.2 | 2.0.0 |
+| 0.5.0 | 2.1.0 |
+
+Host builds were already sending 2.1.0 when the two numbers became one, and a version a reader
+has seen cannot go backward, so the package's numbering resumes at 2.1.0. No 1.x release exists.
 
 ## How versions move
 
