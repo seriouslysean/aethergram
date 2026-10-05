@@ -20,7 +20,8 @@
 #              directory build each commit once, and every build shares one build directory, so
 #              the SDK's module cache is built once. Default: a temp directory removed on exit.
 #
-# A break passes only when the release moves the major, or on 0.x the minor, per STABILITY.md.
+# A break passes only when the release moves the major, per STABILITY.md. A 0.x release moved the
+# minor to make one, and that reading stays so the gate can still be proved on those tags.
 # Exit 0: no break, or breaks the release may make. 1: a break the release may not make.
 # 2: the gate could not run, which is never a pass.
 
