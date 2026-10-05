@@ -16,14 +16,15 @@ why the adapter carries a canonical-to-vendor wire-name table rather than renami
 ## Phase 1: add the package, emit nothing
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.5.0")
+.package(url: "https://github.com/seriouslysean/aethergram", from: "2.1.0")
 ```
 
-Depend on a release tag, never on `main`. Add the `Aethergram` product to the target that owns
-analytics, usually the extension or app that actually emits. What has to hold is one recorder per
-process and one queue store per file, because the queue directory and the logging subsystem belong
-to a process. A shared framework that constructs the recorder with a directory and a subsystem the
-linking process hands it meets both.
+Depend on a release tag, never on `main`. `from:` takes every release below the next major; pin
+`exact:` instead to take each one on your own schedule. Add the `Aethergram` product to the target
+that owns analytics, usually the extension or app that actually emits. What has to hold is one
+recorder per process and one queue store per file, because the queue directory and the logging
+subsystem belong to a process. A shared framework that constructs the recorder with a directory
+and a subsystem the linking process hands it meets both.
 
 Build. Nothing is wired yet, so nothing should change.
 

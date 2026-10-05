@@ -23,14 +23,15 @@ and it is also what a second adapter costs: conform `SignalTransport`, change no
 ## Install
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.5.0")
+.package(url: "https://github.com/seriouslysean/aethergram", from: "2.1.0")
 ```
 
 ```swift
 .target(name: "YourApp", dependencies: [.product(name: "Aethergram", package: "aethergram")])
 ```
 
-Depend on a release tag, never on `main`.
+Depend on a release tag, never on `main`. `from:` takes every release below the next major; pin
+`exact:` instead to take each one on your own schedule.
 
 ## Using it
 

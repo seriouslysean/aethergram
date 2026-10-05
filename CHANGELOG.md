@@ -21,8 +21,14 @@ is.
   before this one stamped.
 - The package leaves 0.x, so the major position is in play: a removal or a signature change in
   the API list is a major release, where a 0.x minor could carry one.
+- A payload field the package stops attaching, or sends in a new form, is a major release, a new
+  one is a minor, and a corrected value that keeps its key and form is a patch. Those were the
+  payload version's rules and are now the package's.
 - A host takes this release by editing its manifest. `exact: "0.5.0"` stays on 0.5.0, and
   `from: "0.5.0"` stops below 1.0.0.
+- The install snippets read `from: "2.1.0"` rather than `exact:`, so a host copying one takes
+  every 2.x release. Pinning `exact:` is still open to a host that wants each release on its own
+  schedule.
 
 ### Tooling
 

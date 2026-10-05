@@ -114,22 +114,19 @@ has seen cannot go backward, so the package's numbering resumes at 2.1.0. No 1.x
 
 Semantic versioning, against the API list above.
 
-- Patch: a fix with no API change.
+- Patch: a fix with no API change, a corrected payload value that keeps its key and its form
+  included.
 - Minor: additions — a new preset, a new payload key, a new parameter with a default. Existing
   conformances keep compiling.
-- Major: a removal or a signature change in the API list, or a change to a `PayloadKey` or
-  `PresetSignal` string.
+- Major: a removal or a signature change in the API list, a change to a `PayloadKey` or
+  `PresetSignal` string, or a payload field the package stops attaching or sends in a new form,
+  since a reader keyed on that field is who it breaks.
 
-While the package is 0.x the major position is not in play, so a change that would be major above
-1.0 is a minor release: `0.1.z` to `0.2.0`, never `0.1.1`. A patch on a 0.x line still promises
-what a patch promises, which is that nothing in the API list moved.
-
-That distinction is what a range depends on. `from:` is `upToNextMajor`, so every 0.x release a
-host has not pinned exactly is one it will resolve into. A release that changes the API list
-cannot be reached that way without breaking a build, which is why the position it occupies is a
-promise rather than a label. The install snippets in README.md and ADOPTING.md pin `exact:` for
-the same reason: a 0.x minor may change the API list, and a host should take that on its own
-schedule rather than inherit it on the next resolve.
+The position a release occupies is what a range depends on. `from:` is `upToNextMajor`, so a host
+on `from: "2.1.0"` resolves into every 2.x release and stops below 3.0.0. A release that makes a
+major change cannot be reached that way, which is why the position is a promise rather than a
+label. The install snippets in README.md and ADOPTING.md use `from:` for that reason, and a host
+that wants each release on its own schedule pins `exact:` instead.
 
 Depend on a release tag. `main` is a moving target. What each release changed is in
 [CHANGELOG.md](CHANGELOG.md).
