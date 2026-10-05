@@ -241,14 +241,21 @@ struct TelemetryDeckDefaultPayloadContractTests {
             "TelemetryDeck.Calendar.isWeekend": "false",
             // Signal.swift:71: `<version> (build <build>)`.
             "TelemetryDeck.AppInfo.versionAndBuildNumber": "1.2.3 (build 45)",
-            // Signal.swift:95: `<name> <version>`.
-            "TelemetryDeck.SDK.nameAndVersion": "Aethergram 2.1.0",
             // SessionManager.swift:177 and default-parameters.md:168: the local day of the first session.
             "TelemetryDeck.Acquisition.firstSessionDate": "2026-01-05"
         ]
         for (key, value) in expected {
             #expect(payload[key] == value, "\(key)")
         }
+
+        // Signal.swift:95: `<name> <version>`. Held to the two fields beside it rather than
+        // to a literal, because the version is the release's and every release moves it.
+        let name = try #require(payload["TelemetryDeck.SDK.name"])
+        let version = try #require(payload["TelemetryDeck.SDK.version"])
+        #expect(name == "Aethergram")
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        #expect(parts.count == 3 && parts.allSatisfy { Int($0) != nil }, "\(version)")
+        #expect(payload["TelemetryDeck.SDK.nameAndVersion"] == "\(name) \(version)")
     }
 
     @Test(

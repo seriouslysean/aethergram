@@ -16,14 +16,15 @@ why the adapter carries a canonical-to-vendor wire-name table rather than renami
 ## Phase 1: add the package, emit nothing
 
 ```swift
-.package(url: "https://github.com/seriouslysean/aethergram", exact: "0.5.0")
+.package(url: "https://github.com/seriouslysean/aethergram", from: "2.1.0")
 ```
 
-Depend on a release tag, never on `main`. Add the `Aethergram` product to the target that owns
-analytics, usually the extension or app that actually emits. What has to hold is one recorder per
-process and one queue store per file, because the queue directory and the logging subsystem belong
-to a process. A shared framework that constructs the recorder with a directory and a subsystem the
-linking process hands it meets both.
+Depend on a release tag, never on `main`. `from:` takes every release below the next major; pin
+`exact:` instead to take each one on your own schedule. Add the `Aethergram` product to the target
+that owns analytics, usually the extension or app that actually emits. What has to hold is one
+recorder per process and one queue store per file, because the queue directory and the logging
+subsystem belong to a process. A shared framework that constructs the recorder with a directory
+and a subsystem the linking process hands it meets both.
 
 Build. Nothing is wired yet, so nothing should change.
 
@@ -61,9 +62,10 @@ override replaces the whole environment, not adds to it: start from
 `EnvironmentSnapshot.current().parameters` and merge your own fields in, or you lose OS, locale,
 and build channel, keeping only whatever fields you added. `sdk.name`, `sdk.version`, and
 `sdk.nameAndVersion` are not part of that default — the recorder stamps them on every signal
-itself, independently of `environmentProvider`, so no override, merged or not, can drop them. A
-parameter passed to `record` still wins a key collision over any of this, including `sdk.name`;
-naming it there is the caller's decision, not one the package catches.
+itself, independently of `environmentProvider`, so no override, merged or not, can drop them.
+`sdk.version` is the package's release version, so from 2.1.0 on it changes each time you take a
+new release. A parameter passed to `record` still wins a key collision over any of this, including
+`sdk.name`; naming it there is the caller's decision, not one the package catches.
 
 **Where the seams run.** Every seam but the transport and the queue's writes is called with the
 recorder's lock held:

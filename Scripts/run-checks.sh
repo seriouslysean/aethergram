@@ -8,7 +8,8 @@
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
 # cannot reach, the consumer fixture compiles what a host writes, the api-break gate holds
 # the public API to what the release being prepared may change, the release heading gate is proved
-# on the refusals a tag push would make, and `swift test` is the correctness gate.
+# on the refusals a tag push would make, the version stamp gate holds the version a signal carries
+# to that heading, and `swift test` is the correctness gate.
 
 set -u
 
@@ -725,6 +726,83 @@ if [ "$GATE_RC" -ne 2 ]; then
     fail "a tag with no v exited $GATE_RC rather than 2"
 else
     pass
+fi
+
+printf '\nversion stamp gate\n'
+
+# The heading gate holds the tag to the heading; this one holds the stamped version to it, on every
+# run rather than on a tag push, so a release that forgot the constant fails before it is tagged.
+stamp_gate() { "$ROOT/Scripts/check-version-stamp.sh" --source "$1" --changelog "$2"; }
+stamp_fixture() { printf 'enum Aethergram {\n    static let name = "Aethergram"\n%s\n}\n' "$1" > "$2"; }
+
+# Proved on the package's own history first: 0.5.0 stamped 2.1.0.
+it "the 2.1.0 that v0.5.0 stamped under a 0.5.0 heading is refused"
+git -C "$ROOT" show v0.5.0:Sources/AethergramCore/Aethergram.swift > "$TMP/stamp-v0.5.0.swift" 2>/dev/null
+git -C "$ROOT" show v0.5.0:CHANGELOG.md > "$TMP/changelog-v0.5.0" 2>/dev/null
+OUT="$(stamp_gate "$TMP/stamp-v0.5.0.swift" "$TMP/changelog-v0.5.0" 2>&1)"; GATE_RC=$?
+if [ "$GATE_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -qF 'is 2.1.0, but the top heading is "## 0.5.0 '; then
+    printf '%s\n' "$OUT"
+    fail "the stamp gate exited $GATE_RC rather than 1, or did not name the two versions v0.5.0 shipped"
+else
+    pass
+fi
+
+# A heading's version is its first word, whole: one with a suffix or a fourth part names no release.
+it "a constant behind the heading, one ahead of it, or a heading naming no release is refused"
+MISSING=""
+heading_fixture "## Unreleased" "$TMP/changelog-unreleased"
+heading_fixture "## 0.4.0x $EM 2026-10-01" "$TMP/changelog-suffixed"
+heading_fixture "## 0.4.0.1 $EM 2026-10-01" "$TMP/changelog-four-part"
+# A tab after the hashes is still the top heading, so the 0.3.2 heading under it is not the one read.
+heading_fixture "$(printf '##\t0.4.0 %s 2026-10-01' "$EM")" "$TMP/changelog-tabbed"
+for CASE in "0.3.2|$TMP/changelog-good" "0.4.1|$TMP/changelog-good" "0.4.0|$TMP/changelog-unreleased" \
+    "0.4.0|$TMP/changelog-suffixed" "0.4.0|$TMP/changelog-four-part" "0.3.2|$TMP/changelog-tabbed"; do
+    STAMP="${CASE%|*}"; AGAINST="${CASE##*|}"
+    stamp_fixture "    static let version = \"$STAMP\"" "$TMP/stamp-bad.swift"
+    OUT="$(stamp_gate "$TMP/stamp-bad.swift" "$AGAINST" 2>&1)"; GATE_RC=$?
+    { [ "$GATE_RC" -eq 1 ] && printf '%s\n' "$OUT" | grep -qF "is $STAMP, but the top heading is"; } \
+        || MISSING="$MISSING [$STAMP against ${AGAINST##*/}: exit $GATE_RC, $OUT]"
+done
+stamp_fixture '    static let version = "0.4.0"' "$TMP/stamp-good.swift"
+if [ -n "$MISSING" ]; then
+    fail "not refused as expected:$MISSING"
+elif ! OUT="$(stamp_gate "$TMP/stamp-good.swift" "$TMP/changelog-good" 2>&1)"; then
+    printf '%s\n' "$OUT"
+    fail "the same fixture stamping 0.4.0 under a 0.4.0 heading was refused, so the refusals are not about the version"
+else
+    pass
+fi
+
+# The commented case is the one that matters: the text of a declaration inside a comment, beside a
+# real one the literal form does not match, must not be read as the constant.
+it "a source with no constant, two of them, or one that is not a literal X.Y.Z cannot run the stamp gate"
+MISSING=""
+NL='
+'
+for DECLARATION in "" \
+    "    static let version = \"0.4.0\"$NL    static let version = \"0.4.1\"" \
+    "    /*$NL    static let version = \"0.4.0\"$NL    */$NL    public static let version = \"9.9.9\"" \
+    "    /*$NL    static let version = \"0.4.0\"$NL    */$NL    public static$(printf '\t')let version = \"9.9.9\"" \
+    '    public static let version = "0.4.0"' \
+    '    static let version = "0.4"' \
+    '    static let version = "\(major).4.0"' \
+    '    static var version: String { "0.4.0" }'; do
+    stamp_fixture "$DECLARATION" "$TMP/stamp-unreadable.swift"
+    OUT="$(stamp_gate "$TMP/stamp-unreadable.swift" "$TMP/changelog-good" 2>&1)"; GATE_RC=$?
+    [ "$GATE_RC" -eq 2 ] || MISSING="$MISSING [$DECLARATION: exit $GATE_RC, $OUT]"
+done
+if [ -n "$MISSING" ]; then
+    fail "exited other than 2:$MISSING"
+else
+    pass
+fi
+
+it "the working tree stamps the release its CHANGELOG's top heading names"
+if OUT="$("$ROOT/Scripts/check-version-stamp.sh" 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "Scripts/check-version-stamp.sh refused the working tree"
 fi
 
 printf '\nswift test\n'

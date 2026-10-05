@@ -3,6 +3,40 @@
 What each release changed that a host can see. What a version number promises is in
 [STABILITY.md](STABILITY.md); this file is the history that contract was applied to.
 
+## 2.1.0 — 2026-10-05
+
+No API or payload change from 0.5.0: nothing in the API list moved, and every signal carries the
+fields and the values it carried there, `sdk.version` included. What changes is what the number
+is.
+
+### One version
+
+- `sdk.version` is the package's release version. It was a separate payload version, which 0.5.0
+  moved to 2.1.0, so a dashboard read "Aethergram 2.1.0" for a package whose newest tag was
+  `v0.5.0`. Host builds already send 2.1.0 and a version a reader has seen cannot go backward, so
+  the package's numbering resumes there. No 1.x release exists.
+- Every release after this one moves the stamp, one that changes only behaviour included. A
+  reader grouping on `sdk.version` sees a value per release rather than per payload shape, and
+  this file is where to learn which releases share a shape. This release stamps what 0.5.0
+  stamped, so a reader cannot tell those two apart. [STABILITY.md](STABILITY.md) keeps what each
+  release before this one stamped.
+- The package leaves 0.x, so the major position is in play: a removal or a signature change in
+  the API list is a major release, where a 0.x minor could carry one.
+- A payload field the package stops attaching, or sends in a new form, is a major release, a new
+  one is a minor, and a corrected value that keeps its key and form is a patch. Those were the
+  payload version's rules and are now the package's.
+- A host takes this release by editing its manifest. `exact: "0.5.0"` stays on 0.5.0, and
+  `from: "0.5.0"` stops below 1.0.0.
+- The install snippets read `from: "2.1.0"` rather than `exact:`, so a host copying one takes
+  every 2.x release. Pinning `exact:` is still open to a host that wants each release on its own
+  schedule.
+
+### Tooling
+
+- `Scripts/check-version-stamp.sh` refuses a tree whose `Aethergram.version` is not the version
+  in this file's top heading, and runs in `Scripts/run-checks.sh`. The release heading check
+  already holds that heading to the tag, so a tag, its heading, and the stamp agree.
+
 ## 0.5.0 — 2026-09-29
 
 A 0.x minor that changes the API list: `EnvironmentSnapshot`'s initializer and stored properties

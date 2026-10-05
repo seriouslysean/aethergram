@@ -53,15 +53,16 @@ message in history and the api-break gate builds the tags. Deepen a shallow clon
 | Privacy manifest | `PrivacyInfo.xcprivacy` declares Product Interaction and Device ID, neither linked nor used for tracking, for analytics alone, and no tracking, tracking domain, or required-reason API. The iOS build ships it unchanged in the adapter's bundle, and no other bundle carries one |
 | watchOS build | The package builds for watchOS in release at its declared floor, watchOS 11 |
 | Consumer fixture | `Tests/Fixtures/ConsumerHost`, a package that imports the umbrella alone with no upcoming-feature flag, builds for iOS as extension-safe, and the root package takes nothing from it |
-| API break | The working tree's public API, diffed against the last release tag, breaks nothing the release in `CHANGELOG.md`'s top heading may break: nothing in a patch, anything in a 0.x minor |
+| API break | The working tree's public API, diffed against the last release tag, breaks nothing the release in `CHANGELOG.md`'s top heading may break: nothing in a patch or a minor, anything in a major |
 | Release heading | `Scripts/check-release-heading.sh` refuses a heading that names another release, has no date, or uses a hyphen for the dash |
+| Version stamp | `Scripts/check-version-stamp.sh` refuses a tree whose `Aethergram.version`, the `sdk.version` every signal carries, is not the version in `CHANGELOG.md`'s top heading. The release heading gate holds that heading to the tag, so the three agree on a release |
 | Suite | `swift test` passes and runs at least `ROOT_TESTS_FLOOR` tests |
 
 Each gate is first watched refusing known-bad input — a copy of the package broken on purpose, a
-malformed manifest, a manifest declaring a linked or an extra type, a break from the package's own
-history — so a gate that never fires cannot pass as one that passes. `ROOT_TESTS_FLOOR` in
-`run-checks.sh` catches tests that go missing; raise it in the change that adds tests, and lower it
-only with the tests it lost named.
+malformed manifest, a manifest declaring a linked or an extra type, a break and a stamp from the
+package's own history — so a gate that never fires cannot pass as one that passes.
+`ROOT_TESTS_FLOOR` in `run-checks.sh` catches tests that go missing; raise it in the change that
+adds tests, and lower it only with the tests it lost named.
 
 ## Every change starts as an issue
 
@@ -140,11 +141,15 @@ failure, not the reporter.
 4. Write the release's entry in `CHANGELOG.md` under `## X.Y.Z — YYYY-MM-DD`: every behaviour
    change a host can see, and any trap a host could newly hit. The api-break gate reads the
    release from that heading.
-5. Merge the pull request.
-6. Confirm local `main` matches `origin/main`.
-7. Run `Scripts/check-release-heading.sh vX.Y.Z`; CI runs the same check on the tag push. Then tag
-   `vX.Y.Z` with an annotation summarizing the release, and push the tag.
-8. Publish a GitHub release from the tag, naming the issues it closes.
+5. Set `Aethergram.version` in `Sources/AethergramCore/Aethergram.swift` to the same `X.Y.Z`.
+   Every signal carries it as `sdk.version`, and the version stamp gate refuses a tree where it
+   and the heading differ.
+6. Merge the pull request.
+7. Confirm local `main` matches `origin/main`.
+8. Run `Scripts/check-version-stamp.sh` and `Scripts/check-release-heading.sh vX.Y.Z`. CI runs
+   both on the tag push, which is too late for a tag that cannot be moved. Then tag `vX.Y.Z` with
+   an annotation summarizing the release, and push the tag.
+9. Publish a GitHub release from the tag, naming the issues it closes.
 
 What a version number promises is in [STABILITY.md](STABILITY.md).
 

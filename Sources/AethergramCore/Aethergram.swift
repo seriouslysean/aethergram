@@ -9,21 +9,13 @@ import Foundation
 enum Aethergram {
     static let name = "Aethergram"
 
-    /// The payload contract's version, not the app's. It bumps when the set of
-    /// fields the package attaches changes, or when the form one of them takes
-    /// changes; `app.version` answers which build a signal came from, this
-    /// answers which shape it arrived in. Semantic versioning against the field
-    /// set, so a removal is major: 1.0.0 was the shape the package shipped
-    /// with, and 2.0.0 is that shape with the four run-context fields removed
-    /// in favour of `runContext.channel`. 2.1.0 adds `device.systemMajorVersion`,
-    /// `runContext.language`, `calendar.dayOfWeek`, and the new-install preset,
-    /// and fixes two values without changing their form:
-    /// `userPreference.language` is the device's preferred language rather
-    /// than the app's, and `calendar.isWeekend` is Saturday and Sunday rather
-    /// than the locale's weekend.
-    ///
-    /// 1.1.0 was stamped in error for one release and describes the 2.0.0
-    /// shape. A reader separating shapes treats the two as one.
+    /// The package's release version, not the app's: `app.version` answers
+    /// which build a signal came from, this answers which release wrote it.
+    /// It is the version in `CHANGELOG.md`'s top heading, and
+    /// `Scripts/check-version-stamp.sh` refuses a tree where the two differ,
+    /// so it is set in the change that prepares a release. STABILITY.md lists
+    /// what the releases before 2.1.0 stamped, when this was a separate
+    /// payload version.
     static let version = "2.1.0"
 
     /// The pair as one grouping key, in the form the vendor's own SDK sent it.
