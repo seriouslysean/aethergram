@@ -63,9 +63,9 @@ override replaces the whole environment, not adds to it: start from
 and build channel, keeping only whatever fields you added. `sdk.name`, `sdk.version`, and
 `sdk.nameAndVersion` are not part of that default — the recorder stamps them on every signal
 itself, independently of `environmentProvider`, so no override, merged or not, can drop them.
-`sdk.version` is the package's release version, so it changes each time you take a new release. A
-parameter passed to `record` still wins a key collision over any of this, including `sdk.name`;
-naming it there is the caller's decision, not one the package catches.
+`sdk.version` is the package's release version, so from 2.1.0 on it changes each time you take a
+new release. A parameter passed to `record` still wins a key collision over any of this, including
+`sdk.name`; naming it there is the caller's decision, not one the package catches.
 
 **Where the seams run.** Every seam but the transport and the queue's writes is called with the
 recorder's lock held:

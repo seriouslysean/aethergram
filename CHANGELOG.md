@@ -15,10 +15,11 @@ is.
   moved to 2.1.0, so a dashboard read "Aethergram 2.1.0" for a package whose newest tag was
   `v0.5.0`. Host builds already send 2.1.0 and a version a reader has seen cannot go backward, so
   the package's numbering resumes there. No 1.x release exists.
-- Every release now moves the stamp, one that changes only behaviour included. A reader grouping
-  on `sdk.version` sees a value per release rather than per payload shape, and this file is where
-  to learn which releases share a shape. [STABILITY.md](STABILITY.md) keeps what each release
-  before this one stamped.
+- Every release after this one moves the stamp, one that changes only behaviour included. A
+  reader grouping on `sdk.version` sees a value per release rather than per payload shape, and
+  this file is where to learn which releases share a shape. This release stamps what 0.5.0
+  stamped, so a reader cannot tell those two apart. [STABILITY.md](STABILITY.md) keeps what each
+  release before this one stamped.
 - The package leaves 0.x, so the major position is in play: a removal or a signature change in
   the API list is a major release, where a 0.x minor could carry one.
 - A payload field the package stops attaching, or sends in a new form, is a major release, a new

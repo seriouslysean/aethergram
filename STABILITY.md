@@ -93,9 +93,10 @@ the package's release version: the one a host depends on, the one a tag carries,
 the top of [CHANGELOG.md](CHANGELOG.md). The package has one version, and
 `Scripts/check-version-stamp.sh` refuses a tree where the stamp and that heading differ.
 
-Every release moves the stamp, one that changes only behaviour included. A reader grouping on
-`sdk.version` sees a value per release rather than per payload shape, and the changelog is where
-to learn which releases share a shape.
+From 2.1.0 on, every release moves the stamp, one that changes only behaviour included. A reader
+grouping on `sdk.version` sees a value per release rather than per payload shape, and the
+changelog is where to learn which releases share a shape. 2.1.0 itself stamps what 0.5.0
+stamped, and nothing a signal carries differs between those two.
 
 Before 2.1.0 the stamp was a separate payload version, which moved only when the set of fields
 the package attaches changed, or the form one of them took. What each release stamped:

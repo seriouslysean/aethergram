@@ -146,8 +146,9 @@ failure, not the reporter.
    and the heading differ.
 6. Merge the pull request.
 7. Confirm local `main` matches `origin/main`.
-8. Run `Scripts/check-release-heading.sh vX.Y.Z`; CI runs the same check on the tag push. Then tag
-   `vX.Y.Z` with an annotation summarizing the release, and push the tag.
+8. Run `Scripts/check-version-stamp.sh` and `Scripts/check-release-heading.sh vX.Y.Z`. CI runs
+   both on the tag push, which is too late for a tag that cannot be moved. Then tag `vX.Y.Z` with
+   an annotation summarizing the release, and push the tag.
 9. Publish a GitHub release from the tag, naming the issues it closes.
 
 What a version number promises is in [STABILITY.md](STABILITY.md).
