@@ -8,7 +8,8 @@
 # one cut, so the two agree on every commit. check-release-heading.sh holds that heading to the tag
 # being cut, which is what makes all three agree on a release.
 #
-# Exit 0: the constant is the heading's version. 1: it is not. 2: the check could not run.
+# Exit 0: the constant is the heading's version. 1: it is not, which includes a heading that names
+# no release. 2: the check could not run.
 
 set -u
 
@@ -30,15 +31,20 @@ done
 [ -r "$CHANGELOG" ] || die "no changelog at $CHANGELOG"
 
 # Exactly one declaration, and a literal: none or two leaves no one constant to hold to the heading,
-# and a computed value is one this check cannot read.
-DECLARATIONS="$(grep -c '^[[:space:]]*static let version[[:space:]:=]' "$SOURCE")"
-[ "$DECLARATIONS" -eq 1 ] || die "$SOURCE declares \`static let version\` $DECLARATIONS times, not once"
+# and a computed value is one this check cannot read. Every line naming the constant counts,
+# whatever precedes it, so a declaration's text in a comment cannot stand in for the real one.
+DECLARATIONS="$(grep -cE 'static[[:space:]]+(let|var)[[:space:]]+version[[:space:]:=]' "$SOURCE")"
+[ "$DECLARATIONS" -eq 1 ] || die "$SOURCE names \`static let version\` on $DECLARATIONS lines, not one"
 STAMP="$(sed -n 's/^[[:space:]]*static let version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"[[:space:]]*$/\1/p' "$SOURCE")"
 [ -n "$STAMP" ] || die "the declaration in $SOURCE is not \`static let version = \"X.Y.Z\"\`"
 
-TOP="$(sed -n '/^## /{p;q;}' "$CHANGELOG")"
+# A tab after the hashes is a heading too, and skipping one would read the release under it.
+TOP="$(sed -n '/^##[[:space:]]/{p;q;}' "$CHANGELOG")"
 [ -n "$TOP" ] || die "$CHANGELOG has no ## heading"
-HEADING_VERSION="$(printf '%s\n' "$TOP" | sed -n 's/^## \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+# The heading's first word, whole: `2.1.0x` and `2.1.0.1` name no release, where a prefix would
+# read both as 2.1.0.
+HEADING_VERSION="$(printf '%s\n' "$TOP" | sed 's/^##[[:space:]]*//; s/[[:space:]].*$//')"
+printf '%s\n' "$HEADING_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || HEADING_VERSION=""
 
 if [ "$STAMP" = "$HEADING_VERSION" ]; then
     printf 'version stamp: Aethergram.version %s is the release in "%s"\n' "$STAMP" "$TOP"
