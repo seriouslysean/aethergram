@@ -747,10 +747,16 @@ else
     pass
 fi
 
+# A heading's version is its first word, whole: one with a suffix or a fourth part names no release.
 it "a constant behind the heading, one ahead of it, or a heading naming no release is refused"
 MISSING=""
 heading_fixture "## Unreleased" "$TMP/changelog-unreleased"
-for CASE in "0.3.2|$TMP/changelog-good" "0.4.1|$TMP/changelog-good" "0.4.0|$TMP/changelog-unreleased"; do
+heading_fixture "## 0.4.0x $EM 2026-10-01" "$TMP/changelog-suffixed"
+heading_fixture "## 0.4.0.1 $EM 2026-10-01" "$TMP/changelog-four-part"
+# A tab after the hashes is still the top heading, so the 0.3.2 heading under it is not the one read.
+heading_fixture "$(printf '##\t0.4.0 %s 2026-10-01' "$EM")" "$TMP/changelog-tabbed"
+for CASE in "0.3.2|$TMP/changelog-good" "0.4.1|$TMP/changelog-good" "0.4.0|$TMP/changelog-unreleased" \
+    "0.4.0|$TMP/changelog-suffixed" "0.4.0|$TMP/changelog-four-part" "0.3.2|$TMP/changelog-tabbed"; do
     STAMP="${CASE%|*}"; AGAINST="${CASE##*|}"
     stamp_fixture "    static let version = \"$STAMP\"" "$TMP/stamp-bad.swift"
     OUT="$(stamp_gate "$TMP/stamp-bad.swift" "$AGAINST" 2>&1)"; GATE_RC=$?
@@ -767,12 +773,17 @@ else
     pass
 fi
 
+# The commented case is the one that matters: the text of a declaration inside a comment, beside a
+# real one the literal form does not match, must not be read as the constant.
 it "a source with no constant, two of them, or one that is not a literal X.Y.Z cannot run the stamp gate"
 MISSING=""
 NL='
 '
 for DECLARATION in "" \
     "    static let version = \"0.4.0\"$NL    static let version = \"0.4.1\"" \
+    "    /*$NL    static let version = \"0.4.0\"$NL    */$NL    public static let version = \"9.9.9\"" \
+    "    /*$NL    static let version = \"0.4.0\"$NL    */$NL    public static$(printf '\t')let version = \"9.9.9\"" \
+    '    public static let version = "0.4.0"' \
     '    static let version = "0.4"' \
     '    static let version = "\(major).4.0"' \
     '    static var version: String { "0.4.0" }'; do
