@@ -81,7 +81,7 @@ recorder.record("Session.started", parameters: ["surface": "home"])
 
 // On the way out: queued signals to disk now, then a send. Run the await
 // inside the platform's expiring-time API and cancel it when the time runs
-// out; ADOPTING.md has the pattern for an app and for an app extension.
+// out; docs/ADOPTING.md has the pattern for an app and for an app extension.
 recorder.flush()
 await recorder.flushAndWait()
 
@@ -112,22 +112,22 @@ caller.
 
 ## Adopting it
 
-The migration from a vendor SDK is in [ADOPTING.md](ADOPTING.md).
+The migration from a vendor SDK is in [ADOPTING.md](docs/ADOPTING.md).
 
 ## Contributing
 
-The workflow is in [CONTRIBUTING.md](CONTRIBUTING.md), and the conventions the code holds itself to
+The workflow is in [CONTRIBUTING.md](docs/CONTRIBUTING.md), and the conventions the code holds itself to
 are in [AGENTS.md](AGENTS.md).
 
 ## Stability
 
-What a version number promises is in [STABILITY.md](STABILITY.md), and what each release changed
-is in [CHANGELOG.md](CHANGELOG.md).
+What a version number promises is in [STABILITY.md](docs/STABILITY.md), and what each release changed
+is in [CHANGELOG.md](docs/CHANGELOG.md).
 
 ## Security
 
 How to report a vulnerability, and what the consent gate does and does not cover, is in
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](docs/SECURITY.md).
 
 ## License
 

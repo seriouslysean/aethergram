@@ -3,7 +3,7 @@
 #
 #   Scripts/check-release-heading.sh <vX.Y.Z> [--changelog <file>]
 #
-# The top `## ` heading of CHANGELOG.md must be `## X.Y.Z — YYYY-MM-DD` for the tag being cut: the
+# The top `## ` heading of docs/CHANGELOG.md must be `## X.Y.Z — YYYY-MM-DD` for the tag being cut: the
 # version equal to the tag's, and the date present, in the shape every earlier entry uses. The api
 # gate reads its release from that heading, so a tag cut over the previous release's heading was
 # gated as a patch.
@@ -19,7 +19,7 @@ die() { printf 'release heading: %s\n' "$1" >&2; exit 2; }
 TAG="${1:-}"
 [ -n "$TAG" ] || die "usage: check-release-heading.sh <vX.Y.Z> [--changelog <file>]"
 shift
-CHANGELOG="$ROOT/CHANGELOG.md"
+CHANGELOG="$ROOT/docs/CHANGELOG.md"
 while [ $# -gt 0 ]; do
     case "$1" in
         --changelog) CHANGELOG="${2:-}"; shift 2 || exit 2 ;;

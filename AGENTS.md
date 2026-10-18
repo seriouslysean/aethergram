@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rules for working in this repo. `CONTRIBUTING.md` holds the hook setup, the checks (`Scripts/run-checks.sh`, run offline on a full clone with the release tags), and the release sequence.
+Rules for working in this repo. `docs/CONTRIBUTING.md` holds the hook setup, the checks (`Scripts/run-checks.sh`, run offline on a full clone with the release tags), and the release sequence.
 
 ## The package
 
@@ -38,7 +38,7 @@ Rules for working in this repo. `CONTRIBUTING.md` holds the hook setup, the chec
 ## Working
 
 25. Start every change from an issue and a branch named for it, so the reason outlives the diff. One issue may carry an owner-approved set of related items; keep each independently useful correction separable with its tests, and an inseparable correction whole.
-26. Merge with a merge commit rather than a squash, so each commit on `main` stays individually revertable.
+26. Merge with a squash (`gh pr merge <n> --squash --delete-branch`): the pull request title becomes the commit subject and its description the commit message, so write both as the commit you want on `main`.
 27. Commit and open the pull request on the owner's behalf.
 28. Keep session links, agent trailers, and co-author lines out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry.
 29. Write terse, factual prose that opens with the substance and still reads in whole sentences.

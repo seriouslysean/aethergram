@@ -4,7 +4,7 @@
 #   Scripts/check-version-stamp.sh [--source <file>] [--changelog <file>]
 #
 # `Aethergram.version` is stamped on every signal as `sdk.version`, and it is the package's release
-# version. The top `## X.Y.Z` heading of CHANGELOG.md names the release being prepared, or the last
+# version. The top `## X.Y.Z` heading of docs/CHANGELOG.md names the release being prepared, or the last
 # one cut, so the two agree on every commit. check-release-heading.sh holds that heading to the tag
 # being cut, which is what makes all three agree on a release.
 #
@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 die() { printf 'version stamp: %s\n' "$1" >&2; exit 2; }
 
 SOURCE="$ROOT/Sources/AethergramCore/Aethergram.swift"
-CHANGELOG="$ROOT/CHANGELOG.md"
+CHANGELOG="$ROOT/docs/CHANGELOG.md"
 while [ $# -gt 0 ]; do
     case "$1" in
         --source) SOURCE="${2:-}"; shift 2 || exit 2 ;;
