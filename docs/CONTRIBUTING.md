@@ -70,8 +70,9 @@ Open an issue before writing code, even for a one-line fix, so the reason surviv
 diff. Record what the wrong behaviour actually was, ideally as the code that produces it.
 
 Branch from `main` and name the branch after the issue, as in `7-queue-survives-a-corrupt-file`.
-Open a pull request that closes it with `Closes #7`. Merge with a merge commit rather than a
-squash, so each commit on `main` stays individually revertable.
+Open a pull request that closes it with `Closes #7`. Merge with a squash
+(`gh pr merge <n> --squash --delete-branch`): the pull request title becomes the commit subject and
+its description the commit message, so write both as the commit you want on `main`.
 
 An agent commits and opens the pull request. Commit messages, issues, and pull request bodies carry
 no session link, agent trailer, or co-author line.
@@ -104,8 +105,8 @@ refuses a numbered issue or pull request URL (`github.com/.../issues|pull/N`) na
 repository, this one included, since a bare number is not a stable reference either. The file tier
 reads the index, so stage a file before expecting it to be scanned.
 
-One exemption, as narrow as it can be. GitHub writes its own subject on a web merge, which runs no
-hook: `Merge pull request #N from seriouslysean/<branch>`. The history scan forgives that number, in
+One exemption, as narrow as it can be, kept for the merge commits already in history. GitHub wrote
+its own subject on a web merge, which runs no hook: `Merge pull request #N from seriouslysean/<branch>`. The history scan forgives that number, in
 that subject, on a merge commit only; the same shape anywhere else, a body included, is still
 refused. No tracked line is exempt: each runner fixture the file scan would refuse builds its shape
 at run time, and a new one has to do the same.
@@ -155,4 +156,4 @@ What a version number promises is in [STABILITY.md](STABILITY.md).
 
 ## Rules for the code itself
 
-See [AGENTS.md](AGENTS.md).
+See [AGENTS.md](../AGENTS.md).

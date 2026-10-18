@@ -558,7 +558,7 @@ struct SignalQueueDurabilityTests {
     /// filesystem refuses to delete *and* to write over. The bytes stay, and
     /// the recorder's refusal to re-read them lasts exactly as long as its own
     /// process — so the next one, under a later grant, restores signals a
-    /// decline was supposed to have ended. SECURITY.md names that outcome in
+    /// decline was supposed to have ended. docs/SECURITY.md names that outcome in
     /// scope, so what the store cannot delete it has to leave marked.
     @Test(
         "A purge that can neither delete nor overwrite still restores nothing later",

@@ -63,7 +63,7 @@ struct TelemetryDeckTransportOutcomeTests {
     }
 
     /// An adapter that persists a request body to disk leaves a decline or a
-    /// reset with nothing to erase it — SECURITY.md calls that a bug in this
+    /// reset with nothing to erase it — docs/SECURITY.md calls that a bug in this
     /// model regardless of build configuration, so the check does not gate on
     /// `DEBUG`. Any file left over from an earlier run is cleared first so a
     /// stale one cannot fail this for the wrong reason.

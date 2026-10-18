@@ -13,14 +13,14 @@
 #              from HEAD.
 #   --head     the ref to check. Default: the working tree, uncommitted edits included.
 #   --release  the version being prepared. Default: the version in the top `## X.Y.Z` heading of
-#              CHANGELOG.md at the head. A heading equal to the base means no release entry has
+#              docs/CHANGELOG.md at the head. A heading equal to the base means no release entry has
 #              been written yet, which is read as a patch, since a patch is what an undeclared
 #              change is allowed to be.
 #   --scratch  where builds and dumps go. A commit's dump is keyed by its hash, so runs sharing a
 #              directory build each commit once, and every build shares one build directory, so
 #              the SDK's module cache is built once. Default: a temp directory removed on exit.
 #
-# A break passes only when the release moves the major, per STABILITY.md. A 0.x release moved the
+# A break passes only when the release moves the major, per docs/STABILITY.md. A 0.x release moved the
 # minor to make one, and that reading stays so the gate can still be proved on those tags.
 # Exit 0: no break, or breaks the release may make. 1: a break the release may not make.
 # 2: the gate could not run, which is never a pass.
@@ -79,14 +79,14 @@ fi
 
 if [ -z "$RELEASE" ]; then
     if [ -n "$HEAD" ]; then
-        CHANGELOG="$(git -C "$ROOT" show "$HEAD_SHA:CHANGELOG.md" 2>/dev/null)" || die "no CHANGELOG.md at $HEAD"
+        CHANGELOG="$(git -C "$ROOT" show "$HEAD_SHA:docs/CHANGELOG.md" 2>/dev/null)" || die "no docs/CHANGELOG.md at $HEAD"
     else
-        CHANGELOG="$(cat "$ROOT/CHANGELOG.md" 2>/dev/null)" || die "no CHANGELOG.md"
+        CHANGELOG="$(cat "$ROOT/docs/CHANGELOG.md" 2>/dev/null)" || die "no docs/CHANGELOG.md"
     fi
     TOP="$(printf '%s\n' "$CHANGELOG" | sed -n '/^## /{p;q;}')"
     RELEASE="$(printf '%s\n' "$TOP" | sed -n 's/^## \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
     # An `## Unreleased` heading says nothing about what the release may break, so it cannot pass.
-    is_version "$RELEASE" || die "CHANGELOG.md's top heading carries no X.Y.Z version: '$TOP'"
+    is_version "$RELEASE" || die "docs/CHANGELOG.md's top heading carries no X.Y.Z version: '$TOP'"
 fi
 is_version "$RELEASE" || die "release $RELEASE is not X.Y.Z"
 [ "$(compare_versions "$RELEASE" "$BASE_VERSION")" -ge 0 ] \
@@ -184,7 +184,7 @@ for M in $MODULES; do
 done
 
 if [ "$TOTAL" -gt 0 ] && [ "$MAY_BREAK" -eq 0 ]; then
-    printf 'api: %s breaks, and a %s release may not break the API. Declare the release in CHANGELOG.md or restore the API.\n' \
+    printf 'api: %s breaks, and a %s release may not break the API. Declare the release in docs/CHANGELOG.md or restore the API.\n' \
         "$TOTAL" "$KIND"
     exit 1
 fi

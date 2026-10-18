@@ -11,9 +11,9 @@ enum Aethergram {
 
     /// The package's release version, not the app's: `app.version` answers
     /// which build a signal came from, this answers which release wrote it.
-    /// It is the version in `CHANGELOG.md`'s top heading, and
+    /// It is the version in `docs/CHANGELOG.md`'s top heading, and
     /// `Scripts/check-version-stamp.sh` refuses a tree where the two differ,
-    /// so it is set in the change that prepares a release. STABILITY.md lists
+    /// so it is set in the change that prepares a release. docs/STABILITY.md lists
     /// what the releases before 2.1.0 stamped, when this was a separate
     /// payload version.
     static let version = "2.1.0"
