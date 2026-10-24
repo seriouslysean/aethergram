@@ -807,8 +807,9 @@ fi
 
 printf '\nswift test\n'
 
-# Swift Testing's summary line; a run that matched nothing says 0, or prints no line at all.
-tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' | tail -n 1; }
+# The sum of Swift Testing's summary lines: a toolchain that runs each test product separately
+# prints one per product, and a run that matched nothing says 0 or prints none.
+tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' | awk '{ n += $1 } END { print n + 0 }'; }
 
 # A floor rather than an exact count: suites grow in parallel lanes, and a floor only fails when
 # tests go missing. Raise it when the suite grows; lower it only with the tests it lost named.
