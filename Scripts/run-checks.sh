@@ -162,7 +162,10 @@ fi
 
 # One row a shape the message scan refuses, as the subject or in the body. A refused message names
 # no pattern, so each row matches exactly one alternative: the cross-repo number stays under the
-# foreign-number floor, and the co-author trailer carries no address. A `#` line is still scanned,
+# foreign-number floor, and an address in a co-author trailer is set aside before the address
+# pattern reads the line, so an agent's co-author is refused by the trailer rule alone. A
+# co-author trailer with no address is not one GitHub credits, so it is refused as a trailer
+# rather than read as a person. A `#` line is still scanned,
 # since whether git strips it depends on how the commit was made. GitHub's merge subject is refused
 # here although history forgives it, because no hook ever sees one GitHub wrote.
 NEAR=7
@@ -196,8 +199,35 @@ a pull request URL|body|See github.com/foo/bar/pull/$NEAR.
 a session trailer|body|Agent-Session: 0f21
 a session id trailer|body|Agent-Session-Id: 0f21
 a session trailer in lower case|body|agent-session: 0f21
-a co-author trailer|body|Co-authored-by: someone
-a co-author trailer in title case|body|Co-Authored-By: someone
+a co-author trailer with no address|body|Co-authored-by: someone
+a co-author trailer with no address in title case|body|Co-Authored-By: someone
+an app account as co-author|body|Co-authored-by: dependabot[bot] <49699333+dependabot[bot]${AT}users.noreply.github.com>
+an agent's no-reply address as co-author|body|Co-Authored-By: Claude <noreply${AT}anthropic.com>
+an agent's hyphenated no-reply address as co-author|body|Co-authored-by: Agent <no-reply${AT}example.com>
+Aider as co-author|body|Co-authored-by: aider (model) <aider${AT}aider.chat>
+Cursor as co-author|body|Co-authored-by: Cursor Agent <cursoragent${AT}cursor.com>
+Copilot's address as co-author|body|Co-authored-by: Copilot <copilot${AT}github.com>
+Copilot's account as co-author|body|Co-authored-by: Copilot <198982749+Copilot${AT}users.noreply.github.com>
+a home path in a person's co-author trailer|body|Co-authored-by: Drizzt /Users/$WHO <drizzt${AT}example.org>
+EOF
+
+# A person credited the way GitHub writes it, on a squash merge or by hand, is not a leak: GitHub
+# adds one for the owner whenever the commit author is not the pull request's.
+_n=0
+while IFS='|' read -r name line <&3; do
+    _n=$((_n + 1))
+    it "$name in a message is accepted"
+    printf 'fix: a thing\n\nOne sentence saying why.\n\n%s\n' "$line" > "$TMP/message-person-$_n"
+    if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --message "$TMP/message-person-$_n" 2>&1)"; then
+        pass
+    else
+        printf '%s\n' "$OUT"
+        fail "a message crediting $name was refused"
+    fi
+done 3<<EOF
+a person as co-author|Co-authored-by: Drizzt Do'Urden <drizzt${AT}example.org>
+a person as co-author in title case|Co-Authored-By: Drizzt Do'Urden <drizzt${AT}example.org>
+a person's GitHub no-reply address as co-author|Co-authored-by: Drizzt Do'Urden <12345+drizzt${AT}users.noreply.github.com>
 EOF
 
 # A read that fails leaves nothing to match, so each of these must fail the scan rather than let
@@ -351,6 +381,94 @@ elif ! printf '%s\n' "$OUT" | grep -q "#$FOREIGN"; then
 else
     pass
 fi
+
+it "a person's co-author trailer on a squash merge is accepted in history"
+HIST="$TMP/history-person"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'chore: a thing (#7)' -m "Co-authored-by: Drizzt Do'Urden <drizzt${AT}example.org>"
+) || fail "the fixture history could not be built"
+if OUT="$(cd "$HIST" && ./Scripts/scan-for-leaks.sh --all 2>&1)"; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "a person's co-author trailer was refused in history"
+fi
+
+# CI judges a change on the commits it adds. Each fixture puts the refused message on one side of
+# the range and a clean one on the other, so a range scan that reads all of history, or none of
+# it, fails one of the pair.
+HIST="$TMP/history-range"
+mkdir -p "$HIST/Scripts"
+cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
+chmod +x "$HIST/Scripts/scan-for-leaks.sh"
+(
+    cd "$HIST" \
+    && fixture_git init -q \
+    && fixture_git commit -q --allow-empty -m 'fix: a thing' \
+    && fixture_git commit -q --allow-empty -m 'fix: an old thing' -m 'Agent-Session: 0f21' \
+    && fixture_git commit -q --allow-empty -m 'fix: a new thing' \
+    && fixture_git commit -q --allow-empty -m 'fix: a newer thing' -m 'Agent-Session: 0f21'
+) || fail "the fixture history could not be built"
+range_scan() { (cd "$HIST" && ./Scripts/scan-for-leaks.sh --range "$1" "$2" 2>&1); }
+ZERO=0000000000000000000000000000000000000000
+
+# A clean range must still have been read: the scan names the tier it ran.
+it "a range scan does not read a refused message older than the range"
+if OUT="$(range_scan HEAD~2 HEAD~1)" && printf '%s\n' "$OUT" | grep -q '^scanning commit messages$'; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "a message before the range was refused"
+fi
+
+it "a range scan refuses a message inside the range"
+OUT="$(range_scan HEAD~1 HEAD)"; SCAN_RC=$?
+if [ "$SCAN_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'Agent-Session'; then
+    printf '%s\n' "$OUT"
+    fail "a message inside the range exited $SCAN_RC without its trailer refused"
+else
+    pass
+fi
+
+it "a range from a new ref reads the pushed commit and not its ancestors"
+if OUT="$(range_scan "$ZERO" HEAD~1)" && printf '%s\n' "$OUT" | grep -q '^scanning commit messages$'; then
+    pass
+else
+    printf '%s\n' "$OUT"
+    fail "an ancestor of the pushed commit was scanned"
+fi
+
+it "a range from a new ref refuses the pushed commit's own message"
+OUT="$(range_scan "$ZERO" HEAD)"; SCAN_RC=$?
+if [ "$SCAN_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'Agent-Session'; then
+    printf '%s\n' "$OUT"
+    fail "the pushed commit exited $SCAN_RC without its trailer refused"
+else
+    pass
+fi
+
+# CI fills the range from the event, and an empty or unknown end must not read as a range with
+# nothing in it.
+while IFS='|' read -r name base head <&3; do
+    it "a range with $name fails rather than reporting clean"
+    OUT="$(range_scan "$base" "$head")"; SCAN_RC=$?
+    if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
+        printf '%s\n' "$OUT"
+        fail "a range with $name exited $SCAN_RC rather than 2"
+    else
+        pass
+    fi
+done 3<<EOF
+no base||HEAD
+no head|HEAD~1|
+a base not in the clone|1111111111111111111111111111111111111111|HEAD
+a head not in the clone|HEAD~1|1111111111111111111111111111111111111111
+EOF
 
 it "what a verbose commit appends below the scissors line is not scanned"
 printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #%s\n' "$FOREIGN" > "$TMP/verbose"
