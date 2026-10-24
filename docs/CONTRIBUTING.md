@@ -42,13 +42,12 @@ Scripts/run-checks.sh
 `Tests/` is SwiftPM's and is reached by `swift test`. `Scripts/` holds the repo-level checks that
 are not Swift, which is where a Swift package puts them.
 
-It runs offline, and needs a full clone with the release tags: the leak scan reads every commit
-message in history and the api-break gate builds the tags. Deepen a shallow clone with
-`git fetch --unshallow --tags` first. The gates, in order:
+It runs offline, and needs a full clone with the release tags: the api-break gate builds the tags.
+Deepen a shallow clone with `git fetch --unshallow --tags` first. The gates, in order:
 
 | Gate | What it holds |
 |---|---|
-| Leak scan | No tracked file's name or staged content, and no commit message in history, identifies a consumer, a person, or a machine. File contents in earlier commits are not scanned |
+| Leak scan | No tracked file's name or staged content identifies a consumer, a person, or a machine. In CI, neither does any commit message the change adds: a pull request's `base..head`, a push's `before..after`, or on a new ref the pushed commit's own. File contents in earlier commits are not scanned |
 | iOS builds | The package for iOS in release as extension-safe (`-application-extension`), and the core alone with no adapter in reach |
 | Privacy manifest | `PrivacyInfo.xcprivacy` declares Product Interaction and Device ID, neither linked nor used for tracking, for analytics alone, and no tracking, tracking domain, or required-reason API. The iOS build ships it unchanged in the adapter's bundle, and no other bundle carries one |
 | watchOS build | The package builds for watchOS in release at its declared floor, watchOS 11 |
@@ -75,7 +74,9 @@ Open a pull request that closes it with `Closes #7`. Merge with a squash
 its description the commit message, so write both as the commit you want on `main`.
 
 An agent commits and opens the pull request. Commit messages, issues, and pull request bodies carry
-no session link, agent trailer, or co-author line.
+no session link, agent trailer, or agent co-author. A `Co-authored-by` naming a person, which
+GitHub adds for the owner on a squash merge when the commit author is not the pull request's, is
+the one exception.
 
 ## Writing the test
 
@@ -100,7 +101,11 @@ name, a bundle identifier, or an issue number into a public commit. Prose is the
 `Scripts/scan-for-leaks.sh` runs in the checks, in the pre-commit hook over the staged tree, and in
 the commit-msg hook over the message being written. It refuses absolute home paths, email
 addresses, cross-repo issue references, bare issue numbers of three or more digits, private record
-ids, and, in a message, agent-session and co-author trailers in any capitalization. It also
+ids, and, in a message, agent-session trailers in any capitalization. A `Co-authored-by` trailer
+in the form GitHub credits, `Name <address>`, passes with its address set aside and the rest of
+the line still read; any other co-author line is refused, as is one naming an app account
+(`<slug>[bot]`) or an agent's own address (a no-reply mailbox, or the ones Claude Code, Aider,
+Cursor and Copilot write). It also
 refuses a numbered issue or pull request URL (`github.com/.../issues|pull/N`) naming any
 repository, this one included, since a bare number is not a stable reference either. The file tier
 reads the index, so stage a file before expecting it to be scanned.
@@ -134,8 +139,10 @@ failure, not the reporter.
 
 ## Releasing
 
-1. `Scripts/scan-for-leaks.sh --all` passes. The hooks are local config a clone has to opt into,
-   so the history tier is the only check that covers a message written without them.
+1. `Scripts/scan-for-leaks.sh --all` passes. It is the audit of every message in history, which CI
+   does not run: CI judges each change on the commits it adds, so one accepted commit cannot fail
+   every later change. The hooks are local config a clone has to opt into, so a message written
+   without them reaches CI's range scan and this audit.
 2. `Scripts/run-checks.sh` passes on a clean checkout.
 3. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
    reader copying one gets the release being cut rather than the previous one.
