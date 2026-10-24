@@ -815,6 +815,30 @@ tests_run() { printf '%s\n' "$1" | sed -n 's/.*Test run with \([0-9][0-9]*\) tes
 ROOT_TESTS_FLOOR=224
 root_ran_enough() { [ "$1" -eq 0 ] && [ "$(tests_run "$2")" -ge "$ROOT_TESTS_FLOOR" ] 2>/dev/null; }
 
+SPLIT_RUN="Test run with 66 tests in 7 suites passed after 0.160 seconds.
+Test run with 158 tests in 13 suites passed after 4.963 seconds."
+it "a run that reports each test product separately counts every product's tests"
+if [ "$(tests_run "$SPLIT_RUN")" = 224 ] && root_ran_enough 0 "$SPLIT_RUN"; then
+    pass
+else
+    fail "read $(tests_run "$SPLIT_RUN") tests from two summaries of 66 and 158"
+fi
+
+it "a combined summary counts its tests once"
+if [ "$(tests_run "Test run with 224 tests in 20 suites passed after 7.414 seconds.")" = 224 ]; then
+    pass
+else
+    fail "did not read 224 tests from one summary of 224"
+fi
+
+it "a run that prints no summary counts no tests and fails the floor"
+NO_SUMMARY="warning: No matching test cases were run"
+if [ "$(tests_run "$NO_SUMMARY")" = 0 ] && ! root_ran_enough 0 "$NO_SUMMARY"; then
+    pass
+else
+    fail "read '$(tests_run "$NO_SUMMARY")' tests from a run with no summary"
+fi
+
 it "the package suite passes, running at least $ROOT_TESTS_FLOOR tests"
 swift test --package-path "$ROOT" > "$TMP/root-tests.log" 2>&1; GATE_RC=$?
 cat "$TMP/root-tests.log"
