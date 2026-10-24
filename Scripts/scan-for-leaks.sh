@@ -60,11 +60,13 @@ TRAILER_RE='^[A-Za-z][A-Za-z0-9-]*-Session(-Id)?:'
 
 # A co-author trailer in the form GitHub credits, a name and one address, names a person, and
 # GitHub writes one for the owner on a squash merge whenever the commit author is not the pull
-# request's. Its address is set aside before MESSAGE_RE reads the line, so the name is still
-# scanned. Any other co-author line is refused, as is one naming an app account (`<slug>[bot]`)
-# or an agent's own address: a no-reply mailbox, or the addresses Claude Code, Aider, Cursor and
-# Copilot write. Both are matched against the lowercased line.
-COAUTHOR_RE='^co-authored-by:[ ]*[^<> ][^<>]*<[^<> ]+@[^<> ]+>[ ]*$'
+# request's. Its address is held to a mailbox's characters, and its `@` is dropped before
+# MESSAGE_RE reads the line, so only the address pattern stops matching it: a record id inside the
+# address, and anything in the name, is still refused. Any other co-author line is
+# refused, as is one naming an app account (`<slug>[bot]`) or a known agent address: a no-reply
+# mailbox, or the domains and addresses Claude Code, Aider, Cursor and Copilot write. Both are
+# matched against the lowercased line.
+COAUTHOR_RE='^co-authored-by:[ ]*[^<> ][^<>]*<[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z][a-z]+>[ ]*$'
 AGENT_COAUTHOR_RE='\[bot\]|<(no-?reply@[^>]*|[^>]*@(anthropic\.com|aider\.chat|cursor\.com|cursor\.sh)|copilot@github\.com|[0-9]+\+copilot@users\.noreply\.github\.com)>'
 
 # GitHub writes one subject itself, on a web merge that runs no hook: `Merge pull request #N from
@@ -93,7 +95,9 @@ scan() {
 scan_messages() {
     # The patterns reach awk through the environment, which, unlike -v, applies no escapes to them.
     _lines="$(printf '%s\n' "$1" | OK_RE="$COAUTHOR_RE" awk '
-        tolower($0) ~ ENVIRON["OK_RE"] { sub(/<[^<>]*>[ ]*$/, "<>") } { print }')" \
+        tolower($0) ~ ENVIRON["OK_RE"] {
+            i = match($0, /<[^<>]*>[ ]*$/); a = substr($0, i); gsub(/@/, " ", a); $0 = substr($0, 1, i - 1) a
+        } { print }')" \
         || die "awk failed on the message's co-author trailers"
     _coauthors="$(printf '%s\n' "$1" | OK_RE="$COAUTHOR_RE" AGENT_RE="$AGENT_COAUTHOR_RE" awk '
         { l = tolower($0) }

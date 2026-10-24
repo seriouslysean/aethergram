@@ -102,11 +102,11 @@ name, a bundle identifier, or an issue number into a public commit. Prose is the
 the commit-msg hook over the message being written. It refuses absolute home paths, email
 addresses, cross-repo issue references, bare issue numbers of three or more digits, private record
 ids, and, in a message, agent-session trailers in any capitalization. A `Co-authored-by` trailer
-in the form GitHub credits, `Name <address>`, passes with its address set aside and the rest of
-the line still read; any other co-author line is refused, as is one naming an app account
-(`<slug>[bot]`) or an agent's own address (a no-reply mailbox, or the ones Claude Code, Aider,
-Cursor and Copilot write). It also
-refuses a numbered issue or pull request URL (`github.com/.../issues|pull/N`) naming any
+in the form GitHub credits, `Name <address>`, passes: the address pattern skips its address,
+and every other pattern still reads the whole line. Any other co-author line is refused, as is
+one naming an app account (`<slug>[bot]`) or a known agent address (a no-reply mailbox, or the
+ones Claude Code, Aider, Cursor and Copilot write). An agent trailer carrying an ordinary
+address is beyond the scan and rests on review. It also refuses a numbered issue or pull request URL (`github.com/.../issues|pull/N`) naming any
 repository, this one included, since a bare number is not a stable reference either. The file tier
 reads the index, so stage a file before expecting it to be scanned.
 
