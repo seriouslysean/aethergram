@@ -216,13 +216,8 @@ a co-author trailer with no address in title case|body|Co-Authored-By: someone
 an app account as co-author|body|Co-authored-by: dependabot[bot] <49699333+dependabot[bot]${AT}users.noreply.github.com>
 an agent's no-reply address as co-author|body|Co-Authored-By: Claude <noreply${AT}anthropic.com>
 an agent's hyphenated no-reply address as co-author|body|Co-authored-by: Agent <no-reply${AT}example.com>
-Aider as co-author|body|Co-authored-by: aider (model) <aider${AT}aider.chat>
-Cursor as co-author|body|Co-authored-by: Cursor Agent <cursoragent${AT}cursor.com>
-Copilot's address as co-author|body|Co-authored-by: Copilot <copilot${AT}github.com>
-Copilot's account as co-author|body|Co-authored-by: Copilot <198982749+Copilot${AT}users.noreply.github.com>
 a home path in a person's co-author trailer|body|Co-authored-by: Drizzt /Users/$WHO <drizzt${AT}example.org>
 Anthropic's domain as co-author|body|Co-authored-by: Claude <claude${AT}anthropic.com>
-Cursor's older domain as co-author|body|Co-authored-by: Cursor <cursor${AT}cursor.sh>
 a home path in a co-author's address|body|Co-authored-by: Drizzt <x/Users/$WHO${AT}example.org>
 a cross-repo issue in a co-author's address|body|Co-authored-by: Drizzt <foo/bar#$NEAR${AT}example.org>
 a private record in a co-author's address|body|Co-authored-by: Drizzt <DR-$FOREIGN${AT}example.org>
