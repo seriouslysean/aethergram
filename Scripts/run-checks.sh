@@ -3,6 +3,9 @@
 #
 #   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
+# LEAK_SCAN_BASE and LEAK_SCAN_HEAD name the commits the leak scan reads; CI sets them from the
+# event. Without them it scans the tracked files alone.
+#
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
@@ -27,12 +30,21 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n         %s\n' "$CURRENT" "$1";
 
 printf '\nleak scan\n'
 
-it "nothing tracked or in history identifies a consumer, a person, or a machine"
-if OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --all 2>&1)"; then
+# A change is judged on what it adds. CI names its range in LEAK_SCAN_BASE and LEAK_SCAN_HEAD, and
+# a CI run that lost them fails in the scan rather than skipping it. A local run scans the tree;
+# the commit-msg hook has read each message, and `scan-for-leaks.sh --all` audits all of history.
+if [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${LEAK_SCAN_BASE:-}${LEAK_SCAN_HEAD:-}" ]; then
+    it "nothing tracked or in the change's commits identifies a consumer, a person, or a machine"
+    OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --range "${LEAK_SCAN_BASE:-}" "${LEAK_SCAN_HEAD:-}" 2>&1)"; SCAN_RC=$?
+else
+    it "nothing tracked identifies a consumer, a person, or a machine"
+    OUT="$("$ROOT/Scripts/scan-for-leaks.sh" 2>&1)"; SCAN_RC=$?
+fi
+if [ "$SCAN_RC" -eq 0 ]; then
     pass
 else
     printf '%s\n' "$OUT"
-    fail "Scripts/scan-for-leaks.sh --all refused the tree or its history"
+    fail "Scripts/scan-for-leaks.sh refused the tree or the change's commits"
 fi
 
 # The hook is only worth having once it has been watched refusing input it is meant to refuse.
