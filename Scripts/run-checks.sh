@@ -221,6 +221,12 @@ Cursor as co-author|body|Co-authored-by: Cursor Agent <cursoragent${AT}cursor.co
 Copilot's address as co-author|body|Co-authored-by: Copilot <copilot${AT}github.com>
 Copilot's account as co-author|body|Co-authored-by: Copilot <198982749+Copilot${AT}users.noreply.github.com>
 a home path in a person's co-author trailer|body|Co-authored-by: Drizzt /Users/$WHO <drizzt${AT}example.org>
+Anthropic's domain as co-author|body|Co-authored-by: Claude <claude${AT}anthropic.com>
+Cursor's older domain as co-author|body|Co-authored-by: Cursor <cursor${AT}cursor.sh>
+a home path in a co-author's address|body|Co-authored-by: Drizzt <x/Users/$WHO${AT}example.org>
+a cross-repo issue in a co-author's address|body|Co-authored-by: Drizzt <foo/bar#$NEAR${AT}example.org>
+a private record in a co-author's address|body|Co-authored-by: Drizzt <DR-$FOREIGN${AT}example.org>
+an issue URL in a co-author's address|body|Co-authored-by: Drizzt <github.com/foo/bar/issues/$NEAR${AT}example.org>
 EOF
 
 # A person credited the way GitHub writes it, on a squash merge or by hand, is not a leak: GitHub
