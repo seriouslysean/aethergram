@@ -2,6 +2,10 @@
 
 Rules for working in this repo. `docs/CONTRIBUTING.md` holds the hook setup, the checks (`Scripts/run-checks.sh`, run offline on a full clone with the release tags), and the release sequence.
 
+- Install: none (Swift package, no dependencies). Once per clone: `git config core.hooksPath .githooks`.
+- Gate before a PR: `Scripts/run-checks.sh`, the same script CI runs.
+- Where things live: `Sources/` package code, `Tests/` tests, `Scripts/` checks, `.githooks/` hooks, `docs/` guides.
+
 ## The package
 
 1. Consent is the core's invariant and never an adapter's option, because a gate a caller can route around is not a gate.
