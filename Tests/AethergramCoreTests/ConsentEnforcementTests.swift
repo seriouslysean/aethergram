@@ -8,9 +8,10 @@ import Testing
 ///
 /// A transport-only assertion cannot tell "dropped before enqueue" from
 /// "enqueued but not yet sent", and only the first satisfies the requirement.
-/// So every arm here asserts at all four layers the recorder touches: the
-/// transport, the queue-storage calls, the bytes on disk, and the two provider
-/// closures that would otherwise mint an identifier or read a payload.
+/// So a test for a way consent can be absent checks what leaves the gate and
+/// what stays behind: nothing sent, nothing in the queue store or on disk, and
+/// neither provider closure (the identifier or the payload) called. One test
+/// per way; a new bug extends the test that covers it.
 ///
 /// The time limit is the gate on the erase arms below, which hand work to real
 /// threads: one that never comes back has to fail under its own name rather

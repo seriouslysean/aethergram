@@ -7,7 +7,7 @@ Rules for working in this repo. `docs/CONTRIBUTING.md` holds the hook setup, the
 1. Consent is the core's invariant and never an adapter's option, because a gate a caller can route around is not a gate.
 2. Before consent is granted, a recording entry point enqueues and retains no event data, writes no analytics storage, resolves no analytics identifier, advances no analytics counter, and calls no transport. A transient input value discarded at the gate is not collection: this is not a zero-allocation promise, and it neither forbids the bookkeeping consent and erasure need nor relaxes the tested consent invariant.
 3. Withdrawing consent erases what was collected under it, since an off switch that leaves yesterday's signals on disk to be sent later is not an off switch.
-4. Assert the consent invariant at every layer the recorder touches, because a transport-only assertion cannot tell "dropped before enqueue" from "enqueued but not yet sent".
+4. Test the consent invariant by what leaves the gate and what stays behind: nothing sent, nothing in the queue store or on disk, and neither the identifier nor the payload provider called. A transport-only check cannot tell "dropped before enqueue" from "enqueued but not yet sent". One test per way consent can be absent; a new bug extends the test that covers it.
 5. Only the adapter module knows a vendor exists, and the core must still compile with every adapter deleted.
 6. Keep vendor vocabulary — endpoints, salts, field names, app identifiers — on the adapter, because none of it means anything to a second backend.
 7. Take every host decision through a protocol the host conforms, never a constant in the package, since a package cannot know which container an app may write to or how it mints an identifier.
@@ -27,7 +27,7 @@ Rules for working in this repo. `docs/CONTRIBUTING.md` holds the hook setup, the
 ## Verifying
 
 17. Ship a fix with a test you have watched fail without it, because a fix verified once by hand is a fix the next one can break silently.
-18. Name a test for the failure it prevents rather than the function it calls.
+18. Before writing or changing a test, read https://github.com/splitleafhq/.github/blob/main/docs/testing.md.
 19. Prove a gate fails on known-bad input before trusting it to pass, and keep that proof as a test.
 20. Remember that a gate which never fires looks exactly like one that passes.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
