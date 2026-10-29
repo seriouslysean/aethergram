@@ -27,7 +27,7 @@ Rules for working in this repo. `docs/CONTRIBUTING.md` holds the hook setup, the
 ## Verifying
 
 17. Ship a fix with a test you have watched fail without it, because a fix verified once by hand is a fix the next one can break silently.
-18. Name a test for the failure it prevents rather than the function it calls.
+18. Before writing or changing a test, read https://github.com/splitleafhq/.github/blob/main/docs/testing.md.
 19. Prove a gate fails on known-bad input before trusting it to pass, and keep that proof as a test.
 20. Remember that a gate which never fires looks exactly like one that passes.
 21. Tag a suite at its header as documentation, never as a selector: `--filter` is a regex over `<test-target>.<test-case>`, so a tag filter matches nothing and still exits 0.
