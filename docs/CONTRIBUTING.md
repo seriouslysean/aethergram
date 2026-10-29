@@ -27,11 +27,11 @@ passes after.
 
 This package is a consent gate with a queue attached. A gate is the one kind of code whose failure
 mode is silence — it keeps collecting, the tests keep passing, and nothing surfaces until someone
-reads a dashboard that should have been empty. So the consent suite asserts at four layers, not
-one: the transport was not called, the queue storage was not called, no bytes reached disk, and
-neither the identifier nor the payload provider ran. A transport-only assertion cannot tell
-"dropped before enqueue" from "enqueued but not yet sent", and only the first is what consent
-means.
+reads a dashboard that should have been empty. So a consent test checks what leaves the gate and
+what stays behind: nothing was sent, nothing is in the queue store or on disk, and neither the
+identifier nor the payload provider ran. A transport-only check cannot tell "dropped before
+enqueue" from "enqueued but not yet sent", and only the first is what consent means. Write one
+test per way consent can be absent, and when a new bug turns up, extend the test that covers it.
 
 Run the checks before you push.
 

@@ -7,7 +7,7 @@ Nothing is collected until the host says consent was granted. Until then `record
 nothing, writes nothing, resolves no identifier, advances no counter, and reaches no transport. A
 later decline erases what was collected under the grant — the queue file, the retention counters,
 and the pending batch — rather than merely stopping new writes. That is the package's one
-non-negotiable property, and `ConsentEnforcementTests` asserts it at all four layers.
+non-negotiable property, and `ConsentEnforcementTests` asserts it.
 
 ## Modules
 

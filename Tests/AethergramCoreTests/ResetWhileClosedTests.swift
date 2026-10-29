@@ -19,7 +19,7 @@ struct ResetWhileClosedTests {
     /// Every layer the recorder touches, not only the transport: a record
     /// dropped before the queue reads no payload, resolves no identifier,
     /// writes nothing, and saves no counter.
-    @Test("A record made while the host rotates its identifier is dropped at every layer, not sent")
+    @Test("A record made while the host rotates its identifier is dropped, not sent")
     func recordDuringTheCallbackIsDropped() async throws {
         let fixture = try makeFixture()
         fixture.recorder.updateConsent(.granted)
