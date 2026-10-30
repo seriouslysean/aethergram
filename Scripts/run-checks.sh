@@ -3,9 +3,6 @@
 #
 #   Scripts/run-checks.sh    offline, no network; needs the release tags, so not a shallow clone
 #
-# LEAK_SCAN_BASE and LEAK_SCAN_HEAD name the commits the leak scan reads; CI sets them from the
-# event. Without them it scans the tracked files alone.
-#
 # The leak scan runs first because it is milliseconds and its failure is about what is committed
 # rather than what the code does. The commit-message gate is proved next on known-bad input, since
 # a gate that never fires looks exactly like one that passes. The build gates compile what the suite
@@ -30,21 +27,16 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n         %s\n' "$CURRENT" "$1";
 
 printf '\nleak scan\n'
 
-# A change is judged on what it adds. CI names its range in LEAK_SCAN_BASE and LEAK_SCAN_HEAD, and
-# a CI run that lost them fails in the scan rather than skipping it. A local run scans the tree;
-# the commit-msg hook has read each message, and `scan-for-leaks.sh --all` audits all of history.
-if [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${LEAK_SCAN_BASE:-}${LEAK_SCAN_HEAD:-}" ]; then
-    it "nothing tracked or in the change's commits identifies a consumer, a person, or a machine"
-    OUT="$("$ROOT/Scripts/scan-for-leaks.sh" --range "${LEAK_SCAN_BASE:-}" "${LEAK_SCAN_HEAD:-}" 2>&1)"; SCAN_RC=$?
-else
-    it "nothing tracked identifies a consumer, a person, or a machine"
-    OUT="$("$ROOT/Scripts/scan-for-leaks.sh" 2>&1)"; SCAN_RC=$?
-fi
+# The tree is what this reads. A squash replaces a branch's commits with the pull request's title and
+# description, so a branch's messages never land: the commit-msg hook reads them as they are
+# written, and `scan-for-leaks.sh --all` audits all of history.
+it "nothing tracked identifies a consumer, a person, or a machine"
+OUT="$("$ROOT/Scripts/scan-for-leaks.sh" 2>&1)"; SCAN_RC=$?
 if [ "$SCAN_RC" -eq 0 ]; then
     pass
 else
     printf '%s\n' "$OUT"
-    fail "Scripts/scan-for-leaks.sh refused the tree or the change's commits"
+    fail "Scripts/scan-for-leaks.sh refused the tree"
 fi
 
 # The hook is only worth having once it has been watched refusing input it is meant to refuse.
@@ -411,77 +403,6 @@ else
     printf '%s\n' "$OUT"
     fail "a person's co-author trailer was refused in history"
 fi
-
-# CI judges a change on the commits it adds. Each fixture puts the refused message on one side of
-# the range and a clean one on the other, so a range scan that reads all of history, or none of
-# it, fails one of the pair.
-HIST="$TMP/history-range"
-mkdir -p "$HIST/Scripts"
-cp "$ROOT/Scripts/scan-for-leaks.sh" "$HIST/Scripts/scan-for-leaks.sh"
-chmod +x "$HIST/Scripts/scan-for-leaks.sh"
-(
-    cd "$HIST" \
-    && fixture_git init -q \
-    && fixture_git commit -q --allow-empty -m 'fix: a thing' \
-    && fixture_git commit -q --allow-empty -m 'fix: an old thing' -m 'Agent-Session: 0f21' \
-    && fixture_git commit -q --allow-empty -m 'fix: a new thing' \
-    && fixture_git commit -q --allow-empty -m 'fix: a newer thing' -m 'Agent-Session: 0f21'
-) || fail "the fixture history could not be built"
-range_scan() { (cd "$HIST" && ./Scripts/scan-for-leaks.sh --range "$1" "$2" 2>&1); }
-ZERO=0000000000000000000000000000000000000000
-
-# A clean range must still have been read: the scan names the tier it ran.
-it "a range scan does not read a refused message older than the range"
-if OUT="$(range_scan HEAD~2 HEAD~1)" && printf '%s\n' "$OUT" | grep -q '^scanning commit messages$'; then
-    pass
-else
-    printf '%s\n' "$OUT"
-    fail "a message before the range was refused"
-fi
-
-it "a range scan refuses a message inside the range"
-OUT="$(range_scan HEAD~1 HEAD)"; SCAN_RC=$?
-if [ "$SCAN_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'Agent-Session'; then
-    printf '%s\n' "$OUT"
-    fail "a message inside the range exited $SCAN_RC without its trailer refused"
-else
-    pass
-fi
-
-it "a range from a new ref reads the pushed commit and not its ancestors"
-if OUT="$(range_scan "$ZERO" HEAD~1)" && printf '%s\n' "$OUT" | grep -q '^scanning commit messages$'; then
-    pass
-else
-    printf '%s\n' "$OUT"
-    fail "an ancestor of the pushed commit was scanned"
-fi
-
-it "a range from a new ref refuses the pushed commit's own message"
-OUT="$(range_scan "$ZERO" HEAD)"; SCAN_RC=$?
-if [ "$SCAN_RC" -ne 1 ] || ! printf '%s\n' "$OUT" | grep -q 'Agent-Session'; then
-    printf '%s\n' "$OUT"
-    fail "the pushed commit exited $SCAN_RC without its trailer refused"
-else
-    pass
-fi
-
-# CI fills the range from the event, and an empty or unknown end must not read as a range with
-# nothing in it.
-while IFS='|' read -r name base head <&3; do
-    it "a range with $name fails rather than reporting clean"
-    OUT="$(range_scan "$base" "$head")"; SCAN_RC=$?
-    if [ "$SCAN_RC" -ne 2 ] || printf '%s\n' "$OUT" | grep -q '^clean$'; then
-        printf '%s\n' "$OUT"
-        fail "a range with $name exited $SCAN_RC rather than 2"
-    else
-        pass
-    fi
-done 3<<EOF
-no base||HEAD
-no head|HEAD~1|
-a base not in the clone|1111111111111111111111111111111111111111|HEAD
-a head not in the clone|HEAD~1|1111111111111111111111111111111111111111
-EOF
 
 it "what a verbose commit appends below the scissors line is not scanned"
 printf 'fix: a thing\n\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n+see #%s\n' "$FOREIGN" > "$TMP/verbose"

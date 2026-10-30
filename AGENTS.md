@@ -40,7 +40,7 @@ Rules for working in this repo. `docs/CONTRIBUTING.md` holds the hook setup, the
 25. Start every change from an issue and a branch named for it, so the reason outlives the diff. One issue may carry an owner-approved set of related items; keep each independently useful correction separable with its tests, and an inseparable correction whole.
 26. Merge with a squash (`gh pr merge <n> --squash --delete-branch`): the pull request title becomes the commit subject and its description the commit message, so write both as the commit you want on `main`.
 27. Commit and open the pull request on the owner's behalf.
-28. Keep session links, agent trailers, and agent co-authors out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook and CI refuse the trailer shapes a message can carry. A `Co-authored-by` naming a person, as GitHub writes for the owner on a squash merge, is not one of them.
+28. Keep session links, agent trailers, and agent co-authors out of commit messages, issues, and pull request bodies, because they point outside this repository, and the commit-msg hook refuses the trailer shapes a message can carry. A `Co-authored-by` naming a person, as GitHub writes for the owner on a squash merge, is not one of them.
 29. Write terse, factual prose that opens with the substance and still reads in whole sentences.
 30. Build what a host needs or a measurement shows, and move the rest to an issue that names what would reopen it, because every addition to a published package is a contract to keep.
 

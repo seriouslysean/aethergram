@@ -14,8 +14,6 @@
 # protects. That shape rests on review of the diff.
 #
 #   scan-for-leaks.sh                     scan tracked files
-#   scan-for-leaks.sh --range BASE HEAD   also scan the messages of BASE..HEAD, for CI; an all-zero
-#                                         BASE (a new ref) scans HEAD's own message
 #   scan-for-leaks.sh --all               also scan every commit message in history, as an audit
 #   scan-for-leaks.sh --message FILE      scan one commit message, for the commit-msg hook
 
@@ -31,11 +29,6 @@ if [ "${1:-}" = "--message" ]; then
     [ -n "${2:-}" ] || { printf 'usage: scan-for-leaks.sh --message FILE\n' >&2; exit 2; }
     MSG="$2"
     case "$MSG" in /*) ;; *) MSG="$PWD/$MSG" ;; esac
-fi
-# CI fills both ends from the event, so an empty one is a run that lost its range, not an empty
-# range: it fails rather than scanning nothing.
-if [ "${1:-}" = "--range" ]; then
-    [ $# -eq 3 ] && [ -n "$2" ] && [ -n "$3" ] || { printf 'usage: scan-for-leaks.sh --range BASE HEAD\n' >&2; exit 2; }
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -155,22 +148,7 @@ scan_history() {
     scan_messages "$_bodies" || FOUND=1
 }
 
-# An end the clone does not hold would make git log fail; checking first says which one.
-commit_of() { git rev-parse --verify --quiet "$1^{commit}" || die "not a commit in this clone: $1"; }
-
-case "${1:-}" in
---all) scan_history --all ;;
---range)
-    _head="$(commit_of "$3")" || exit 2
-    # GitHub sends an all-zero before, SHA-1 or SHA-256 wide, for a new ref: its own commit is what
-    # the push adds, and its ancestors were judged when they landed.
-    case "$2" in
-    0000000000000000000000000000000000000000|0000000000000000000000000000000000000000000000000000000000000000)
-        scan_history "$_head^!" ;;
-    *) _base="$(commit_of "$2")" || exit 2; scan_history "$_base..$_head" ;;
-    esac
-    ;;
-esac
+[ "${1:-}" = "--all" ] && scan_history --all
 
 if [ "$FOUND" -eq 0 ]; then
     printf 'clean\n'
