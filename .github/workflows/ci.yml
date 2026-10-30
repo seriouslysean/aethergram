@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 # The suite is the merge gate. Offline, so nothing green depends on a
 # vendor being reachable: the adapter's tests assert the request a batch produces, they do not send
