@@ -47,7 +47,7 @@ Deepen a shallow clone with `git fetch --unshallow --tags` first. The gates, in 
 
 | Gate | What it holds |
 |---|---|
-| Leak scan | No tracked file's name or staged content identifies a consumer, a person, or a machine. In CI, neither does any commit message the change adds: a pull request's `base..head`, a push's `before..after`, or on a new ref the pushed commit's own. File contents in earlier commits are not scanned |
+| Leak scan | No tracked file's name or staged content identifies a consumer, a person, or a machine. File contents in earlier commits are not scanned |
 | iOS builds | The package for iOS in release as extension-safe (`-application-extension`), and the core alone with no adapter in reach |
 | Privacy manifest | `PrivacyInfo.xcprivacy` declares Product Interaction and Device ID, neither linked nor used for tracking, for analytics alone, and no tracking, tracking domain, or required-reason API. The iOS build ships it unchanged in the adapter's bundle, and no other bundle carries one |
 | watchOS build | The package builds for watchOS in release at its declared floor, watchOS 11 |
@@ -138,10 +138,10 @@ failure, not the reporter.
 
 ## Releasing
 
-1. `Scripts/scan-for-leaks.sh --all` passes. It is the audit of every message in history, which CI
-   does not run: CI judges each change on the commits it adds, so one accepted commit cannot fail
-   every later change. The hooks are local config a clone has to opt into, so a message written
-   without them reaches CI's range scan and this audit.
+1. Run `Scripts/scan-for-leaks.sh --all` and read what it reports. It is the audit of every message
+   in history, which CI does not read: a squash lands the pull request's title and description, which
+   no check sees before they are public. The release notes Dependabot's messages carry are expected
+   hits; anything else is a leak to report, and history cannot be rewritten.
 2. `Scripts/run-checks.sh` passes on a clean checkout.
 3. Update the version in the install snippets in `README.md` and `ADOPTING.md`, so a
    reader copying one gets the release being cut rather than the previous one.

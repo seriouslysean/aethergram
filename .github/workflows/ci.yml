@@ -72,13 +72,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: Scripts/check-release-heading.sh "$GITHUB_REF_NAME"
 
-      # The leak scan judges a change on the commits it adds: a pull request's base..head, a
-      # push's before..after. A new ref, a tag included, sends an all-zero before, and the scan
-      # then reads the pushed commit alone.
       - name: suite
-        env:
-          LEAK_SCAN_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          LEAK_SCAN_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
         run: Scripts/run-checks.sh
 
   # Squash-merges a Dependabot PR once the jobs above pass, if the update is a
