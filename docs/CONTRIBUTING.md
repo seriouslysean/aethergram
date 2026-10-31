@@ -17,6 +17,9 @@ git config core.hooksPath .githooks
 The hooks run `Scripts/scan-for-leaks.sh`, over the staged tree before the commit and over the
 message as it is written. It touches no network and takes milliseconds.
 
+`.githooks/pre-push` runs `Scripts/run-checks.sh` before a push, so a push cannot fail CI's suite.
+It takes a few minutes.
+
 ## The rule that matters
 
 **A fix ships with a test that fails without it.** Not a test that passes afterwards, which proves

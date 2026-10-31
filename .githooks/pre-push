@@ -1,0 +1,30 @@
+#!/bin/sh
+# Run the repo checks before a push, the same Scripts/run-checks.sh CI runs. Wire it up once per
+# clone:
+#
+#   git config core.hooksPath .githooks
+#
+# It needs a full clone with the release tags, like the script itself.
+
+set -eu
+
+# git sets repo-local variables for a hook. Run from a worktree, GIT_DIR in them reaches the git
+# that the checks and swift run, and they act on the wrong repository.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
+ROOT="$(git rev-parse --show-toplevel)"
+CHECKS="$ROOT/Scripts/run-checks.sh"
+
+# A missing or non-executable gate must not look like one that passed.
+[ -x "$CHECKS" ] || {
+    echo "[pre-push] Scripts/run-checks.sh missing or not executable" >&2
+    exit 1
+}
+
+"$CHECKS" || {
+    echo "[pre-push] refusing: Scripts/run-checks.sh failed, output above." >&2
+    exit 1
+}
+
+exit 0
